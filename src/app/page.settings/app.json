@@ -1,0 +1,12 @@
+{
+    "id": "page.settings",
+    "mode": "page",
+    "title": "/settings",
+    "namespace": "settings",
+    "category": "settings",
+    "viewuri": "/settings",
+    "preview": "",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-settings([publicmode]=\"\")"
+}

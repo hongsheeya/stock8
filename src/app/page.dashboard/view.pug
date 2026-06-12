@@ -1,79 +1,1150 @@
-nav(class="sticky top-0 z-20 bg-white shadow")
-    div(class="max-w-6xl px-2 sm:px-4 lg:px-8 py-3 lg:px-6")
-        div(class="flex items-center justify-between")
-            div(class="min-w-0 flex-1")
-                h1(class="flex text-lg font-semibold text-zinc-950 gap-x-3 items-center")
-                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-6")
-                        path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6")
-                    span Dashboard
+//- ============================================================
+//- Trading Dashboard
+//- ============================================================
 
-div(class="max-w-6xl pt-6 px-8 pb-8")
-    //- Stats Cards
-    div(class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8")
-        div(*ngFor="let stat of stats", class="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow")
-            div(class="flex items-center justify-between")
+//- Toast Notifications (Fixed right-bottom)
+div(class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none",
+    style="max-width: 360px")
+    div(*ngFor="let toast of toasts",
+        class="pointer-events-auto glass-card-light border-l-4 px-4 py-3 flex items-start gap-3 animate-slide-in",
+        [class]="toastBorderClass(toast.type)")
+        div(class="flex items-center justify-center w-6 h-6 rounded-full shrink-0 mt-0.5",
+            [class]="toastIconClass(toast.type)")
+            svg(*ngIf="toast.type === 'success'", xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-3.5")
+                path(fill-rule="evenodd", d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z", clip-rule="evenodd")
+            svg(*ngIf="toast.type === 'error'", xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-3.5")
+                path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
+            svg(*ngIf="toast.type === 'warning'", xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-3.5")
+                path(fill-rule="evenodd", d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
+            svg(*ngIf="toast.type === 'info'", xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-3.5")
+                path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-7-4a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM9 9a.75.75 0 0 0 0 1.5h.253a.25.25 0 0 1 .244.304l-.459 2.066A1.75 1.75 0 0 0 10.747 15H11a.75.75 0 0 0 0-1.5h-.253a.25.25 0 0 1-.244-.304l.459-2.066A1.75 1.75 0 0 0 9.253 9H9Z", clip-rule="evenodd")
+        div(class="flex-1 min-w-0")
+            div(class="text-xs font-semibold text-white") {{toast.title}}
+            div(class="text-xs text-slate-400 truncate mt-0.5") {{toast.message}}
+        button((click)="removeToast(toast.id)",
+            class="shrink-0 text-slate-500 hover:text-white transition-colors")
+            svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-4")
+                path(d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z")
+
+//- Edit Cycle Modal
+div(*ngIf="showEditModal",
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm")
+    div(class="glass-card p-6 w-full max-w-md mx-4")
+        div(class="flex items-center justify-between mb-4")
+            h3(class="text-[15px] font-semibold text-white") {{t('cycle.edit_title')}}
+            button((click)="closeEditModal()",
+                class="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M6 18 18 6M6 6l12 12")
+
+        //- Symbol info
+        div(class="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg bg-white/5")
+            span(class="text-sm font-bold text-white") {{editSymbol}}
+            span(class="text-[10px] text-slate-400") {{t('common.round')}} {{editCurrentRound}} | {{t('cycle.invested')}} ${{editTotalSpent | number:'1.0-0'}}
+
+        //- Editable fields
+        div(class="space-y-3")
+            div
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.target_profit')}}
+                input([(ngModel)]="editTargetProfit",
+                    type="number", step="0.5", min="0.5", max="100",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white focus:outline-none focus:border-indigo-400/50")
+            div
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.division_count')}}
+                input([(ngModel)]="editDivisionCount",
+                    type="number", step="1", [min]="editCurrentRound || 1", max="200",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white focus:outline-none focus:border-indigo-400/50")
+                div(*ngIf="editCurrentRound > 0",
+                    class="text-[10px] text-slate-500 mt-1") {{t('cycle.edit_min_division')}} {{editCurrentRound}}
+            div
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.investment')}}
+                input([(ngModel)]="editTotalInvestment",
+                    type="number", step="100", [min]="editTotalSpent || 100",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white focus:outline-none focus:border-indigo-400/50")
+                div(*ngIf="editTotalSpent > 0",
+                    class="text-[10px] text-slate-500 mt-1") {{t('cycle.edit_min_investment')}} ${{editTotalSpent | number:'1.0-0'}}
+
+        //- Actions
+        div(class="flex gap-3 mt-5")
+            button((click)="closeEditModal()",
+                class="flex-1 px-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-[13px] font-medium hover:bg-white/10 transition-colors")
+                | {{t('engine.start_cancel')}}
+            button((click)="saveEditCycle()",
+                [disabled]="editLoading",
+                class="flex-1 px-4 py-2.5 rounded-lg bg-indigo-500 text-white text-[13px] font-semibold hover:bg-indigo-600 transition-colors disabled:opacity-50")
+                | {{editLoading ? t('common.loading') : t('cycle.edit_save')}}
+
+//- Extension Modal
+div(*ngIf="showExtensionModal",
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm")
+    div(class="glass-card p-6 w-full max-w-md mx-4")
+        div(class="flex items-center justify-between mb-4")
+            h3(class="text-[15px] font-semibold text-white") {{t('ext.title')}}
+            button((click)="closeExtensionModal()",
+                class="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors")
+                svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-5")
+                    path(d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z")
+
+        div(class="mb-4 px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-400/20 text-xs text-orange-300")
+            | {{extensionSymbol}} — {{t('ext.desc')}}
+
+        //- Extra Rounds Selection
+        div(class="mb-4")
+            label(class="text-xs text-slate-400 mb-2 block") {{t('ext.extra_rounds')}}
+            div(class="grid grid-cols-3 gap-2")
+                button(*ngFor="let r of [10, 20, 40]",
+                    (click)="extensionExtraRounds = r",
+                    class="px-3 py-2 rounded-lg text-[13px] font-medium transition-colors border",
+                    [class]="extensionExtraRounds === r ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'")
+                    | +{{r}}
+
+        //- Extra Investment Input
+        div(class="mb-5")
+            label(class="text-xs text-slate-400 mb-2 block") {{t('ext.extra_investment')}}
+            input(type="number",
+                [(ngModel)]="extensionExtraInvestment",
+                placeholder="0",
+                min="0",
+                step="100",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white placeholder-slate-600 focus:border-indigo-400/50 focus:outline-none")
+
+        //- Actions
+        div(class="flex items-center gap-2")
+            button((click)="extendCycle()",
+                class="flex-1 px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                | {{t('ext.extend')}}
+            button((click)="closeExtensionModal()",
+                class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-[13px] hover:bg-white/10 transition-colors")
+                | {{t('ext.cancel')}}
+
+//- Start Cycle Confirmation Modal
+div(*ngIf="showStartModal",
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm")
+    div(class="glass-card p-6 w-full max-w-md mx-4")
+        div(class="flex items-center justify-between mb-4")
+            h3(class="text-[15px] font-semibold text-white") {{t('engine.start_modal_title')}}
+            button((click)="closeStartModal()",
+                class="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors")
+                svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-5")
+                    path(d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z")
+
+        //- Symbol Info
+        div(class="mb-4 px-3 py-2 rounded-lg bg-indigo-500/10 border border-indigo-400/20 flex items-center gap-2")
+            span(class="text-sm font-bold text-indigo-300") {{startModalSymbol}}
+            span(*ngIf="startModalName", class="text-xs text-slate-400") {{startModalName}}
+
+        //- Loading
+        div(*ngIf="startModalLoading", class="flex items-center justify-center py-8")
+            div(class="text-[13px] text-slate-500") {{t('common.loading')}}
+
+        //- Form
+        div(*ngIf="!startModalLoading")
+            div(class="text-xs text-slate-500 mb-3") {{t('engine.start_modal_desc')}}
+
+            //- Investment
+            div(class="mb-3")
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.investment')}}
+                input(type="number",
+                    [(ngModel)]="startModalInvestment",
+                    min="100",
+                    step="100",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white placeholder-slate-600 focus:border-indigo-400/50 focus:outline-none")
+
+            //- Division
+            div(class="mb-3")
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.division_count')}}
+                div(class="grid grid-cols-4 gap-2")
+                    button(*ngFor="let d of [20, 30, 40, 50]",
+                        (click)="startModalDivision = d",
+                        class="px-3 py-2 rounded-lg text-[13px] font-medium transition-colors border",
+                        [class]="startModalDivision === d ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'")
+                        | {{d}}
+                input(type="number",
+                    [(ngModel)]="startModalDivision",
+                    min="1",
+                    max="100",
+                    class="w-full mt-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white placeholder-slate-600 focus:border-indigo-400/50 focus:outline-none")
+
+            //- Target Profit
+            div(class="mb-3")
+                label(class="text-xs text-slate-400 mb-1 block") {{t('engine.target_profit')}}
+                div(class="grid grid-cols-4 gap-2")
+                    button(*ngFor="let tp of [5, 8, 10, 15]",
+                        (click)="startModalTarget = tp",
+                        class="px-3 py-2 rounded-lg text-[13px] font-medium transition-colors border",
+                        [class]="startModalTarget === tp ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'")
+                        | {{tp}}%
+                input(type="number",
+                    [(ngModel)]="startModalTarget",
+                    min="1",
+                    max="100",
+                    step="0.5",
+                    class="w-full mt-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white placeholder-slate-600 focus:border-indigo-400/50 focus:outline-none")
+
+            //- Preview Info
+            div(class="mb-4 px-3 py-2 rounded-lg bg-white/5 border border-white/5 text-xs text-slate-500")
+                div(class="flex items-center justify-between mb-1")
+                    span {{t('engine.per_round_amount')}}
+                    span(class="text-slate-300 font-medium") ${{formatUSD(startModalInvestment / startModalDivision)}}
+                div(class="flex items-center justify-between")
+                    span {{t('engine.total_rounds')}}
+                    span(class="text-slate-300 font-medium") {{startModalDivision}} {{t('common.round')}}
+
+            //- Actions
+            div(class="flex items-center gap-2")
+                button((click)="confirmStartCycle()",
+                    class="flex-1 px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                    | {{t('engine.start_confirm')}}
+                button((click)="closeStartModal()",
+                    class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-[13px] hover:bg-white/10 transition-colors")
+                    | {{t('engine.start_cancel')}}
+
+//- ============================================================
+//- Cycle Detail Slide Panel
+//- ============================================================
+div(*ngIf="showCycleDetail",
+    class="fixed inset-0 z-40 flex justify-end bg-black/40 backdrop-blur-sm",
+    (click)="closeCycleDetail()")
+    div(class="w-full max-w-2xl h-full glass-card rounded-l-xl overflow-hidden flex flex-col",
+        (click)="$event.stopPropagation()")
+        //- Panel Header
+        div(class="flex items-center justify-between px-6 py-4 border-b border-white/5 shrink-0")
+            div(class="flex items-center gap-3")
+                span(class="text-lg font-bold text-white") {{detailCycle?.symbol}}
+                span(*ngIf="detailCycle?.cycle_number",
+                    class="text-xs text-slate-500") {{'#' + detailCycle?.cycle_number}}
+                span(class="text-xs px-2 py-0.5 rounded-full",
+                    [class]="statusBadge(detailCycle?.status)")
+                    | {{detailCycle?.status === 'PENDING_EXTENSION' ? 'PENDING' : detailCycle?.status}}
+            button((click)="closeCycleDetail()",
+                class="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors")
+                svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-5")
+                    path(d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z")
+
+        //- Tabs
+        div(class="flex items-center gap-1 px-6 pt-3 pb-0 shrink-0")
+            button(*ngFor="let tb of [{key:'summary',label:t('detail.summary')},{key:'trades',label:t('detail.trades')},{key:'logs',label:t('detail.event_logs')}]",
+                (click)="setDetailTab(tb.key)",
+                class="px-3 py-2 rounded-t-lg text-xs font-medium transition-colors border-b-2",
+                [class]="detailTab === tb.key ? 'text-indigo-300 border-indigo-400 bg-indigo-500/10' : 'text-slate-500 border-transparent hover:text-slate-300'")
+                | {{tb.label}}
+
+        //- Loading
+        div(*ngIf="detailLoading", class="flex-1 flex items-center justify-center")
+            div(class="text-sm text-slate-500") {{t('common.loading')}}
+
+        //- Panel Content
+        div(*ngIf="!detailLoading", class="flex-1 min-h-0 overflow-y-auto trading-scroll px-6 py-4")
+
+            //- ── Summary Tab ──
+            div(*ngIf="detailTab === 'summary'")
+                //- Key Metrics Grid
+                div(class="grid grid-cols-2 gap-3 mb-5")
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.started')}}
+                        div(class="text-sm font-medium text-slate-200 mt-1") {{detailCycle?.started_at || '-'}}
+                        div(class="text-[10px] text-slate-600 mt-0.5") {{detailCycle?.days_elapsed || 0}} {{t('detail.days_elapsed')}}
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.progress')}}
+                        div(class="text-sm font-medium text-slate-200 mt-1")
+                            | {{t('common.round')}} {{detailCycle?.current_round}} / {{detailCycle?.division_count}}
+                        div(class="w-full h-1 bg-white/5 rounded-full overflow-hidden mt-1.5")
+                            div(class="h-full rounded-full bg-indigo-500",
+                                [style.width.%]="cycleProgress(detailCycle || {})")
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.avg_price')}}
+                        div(class="text-sm font-medium text-slate-200 mt-1") ${{detailCycle?.avg_price | number:'1.4-4'}}
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.current_price')}}
+                        div(class="text-sm font-medium text-slate-200 mt-1") ${{detailCycle?.current_price | number:'1.2-2'}}
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.profit_rate')}}
+                        div(class="text-sm font-bold mt-1", [class]="profitClass(detailCycle?.profit_rate || 0)")
+                            | {{detailCycle?.profit_rate > 0 ? '+' : ''}}{{detailCycle?.profit_rate | number:'1.2-2'}}%
+                        div(class="text-[10px] text-slate-600 mt-0.5")
+                            | {{t('common.target')}}: {{detailCycle?.target_profit}}%
+                    div(class="bg-white/5 rounded-lg p-3")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('detail.eval_amount')}}
+                        div(class="text-sm font-medium mt-1", [class]="profitClass(detailCycle?.profit_rate || 0)")
+                            | ${{formatUSD(detailCycle?.eval_amount || 0)}}
+
+                //- Investment Summary
+                div(class="bg-white/5 rounded-lg p-4 mb-5")
+                    h3(class="text-xs font-semibold text-slate-400 uppercase mb-3") {{t('detail.investment')}}
+                    div(class="space-y-2")
+                        div(class="flex items-center justify-between")
+                            span(class="text-[13px] text-slate-400") {{t('detail.total_investment')}}
+                            span(class="text-[13px] text-slate-200 font-medium") ${{formatUSD(detailCycle?.total_investment || 0)}}
+                        div(class="flex items-center justify-between")
+                            span(class="text-[13px] text-slate-400") {{t('detail.total_spent')}}
+                            span(class="text-[13px] text-slate-200 font-medium") ${{formatUSD(detailCycle?.total_spent || 0)}}
+                        div(class="flex items-center justify-between")
+                            span(class="text-[13px] text-slate-400") {{t('detail.remaining')}}
+                            span(class="text-[13px] text-slate-200 font-medium") ${{formatUSD(detailCycle?.remaining_investment || 0)}}
+                        div(class="flex items-center justify-between")
+                            span(class="text-[13px] text-slate-400") {{t('detail.total_qty')}}
+                            span(class="text-[13px] text-slate-200 font-medium") {{detailCycle?.total_qty || 0}} {{t('detail.shares')}}
+                        div(class="flex items-center justify-between")
+                            span(class="text-[13px] text-slate-400") {{t('detail.commission_paid')}}
+                            span(class="text-[13px] text-amber-400 font-medium") ${{formatUSD(detailCycle?.total_commission || 0)}}
+
+                //- Price & Profit Chart
+                div(*ngIf="detailChartData.length > 0", class="bg-white/5 rounded-lg p-4")
+                    h3(class="text-xs font-semibold text-slate-400 uppercase mb-3") {{t('detail.price_trend')}}
+                    //- Profit rate bars
+                    div(class="mb-2")
+                        div(class="text-[10px] text-slate-500 mb-1") {{t('detail.profit_by_round')}}
+                        div(class="flex items-end gap-px h-16")
+                            div(*ngFor="let d of detailChartData",
+                                class="flex-1 rounded-t-sm transition-all min-w-[2px]",
+                                [class]="profitBarClass(d.profit_rate)",
+                                [style.height.%]="chartBarHeight(d.profit_rate, detailChartData, 'profit_rate')",
+                                [title]="'R' + d.round + ': ' + (d.profit_rate > 0 ? '+' : '') + d.profit_rate.toFixed(2) + '%'")
+                    //- Avg price bars
+                    div
+                        div(class="text-[10px] text-slate-500 mb-1") {{t('detail.avg_by_round')}}
+                        div(class="flex items-end gap-px h-16")
+                            div(*ngFor="let d of detailChartData",
+                                class="flex-1 bg-indigo-500/40 rounded-t-sm transition-all min-w-[2px]",
+                                [style.height.%]="chartBarHeight(d.avg_price, detailChartData, 'avg_price')",
+                                [title]="'R' + d.round + ': $' + d.avg_price.toFixed(4)")
+
+            //- ── Trades Tab ──
+            div(*ngIf="detailTab === 'trades'")
+                //- Filter
+                div(class="flex items-center gap-1 mb-4")
+                    button(*ngFor="let f of ['ALL','BUY','SELL','SKIP','EXTEND']",
+                        (click)="setDetailTradeFilter(f)",
+                        class="px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                        [class]="detailTradeFilter === f ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'text-slate-500 hover:text-slate-300'")
+                        | {{f}}
+                    span(class="ml-auto text-[11px] text-slate-600") {{filteredDetailTrades.length}} trades
+
+                div(*ngIf="filteredDetailTrades.length === 0", class="text-center py-8")
+                    p(class="text-[13px] text-slate-500") {{t('detail.no_trades')}}
+
+                //- Trade List
+                div(class="space-y-2")
+                    div(*ngFor="let td of filteredDetailTrades",
+                        class="bg-white/5 rounded-lg p-3 flex items-center gap-3")
+                        //- Action badge
+                        div(class="flex items-center justify-center w-8 h-8 rounded-lg text-[11px] font-bold shrink-0",
+                            [class]="detailActionClass(td.action)")
+                            | {{td.action?.charAt(0)}}
+                        //- Info
+                        div(class="flex-1 min-w-0")
+                            div(class="flex items-center gap-2")
+                                span(*ngIf="td.action !== 'SKIP'",
+                                    class="text-[13px] font-medium text-slate-200") {{t('common.round')}} {{td.round}}
+                                span(*ngIf="td.action === 'SKIP'",
+                                    class="text-[13px] font-medium text-slate-500") SKIP
+                                span(class="text-[10px] text-slate-600") {{td.trade_date}}
+                            div(class="text-[11px] text-slate-500 mt-0.5")
+                                span(*ngIf="td.action === 'BUY'")
+                                    | {{td.filled_qty}} shares &#64; ${{td.filled_price | number:'1.2-2'}} = ${{td.filled_amount | number:'1.2-2'}}
+                                span(*ngIf="td.action === 'SELL'")
+                                    | Sold {{td.filled_qty}} shares &#64; ${{td.filled_price | number:'1.2-2'}} = ${{td.filled_amount | number:'1.2-2'}}
+                                span(*ngIf="td.action === 'SKIP'")
+                                    | Price: ${{td.order_price | number:'1.2-2'}} — skipped
+                                span(*ngIf="td.action === 'EXTEND'")
+                                    | Extension triggered
+                        //- Right: avg + profit + delete
+                        div(class="flex items-center gap-2")
+                            div(class="text-right shrink-0")
+                                div(class="text-[11px] text-slate-400") Avg ${{td.avg_buy_price | number:'1.4-4'}}
+                                div(class="text-[11px] font-medium", [class]="profitClass(td.profit_rate)")
+                                    | {{td.profit_rate > 0 ? '+' : ''}}{{td.profit_rate | number:'1.2-2'}}%
+                                div(*ngIf="td.commission > 0", class="text-[10px] text-amber-400/70")
+                                    | Fee ${{td.commission | number:'1.2-2'}}
+                            button((click)="deleteTrade(td, $event)",
+                                class="p-1 rounded hover:bg-red-500/20 text-slate-600 hover:text-red-400 transition-colors shrink-0",
+                                title="거래 삭제")
+                                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
+                                    path(stroke-linecap="round", stroke-linejoin="round",
+                                        d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0")
+
+            //- ── Event Logs Tab ──
+            div(*ngIf="detailTab === 'logs'")
+                div(*ngIf="detailLogs.length === 0", class="text-center py-8")
+                    p(class="text-[13px] text-slate-500") {{t('detail.no_logs')}}
+
+                div(class="space-y-2")
+                    div(*ngFor="let log of detailLogs",
+                        class="bg-white/5 rounded-lg p-3 flex items-start gap-3")
+                        //- Type badge
+                        div(class="px-2 py-1 rounded text-[10px] font-medium shrink-0 mt-0.5",
+                            [class]="detailLogTypeClass(log.event_type)")
+                            | {{log.event_type}}
+                        //- Content
+                        div(class="flex-1 min-w-0")
+                            div(class="text-[13px] text-slate-300") {{log.message}}
+                            div(class="text-[10px] text-slate-600 mt-0.5") {{log.created}}
+
+//- ============================================================
+//- Main Dashboard Content
+//- ============================================================
+
+//- Demo Mode Banner
+div(*ngIf="isMock",
+    class="mb-4 flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-400/20")
+    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+        class="size-5 text-amber-400 shrink-0")
+        path(stroke-linecap="round", stroke-linejoin="round", d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z")
+    div
+        div(class="text-xs font-semibold text-amber-300") {{t('dash.demo_title')}}
+        div(class="text-xs text-amber-400/70 mt-0.5") {{t('dash.demo_desc')}}
+
+//- Auto-Refresh Indicator
+div(class="flex items-center justify-between mb-4")
+    div(class="flex items-center gap-3")
+        h1(class="text-lg font-semibold text-white") {{t('dash.title')}}
+    div(class="flex items-center gap-3")
+        //- Auto Refresh Toggle
+        button((click)="toggleAutoRefresh()",
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors",
+            [class]="autoRefresh ? 'bg-emerald-500/10 border border-emerald-400/20 text-emerald-300' : 'bg-white/5 border border-white/10 text-slate-500'")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182")
+            span {{t('dash.auto')}}
+            span(*ngIf="autoRefresh",
+                class="text-[10px] font-mono tabular-nums text-emerald-400/70") {{countdown}}s
+
+        button((click)="refreshDashboard()",
+            [disabled]="manualRefreshing || loading",
+            title="수동 새로고침",
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992V4.356m-.58 13.23a9 9 0 0 1-15.292-3.154m-.78-4.183A9 9 0 0 1 8.98 3.98a8.998 8.998 0 0 1 6.043 2.338l1.0 1.03")
+            span {{manualRefreshing ? '갱신 중' : '새로고침'}}
+
+        //- Last Updated
+        span(class="text-[11px] text-slate-600") {{t('dash.last')}}: {{lastRefresh | date:'HH:mm:ss'}}
+
+//- Profit Overview Section
+div(*ngIf="!legacyMode", class="glass-card p-5 mb-6 dash-profit-overview")
+    div(class="flex items-center justify-between mb-4")
+        h2(class="text-sm font-semibold text-white") {{t('profit.title')}}
+        div(class="flex items-center gap-2")
+            span(*ngIf="profitSyncMessage && !profitLoading", class="text-[11px] text-red-300") {{profitSyncMessage}}
+            span(*ngIf="profitLastRefresh && !profitLoading", class="text-[11px] text-slate-600") {{profitLastRefresh | date:'HH:mm:ss'}}
+            span(*ngIf="profitLoading", class="text-[11px] text-slate-500") {{t('profit.loading')}}
+    div(class="dash-profit-grid")
+        div(class="dash-profit-cell dash-profit-split-card dash-profit-hero")
+            div(class="flex items-center justify-between gap-3 mb-3")
                 div
-                    p(class="text-xs font-medium text-gray-500 uppercase tracking-wider") {{stat.label}}
-                    p(class="mt-2 text-2xl font-bold text-gray-900") {{stat.value}}
-                    p(class="mt-1 text-xs", [ngClass]="stat.change >= 0 ? 'text-green-600' : 'text-red-600'")
-                        span(*ngIf="stat.change >= 0") ↑ +{{stat.change}}%
-                        span(*ngIf="stat.change < 0") ↓ {{stat.change}}%
-                        span(class="text-gray-400 ml-1") vs last month
-                div(class="flex items-center justify-center w-12 h-12 rounded-lg", [ngClass]="stat.bgColor || 'bg-indigo-50'")
-                    span(class="text-xl") {{stat.icon}}
+                    div(class="text-[10px] text-slate-500 uppercase tracking-wider") {{t('profit.realized')}}
+                    div(class="text-[11px] text-slate-600 mt-1") 전략별로 분리한 실현손익
+                div(class="text-right shrink-0")
+                    div(class="text-[10px] text-slate-500 uppercase tracking-wider") 합계
+                    div(class="text-base font-bold mt-1", [class]="profitChangeClass(profitData.realized_profit)") {{signedKRW(profitData.realized_profit)}}
+            div(class="grid grid-cols-1 md:grid-cols-2 gap-3")
+                div(class="dash-profit-mini")
+                    div(class="flex items-center justify-between gap-3")
+                        div(class="text-[11px] font-semibold text-white") 단타 실현
+                        div(class="text-[10px] px-2 py-0.5 rounded-full border border-emerald-400/20 text-emerald-300 bg-emerald-500/10") DT
+                    div(class="text-xl font-bold mt-2", [class]="profitChangeClass(profitData.daytrade_realized_profit)")
+                        | {{signedKRW(profitData.daytrade_realized_profit || 0)}}
+                    div(class="text-[10px] text-slate-600 mt-1") {{profitHintLabel('dt-realized')}}
+                div(class="dash-profit-mini")
+                    div(class="flex items-center justify-between gap-3")
+                        div(class="text-[11px] font-semibold text-white") 무한매수 실현
+                        div(class="text-[10px] px-2 py-0.5 rounded-full border border-indigo-400/20 text-indigo-300 bg-indigo-500/10") IB
+                    div(class="text-xl font-bold mt-2", [class]="profitChangeClass(profitData.ib_realized_profit)")
+                        | {{signedKRW(profitData.ib_realized_profit || 0)}}
+                    div(class="text-[10px] text-slate-600 mt-1") {{profitHintLabel('ib-realized')}}
+        div(class="dash-profit-stat-grid")
+            div(class="dash-profit-cell")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") 단타 미실현
+                div(class="text-lg font-bold mt-1", [class]="profitChangeClass(profitData.daytrade_unrealized_profit)")
+                    | {{signedKRW(profitData.daytrade_unrealized_profit || 0)}}
+                div(class="text-[10px] text-slate-600 mt-0.5") {{profitHintLabel('dt-unrealized')}}
+            div(class="dash-profit-cell")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") 무한매수 미실현
+                div(class="text-lg font-bold mt-1", [class]="profitChangeClass(profitData.ib_unrealized_profit)")
+                    | {{signedKRW(profitData.ib_unrealized_profit || 0)}}
+                div(class="text-[10px] text-slate-600 mt-0.5") {{profitHintLabel('ib-unrealized')}}
+            div(class="dash-profit-cell")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") {{t('profit.total_pl')}}
+                div(class="text-lg font-bold mt-1", [class]="profitChangeClass(profitData.total_profit)")
+                    | {{signedKRW(profitData.total_profit)}}
+                div(class="text-[10px] text-slate-600 mt-0.5") 실현 {{signedKRW(profitData.realized_profit || 0)}} · 미실현 {{signedKRW(profitData.unrealized_profit || 0)}}
+            div(class="dash-profit-cell")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") {{t('profit.total_return')}}
+                div(class="text-lg font-bold mt-1", [class]="profitChangeClass(profitData.total_return)")
+                    | {{profitData.total_return > 0 ? '+' : ''}}{{profitData.total_return | number:'1.2-2'}}%
+                div(class="text-[10px] text-slate-600 mt-0.5")
+                    | 실현 {{profitData.realized_return > 0 ? '+' : ''}}{{profitData.realized_return | number:'1.2-2'}}% · 미실현 {{profitData.unrealized_return > 0 ? '+' : ''}}{{profitData.unrealized_return | number:'1.2-2'}}%
 
-    div(class="grid grid-cols-1 lg:grid-cols-3 gap-6")
-        //- Recent Activity
-        div(class="lg:col-span-2 bg-white rounded-xl border border-gray-200 overflow-hidden")
-            div(class="px-6 py-4 border-b border-gray-100 flex items-center justify-between")
-                h2(class="text-[15px] font-semibold text-gray-900") 최근 활동
-                a(routerLink="/posts", class="text-xs text-indigo-600 hover:text-indigo-500 font-medium") 전체 보기 →
+//- Automation Controls
+div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6")
+    div(*ngFor="let item of automationControls", class="glass-card dash-automation-card p-5")
+        div(class="flex items-start justify-between gap-3 mb-4")
+            div(class="min-w-0")
+                div(class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold border",
+                    [class]="item.enabled ? 'bg-emerald-500/15 border-emerald-400/25 text-emerald-300' : 'bg-slate-500/15 border-slate-400/20 text-slate-400'")
+                    span(class="w-1.5 h-1.5 rounded-full", [class]="item.enabled ? 'bg-emerald-300' : 'bg-slate-500'")
+                    span {{item.enabled ? '자동 실행중' : '중지됨'}}
+                h2(class="text-base font-semibold text-white mt-3") {{item.title}}
+                p(class="text-[12px] text-slate-400 mt-1 leading-relaxed") {{item.detail}}
+            button((click)="toggleAutomationItem(item)",
+                [disabled]="automationSaving[item.key]",
+                class="shrink-0 min-w-[72px] px-3 py-1.5 rounded-lg border text-[12px] font-semibold transition-colors disabled:opacity-50",
+                [class]="item.enabled ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300 hover:bg-red-500/15 hover:border-red-400/30 hover:text-red-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-emerald-500/15 hover:border-emerald-400/30 hover:text-emerald-300'")
+                | {{automationSaving[item.key] ? '저장 중' : (item.enabled ? 'ON' : 'OFF')}}
+        div(*ngIf="item.key !== 'infinite_buy'", class="flex items-end gap-2")
+            div(class="flex-1")
+                label(class="block text-[11px] text-slate-300 mb-1.5 font-medium") 배정 시드
+                input([ngModel]="automationSeedDraft(item)",
+                    (ngModelChange)="onAutomationSeedInput(item, $event)",
+                    type="number",
+                    min="0",
+                    step="100000",
+                    class="dash-seed-input w-full px-3 py-2.5 rounded-lg border text-[14px] font-semibold focus:outline-none")
+                div(class="text-[10px] text-slate-500 mt-1") 원 단위로 저장됩니다
+            button((click)="saveAutomationItem(item)",
+                [disabled]="automationSaving[item.key]",
+                class="px-3 py-2.5 rounded-lg bg-cyan-500/90 hover:bg-cyan-400 text-slate-950 text-[12px] font-bold transition-colors disabled:opacity-50")
+                | 저장
+        div(*ngIf="item.key === 'infinite_buy'", class="rounded-lg border border-white/5 bg-white/5 px-3 py-2.5")
+            div(class="text-[11px] font-medium text-slate-300") 종목별 시드 사용
+            div(class="text-[10px] text-slate-500 mt-0.5") {{isInfiniteBuySeedReadOnly() ? 'FireGate 포트폴리오에서 수정 후 자동 동기화됩니다.' : 'FireGate 미연결 시에만 각 사이클 행에서 종목별 시드를 저장합니다.'}}
 
-            div(class="divide-y divide-gray-100")
-                ng-container(*ngIf="loading")
-                    div(class="px-6 py-8 text-center text-[13px] text-gray-400") 로딩 중...
+//- Admin Balance Diagnostics
+div(*ngIf="showAdminControls && balanceDiagnostics.length > 0", class="glass-card p-4 mb-6")
+    div(class="flex items-center justify-between mb-3")
+        h2(class="text-sm font-semibold text-white") 잔고 검증
+        span(class="text-[11px] text-slate-500") 대시보드 산정 원천값
+    div(class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2")
+        div(*ngFor="let row of balanceDiagnostics",
+            class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+            div(class="flex items-center justify-between gap-2")
+                span(class="text-[11px] text-slate-400") {{row.label}}
+                span(class="text-[10px] px-1.5 py-0.5 rounded-full",
+                    [class]="row.ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'")
+                    | {{row.ok ? 'OK' : '확인 필요'}}
+            div(class="text-sm font-semibold text-white mt-1") ₩{{formatKRW(row.amount)}}
+            div(class="text-[10px] text-slate-600 truncate mt-0.5") {{row.source || row.message}}
 
-                ng-container(*ngIf="!loading")
-                    div(*ngIf="recentItems.length === 0", class="px-6 py-8 text-center text-[13px] text-gray-400") 최근 활동이 없습니다.
+//- Summary Cards
+div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6")
+    //- Buying Power
+    div(class="glass-card p-5 order-2")
+        div(class="flex items-center justify-between mb-3")
+            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") {{t('dash.buying_power')}}
+            div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-400/20")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-indigo-400")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z")
+        div(class="text-2xl font-bold text-white") ₩{{formatKRW(buyingPower)}}
+        div(class="text-xs text-slate-500 mt-1") KIS 주문가능금액 조회 기준
+        div(class="mt-2 space-y-1 text-[11px]")
+            div(class="flex items-center justify-between text-slate-500")
+                span 국내 주문가능
+                span(*ngIf="balanceSyncOk", class="text-slate-300") ₩{{formatKRW(krwOrderableCash)}}
+                span(*ngIf="!balanceSyncOk", class="text-amber-400") {{t('dash.balance_unavailable')}}
+            div(class="flex items-center justify-between text-slate-500")
+                span 원화 잔고
+                span(*ngIf="balanceSyncOk", class="text-slate-300") ₩{{formatKRW(krwBalance)}}
+                span(*ngIf="!balanceSyncOk", class="text-amber-400") {{t('dash.balance_unavailable')}}
+            div(class="flex items-center justify-between text-slate-500")
+                span {{t('dash.usd_available')}}
+                span(*ngIf="usdSyncOk && exchangeRate > 0", class="text-slate-300") ₩{{formatKRW(usdBuyingPower * exchangeRate)}}
+                span(*ngIf="usdSyncOk && exchangeRate <= 0", class="text-amber-400") {{t('dash.balance_unavailable')}}
+                span(*ngIf="!usdSyncOk", class="text-amber-400") {{t('dash.balance_unavailable')}}
+            div(*ngIf="showAdminControls",
+                class="flex items-center justify-between text-slate-500")
+                span 브로커 실주문 가능
+                span(class="text-indigo-300") ₩{{formatKRW(orderableCash)}}
+            div(*ngIf="showAdminControls && krwOrderableSource",
+                class="text-[10px] text-slate-600")
+                | 주문가능 조회: {{krwOrderableSource}}{{krwOrderableProbe ? ' · ' + krwOrderableProbe : ''}}
+            div(*ngIf="!usdSyncOk && usdSyncMessage",
+                class="mt-2 rounded-lg border border-amber-400/15 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-300")
+                div(class="font-medium") {{t('dash.usd_sync_failed')}}
+                div(class="mt-0.5 text-amber-200/80") {{usdSyncMessage}}
+            div(*ngIf="usdSyncOk && usdSyncSource",
+                class="text-[10px] text-slate-600")
+                | {{t('dash.usd_source')}}: {{usdSyncSource}}
+            div(*ngIf="!balanceSyncOk && balanceSyncMessage",
+                class="mt-2 rounded-lg border border-amber-400/15 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-300")
+                div(class="font-medium") {{t('dash.balance_sync_failed')}}
+                div(class="mt-0.5 text-amber-200/80") {{balanceSyncMessage}}
+            div(*ngIf="balanceSyncOk && balanceSyncSource",
+                class="text-[10px] text-slate-600")
+                | {{t('dash.balance_source')}}: {{balanceSyncSource}}
 
-                    div(*ngFor="let item of recentItems", class="px-6 py-3 hover:bg-gray-50 transition-colors cursor-pointer", routerLink="/posts/{{item.id}}/view")
+    //- Portfolio Value
+    div(class="glass-card p-5 order-3")
+        div(class="flex items-center justify-between mb-3")
+            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") {{t('dash.portfolio_value')}}
+            div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-400/20")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-emerald-400")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941")
+        div(class="text-2xl font-bold text-white") ₩{{formatKRW(portfolioValue)}}
+        div(class="text-xs text-slate-500 mt-1") {{t('dash.evaluated_amount')}}
+
+    //- Total Asset
+    div(class="glass-card p-5 order-1")
+        div(class="flex items-center justify-between mb-3")
+            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") {{t('dash.total_asset')}}
+            div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-violet-500/10 border border-violet-400/20")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-violet-400")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z")
+        div(class="text-2xl font-bold text-white") ₩{{formatKRW(totalAsset)}}
+        div(class="text-xs text-slate-500 mt-1") {{t('dash.cash_portfolio')}}
+
+    //- System Status
+    div(class="glass-card p-5 order-4")
+        div(class="flex items-center justify-between mb-3")
+            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") {{t('dash.system_status')}}
+            div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-400/20")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-cyan-400")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z")
+        div(class="flex items-center gap-2")
+            div([class]="apiConnected ? 'status-dot online' : 'status-dot offline'")
+            span(class="text-sm font-medium", [class]="apiConnected ? 'text-emerald-400' : 'text-red-400'")
+                | {{apiConnected ? t('dash.connected') : isMock ? t('dash.demo_mode') : t('dash.disconnected')}}
+        div(class="text-xs text-slate-500 mt-1")
+            | {{t('engine.active')}}: {{engineStatus.active_cycles}} | {{t('engine.holding')}}: {{engineStatus.holding_cycles}} | {{t('engine.pending')}}: {{engineStatus.pending_extension_cycles || 0}} | {{t('engine.paused')}}: {{engineStatus.paused_cycles || 0}}
+        div(class="text-xs mt-1", [class]="usDaytradeStatusClass()")
+            | 미장 단타 검증: {{usDaytradeStatusText()}} {{daytradeRuntime?.last_run_at ? '(' + daytradeRuntime.last_run_at + ')' : ''}}
+
+//- Infinite Buy Cycles
+div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
+    div(class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4")
+        div
+            h2(class="text-sm font-semibold text-white") 무한매수 사이클
+            p(class="text-[12px] text-slate-400 mt-1") 현재 진행 중인 무한매수와 오늘 LOC 예약매수 상태입니다.
+        div(class="flex flex-col gap-2 min-w-full md:min-w-[460px] md:items-end")
+            button((click)="toggleAutoTrade()",
+                [disabled]="loading",
+                class="inline-flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[12px] font-semibold transition-colors border disabled:opacity-50",
+                [class]="engineStatus.auto_trade ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/20' : 'bg-slate-500/10 border-slate-400/20 text-slate-300 hover:bg-slate-500/20'")
+                span 무한매수 자동운영
+                span(class="rounded-full px-2 py-0.5 text-[10px]",
+                    [class]="engineStatus.auto_trade ? 'bg-emerald-400/20 text-emerald-200' : 'bg-slate-400/15 text-slate-300'")
+                    | {{engineStatus.auto_trade ? 'ON' : 'OFF'}}
+            div(class="grid grid-cols-3 gap-2 w-full")
+                div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                    div(class="text-[10px] text-slate-500") 진행 사이클
+                    div(class="text-sm font-bold text-white mt-0.5") {{infiniteBuySummary.total || 0}}
+                div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                    div(class="text-[10px] text-slate-500") LOC 예약접수
+                    div(class="text-sm font-bold text-emerald-400 mt-0.5") {{infiniteBuySummary.loc_scheduled || 0}}
+                div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                    div(class="text-[10px] text-slate-500") 확인 필요
+                    div(class="text-sm font-bold mt-0.5", [class]="(infiniteBuySummary.loc_attention || 0) > 0 ? 'text-red-400' : 'text-slate-300'") {{infiniteBuySummary.loc_attention || 0}}
+
+    div(*ngIf="infiniteBuyCycles.length === 0", class="rounded-lg border border-white/5 bg-white/5 px-4 py-5 text-center")
+        div(class="text-[13px] text-slate-400") 현재 진행 중인 무한매수 사이클이 없습니다.
+        div(class="text-[11px] text-slate-600 mt-1") 대시보드에서 무한매수 ON 및 시드 배정 후 시작된 사이클이 여기에 표시됩니다.
+
+    div(*ngIf="infiniteBuyCycles.length > 0", class="overflow-x-auto")
+        table(class="w-full min-w-[1040px] text-left dash-daytrade-table")
+            thead
+                tr(class="border-b border-white/10")
+                    th(class="pb-2 pl-4 text-xs font-medium text-slate-500 min-w-[170px]") 종목
+                    th(class="pb-2 text-xs font-medium text-slate-500 min-w-[170px]") 시드 (USD)
+                    th(class="pb-2 text-xs font-medium text-slate-500") 상태
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 회차
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 보유
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 평균가
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 현재가
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 손익률
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 운영
+                    th(class="pb-2 text-xs font-medium text-slate-500") LOC 예약
+            tbody
+                tr(*ngFor="let c of infiniteBuyCycles", class="border-b border-white/5 hover:bg-white/5 transition-colors")
+                    td(class="py-3 pl-4 pr-5")
                         div(class="flex items-center gap-3")
-                            div(class="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold", [ngClass]="item.avatarColor || 'bg-indigo-100 text-indigo-700'")
-                                | {{item.author?.charAt(0) || '?'}}
-                            div(class="min-w-0 flex-1")
-                                p(class="text-[13px] font-medium text-gray-900 truncate") {{item.title}}
-                                p(class="text-[11px] text-gray-400 mt-0.5") {{item.author}} · {{item.date}}
-                            span(class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
-                                [ngClass]="{'bg-green-50 text-green-700 border border-green-200': item.status === 'published', 'bg-yellow-50 text-yellow-700 border border-yellow-200': item.status === 'draft', 'bg-gray-50 text-gray-600 border border-gray-200': item.status !== 'published' && item.status !== 'draft'}")
-                                | {{item.status}}
+                            div(class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-400/15 bg-cyan-500/10 text-[12px] font-bold text-cyan-200")
+                                | {{(c.symbol || '?').slice(0, 1)}}
+                            div(class="min-w-0")
+                                div(class="text-[13px] font-semibold text-white") {{c.symbol}}
+                                div(class="text-[11px] text-slate-500") {{c.cycle_number ? '#' + c.cycle_number : '-'}}
+                    td(class="py-3 pr-4")
+                        div(class="flex flex-col items-start gap-1", (click)="$event.stopPropagation()")
+                            div(*ngIf="!isInfiniteBuySeedReadOnly()", class="flex items-center gap-1")
+                                span(class="text-[10px] text-slate-500") $
+                                input([ngModel]="infiniteBuySeedDraft(c)",
+                                    (ngModelChange)="onInfiniteBuySeedInput(c, $event)",
+                                    type="number",
+                                    min="0",
+                                    step="1",
+                                    placeholder="USD",
+                                    class="w-24 rounded-md border border-white/10 bg-slate-950/40 px-2 py-1 text-right text-[11px] font-semibold text-slate-200 focus:outline-none focus:border-cyan-400/40")
+                                button((click)="saveInfiniteBuySeed(c, $event)",
+                                    [disabled]="automationSaving['ib_seed_' + c.id]",
+                                    class="rounded-md border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-50")
+                                    | 저장
+                            div(*ngIf="isInfiniteBuySeedReadOnly()", class="inline-flex items-center gap-2 rounded-md border border-violet-400/20 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200")
+                                span FireGate 관리
+                                span(class="text-violet-300/80") ${{c.total_investment | number:'1.0-2'}}
+                            div(class="text-[10px] text-slate-600") {{isInfiniteBuySeedReadOnly() ? 'FireGate 포트폴리오 기준 자동 반영' : '달러 기준'}}
+                    td(class="py-3 pr-3")
+                        span([class]="statusBadge(c.status)") {{cycleStatusLabel(c.status)}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{c.current_round || 0}}/{{c.division_count || 0}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{c.total_qty || 0}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") ${{c.avg_price | number:'1.2-4'}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") ${{c.current_price | number:'1.2-2'}}
+                    td(class="py-3 pr-3 text-right text-[13px] font-semibold", [class]="profitClass(c.profit_rate || 0)")
+                        | {{(c.profit_rate || 0) > 0 ? '+' : ''}}{{(c.profit_rate || 0) | number:'1.2-2'}}%
+                    td(class="py-3 pr-3 text-right")
+                        button((click)="toggleInfiniteBuyCycle(c, $event)",
+                            [disabled]="c.status === 'COMPLETED' || c.status === 'PENDING_EXTENSION'",
+                            class="rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-40",
+                            [class]="infiniteBuyCycleToggleClass(c)")
+                            | {{infiniteBuyCycleToggleLabel(c)}}
+                    td(class="py-3")
+                        div(class="flex flex-col gap-1")
+                            div(class="flex items-center gap-2")
+                                span([class]="locStatusBadge(c.loc_buy_status)") {{locStatusLabel(c)}}
+                                span(*ngIf="c.loc_buy_order_no", class="text-[10px] text-slate-500") {{c.loc_buy_order_no}}
+                            div(*ngIf="c.loc_buy_status === 'scheduled'", class="text-[11px] text-slate-400")
+                                | {{c.loc_buy_qty || 0}}주 · ${{c.loc_buy_price | number:'1.2-2'}} · R{{c.loc_buy_round || '-'}}
+                            div(*ngIf="c.loc_buy_status !== 'scheduled' && c.loc_buy_message", class="text-[11px] text-slate-500 max-w-[320px] truncate")
+                                | {{c.loc_buy_message}}
 
-        //- Quick Links / Summary
-        div(class="bg-white rounded-xl border border-gray-200 overflow-hidden")
-            div(class="px-6 py-4 border-b border-gray-100")
-                h2(class="text-[15px] font-semibold text-gray-900") 바로가기
+//- Daytrade Positions
+div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
+    div(class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4")
+        div
+            h2(class="text-sm font-semibold text-white") 단타 보유중
+            p(class="text-[12px] text-slate-400 mt-1") 국장·미장 단타가 현재 들고 있는 종목만 보여줍니다.
+        div(class="grid grid-cols-3 gap-2 min-w-full md:min-w-[420px]")
+            div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                div(class="text-[10px] text-slate-500") 종목 수
+                div(class="text-sm font-bold text-white mt-0.5") {{daytradePositionSummary.count || 0}}
+            div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                div(class="text-[10px] text-slate-500") 평가액
+                div(class="text-sm font-bold text-white mt-0.5") ₩{{formatKRW(daytradePositionSummary.eval_amount_krw || 0)}}
+            div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
+                div(class="text-[10px] text-slate-500") 평가손익
+                div(class="text-sm font-bold mt-0.5", [class]="profitClass(daytradePositionSummary.pnl_krw || 0)") {{signedKRW(daytradePositionSummary.pnl_krw || 0)}}
 
-            div(class="p-4 space-y-2")
-                a(routerLink="/posts", class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors group")
-                    div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors")
-                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z")
+    div(*ngIf="daytradePositions.length === 0", class="rounded-lg border border-white/5 bg-white/5 px-4 py-5 text-center")
+        div(class="text-[13px] text-slate-400") 현재 단타 보유 종목이 없습니다.
+        div(class="text-[11px] text-slate-600 mt-1") 신규 진입이 체결되면 이 영역에 바로 표시됩니다.
+
+    div(*ngIf="daytradePositions.length > 0", class="overflow-x-auto")
+        table(class="w-full text-left dash-daytrade-table")
+            thead
+                tr(class="border-b border-white/10")
+                    th(class="pb-2 text-xs font-medium text-slate-500") 시장
+                    th(class="pb-2 text-xs font-medium text-slate-500") 종목
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 수량
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 평균가
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 현재가
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 평가액
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 손익
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 수익률
+            tbody
+                tr(*ngFor="let p of daytradePositions", class="border-b border-white/5 hover:bg-white/5 transition-colors")
+                    td(class="py-3 pr-3")
+                        span(class="px-2 py-0.5 rounded-full text-[11px] font-medium", [class]="marketBadgeClass(p.market)") {{marketLabel(p.market)}}
+                    td(class="py-3 pr-3")
+                        div(class="text-[13px] font-semibold text-white") {{p.symbol}}
+                        div(class="text-[11px] text-slate-500 truncate max-w-[180px]") {{p.name || p.strategy_name || '-'}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{p.qty}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{formatPositionPrice(p, p.avg_price)}}
+                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{formatPositionPrice(p, p.current_price)}}
+                    td(class="py-3 pr-3 text-right text-[13px] font-semibold text-white") ₩{{formatKRW(p.eval_amount_krw || 0)}}
+                    td(class="py-3 pr-3 text-right text-[13px] font-semibold", [class]="profitClass(p.pnl_krw || 0)") {{signedKRW(p.pnl_krw || 0)}}
+                    td(class="py-3 text-right text-[13px] font-semibold", [class]="profitClass(p.pnl_pct || 0)")
+                        | {{(p.pnl_pct || 0) > 0 ? '+' : ''}}{{(p.pnl_pct || 0) | number:'1.2-2'}}%
+
+//- Quick Navigation
+div(*ngIf="!legacyMode", [class]="quickNavGridClass()")
+    a(routerLink="/infinite-buy", class="glass-card dash-quick-card hover:border-sky-400/30 transition-colors")
+        div(class="flex items-center justify-between gap-4 w-full")
+            div(class="min-w-0")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") Infinite Buy
+                div(class="text-sm font-semibold text-white mt-1") 무한매수 자동운영
+                div(class="text-[11px] text-slate-500 mt-2") 장 시작 전 LOC 예약매수 1회와 자동 감시
+            div(class="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-sky-500/10 text-sky-300")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M12 4.5v15m7.5-7.5h-15")
+    a(*ngIf="showAdminControls", routerLink="/daytrade", class="glass-card dash-quick-card hover:border-indigo-400/30 transition-colors")
+        div(class="flex items-center justify-between gap-4 w-full")
+            div(class="min-w-0")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") Daytrade
+                div(class="text-sm font-semibold text-white mt-1") 단타 자동운영
+                div(class="text-[11px] text-slate-500 mt-2") 국장·미장 후보를 자동 순환하며 진입과 청산 감시
+            div(class="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-indigo-500/10 text-indigo-300")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.125C3 12.503 3.503 12 4.125 12h2.25c.621 0 1.125.503 1.125 1.125v6.75C7.5 20.497 6.997 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75Zm6.75-4.5c0-.621.503-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .622-.504 1.125-1.125 1.125h-2.25A1.125 1.125 0 0 1 9.75 19.875v-11.25Zm6.75-3.375c0-.621.504-1.125 1.125-1.125h2.25C20.497 4.125 21 4.629 21 5.25v14.625c0 .622-.503 1.125-1.125 1.125h-2.25A1.125 1.125 0 0 1 16.5 19.875V5.25Z")
+    a(routerLink="/history", class="glass-card dash-quick-card hover:border-emerald-400/30 transition-colors")
+        div(class="flex items-center justify-between gap-4 w-full")
+            div(class="min-w-0")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") History
+                div(class="text-sm font-semibold text-white mt-1") 오늘 손익 확인
+                div(class="text-[11px] text-slate-500 mt-2") 체결, 실현손익, 남은 포지션 확인
+            div(class="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-emerald-500/10 text-emerald-300")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v6h4.5m6.364 1.364a9 9 0 1 1-12.728-12.728 9 9 0 0 1 12.728 12.728Z")
+    a(routerLink="/settings", class="glass-card dash-quick-card hover:border-amber-400/30 transition-colors")
+        div(class="flex items-center justify-between gap-4 w-full")
+            div(class="min-w-0")
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") Settings
+                div(class="text-sm font-semibold text-white mt-1") 고급 설정
+                div(class="text-[11px] text-slate-500 mt-2") 리스크, 자동매매 옵션, 계정 설정
+            div(class="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-amber-500/10 text-amber-300")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M4.5 12a7.5 7.5 0 0 1 15 0m-15 0a7.5 7.5 0 0 0 15 0m-15 0H3m1.5 0h15m-1.5 0H21M12 4.5v15")
+
+//- Engine Controls + Active Cycles
+div(*ngIf="showLegacySections", class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6")
+    //- Engine Control Panel
+    div(class="glass-card p-5")
+        div(class="flex items-center justify-between mb-4")
+            h2(class="text-sm font-semibold text-white") {{t('engine.title')}}
+            div(class="flex items-center gap-1.5")
+                div([class]="engineStatus.auto_trade ? 'status-dot online' : 'status-dot offline'")
+                span(class="text-xs", [class]="engineStatus.auto_trade ? 'text-emerald-400' : 'text-slate-500'")
+                    | {{engineStatus.auto_trade ? t('engine.auto') : t('engine.manual')}}
+
+        div(class="space-y-3")
+            //- Auto Trade Toggle
+            button((click)="toggleAutoTrade()",
+                class="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors",
+                [class]="engineStatus.auto_trade ? 'bg-emerald-500/10 border border-emerald-400/20 hover:bg-emerald-500/20' : 'bg-white/5 border border-white/10 hover:bg-white/10'")
+                span(class="text-[13px] font-medium", [class]="engineStatus.auto_trade ? 'text-emerald-300' : 'text-slate-400'")
+                    | {{t('engine.auto_trading')}}
+                div(class="relative w-10 h-5 rounded-full transition-colors",
+                    [class]="engineStatus.auto_trade ? 'bg-emerald-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="engineStatus.auto_trade ? 'translate-x-5' : 'translate-x-0.5'")
+
+            //- Run Now Button
+            button((click)="runEngineNow()",
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z")
+                span {{t('engine.run_now')}}
+
+            //- Refresh
+            button((click)="refreshDashboard()",
+                [disabled]="manualRefreshing || loading",
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-[13px] font-medium hover:bg-white/10 transition-colors disabled:opacity-50")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182")
+                span {{manualRefreshing ? '갱신 중' : t('engine.refresh')}}
+
+        div(class="mt-4 pt-4 border-t border-white/5")
+            div(class="flex items-center justify-between mb-2")
+                div(class="text-[11px] text-slate-500 uppercase") {{t('engine.start_new')}}
+                span(class="text-[11px] text-slate-600") {{watchlistWithoutCycle.length}} {{t('engine.ready_symbols')}}
+
+            div(*ngIf="watchlistWithoutCycle.length > 0")
+                div(class="flex flex-wrap gap-1.5 mb-3")
+                    button(*ngFor="let w of watchlistWithoutCycle",
+                        (click)="selectStartSymbol(w.symbol)",
+                        class="px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors",
+                        [class]="selectedStartSymbol === w.symbol ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10 hover:text-slate-300'")
+                        | {{w.symbol}}
+
+                div(class="flex items-center gap-2")
+                    select([(ngModel)]="selectedStartSymbol",
+                        class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-white focus:border-indigo-400/50 focus:outline-none")
+                        option(value="") {{t('engine.select_symbol')}}
+                        option(*ngFor="let w of watchlistWithoutCycle", [value]="w.symbol")
+                            | {{w.symbol}} — {{w.name || ''}} ({{w.cycle_mode}})
+                    button((click)="startSelectedCycle()",
+                        [disabled]="!selectedStartSymbol || startingCycle",
+                        class="px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
+                        [class]="!selectedStartSymbol || startingCycle ? 'bg-slate-700/60 border border-slate-600/50 text-slate-500 cursor-not-allowed' : 'bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 hover:bg-indigo-500/30'")
+                        | {{startingCycle ? t('common.loading') : t('engine.start_selected')}}
+
+            div(*ngIf="watchlistWithoutCycle.length === 0",
+                class="px-3 py-2 rounded-lg bg-white/5 border border-white/5 text-[12px] text-slate-500")
+                | {{t('engine.no_startable_symbols')}}
+
+        //- Summary
+        div(class="mt-4 pt-4 border-t border-white/5")
+            div(class="grid grid-cols-5 gap-2 text-center")
+                div
+                    div(class="text-lg font-bold text-indigo-400") {{engineStatus.active_cycles}}
+                    div(class="text-[10px] text-slate-500 uppercase") {{t('engine.active')}}
+                div
+                    div(class="text-lg font-bold text-amber-400") {{engineStatus.holding_cycles}}
+                    div(class="text-[10px] text-slate-500 uppercase") {{t('engine.holding')}}
+                div
+                    div(class="text-lg font-bold text-orange-400") {{engineStatus.pending_extension_cycles || 0}}
+                    div(class="text-[10px] text-slate-500 uppercase") {{t('engine.pending')}}
+                div
+                    div(class="text-lg font-bold text-slate-400") {{engineStatus.paused_cycles || 0}}
+                    div(class="text-[10px] text-slate-500 uppercase") {{t('engine.paused')}}
+                div
+                    div(class="text-lg font-bold text-emerald-400") {{engineStatus.completed_cycles}}
+                    div(class="text-[10px] text-slate-500 uppercase") {{t('engine.done')}}
+
+        //- Start Cycle for Watchlist Items without Active Cycle
+        div(*ngIf="watchlistWithoutCycle.length > 0",
+            class="mt-4 pt-4 border-t border-white/5")
+            div(class="text-[11px] text-slate-500 uppercase mb-2") {{t('engine.quick_start')}}
+            div(class="space-y-1.5")
+                div(*ngFor="let w of watchlistWithoutCycle",
+                    class="flex items-center justify-between px-3 py-1.5 rounded-lg bg-white/3 hover:bg-white/5 transition-colors")
+                    div(class="flex items-center gap-2")
+                        span(class="text-xs font-medium text-slate-300") {{w.symbol}}
+                        span(*ngIf="w.name", class="text-[10px] text-slate-500 truncate max-w-[120px]") {{w.name}}
+                        span(class="text-[10px] px-1.5 py-0.5 rounded-full",
+                            [class]="w.cycle_mode === 'auto' ? 'bg-emerald-500/10 text-emerald-400' : w.cycle_mode === 'confirm' ? 'bg-amber-500/10 text-amber-400' : 'bg-indigo-500/10 text-indigo-400'")
+                            | {{w.cycle_mode}}
+                    button((click)="startCycle(w.symbol)",
+                        class="text-[11px] px-2 py-1 rounded bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 hover:bg-indigo-500/30 transition-colors")
+                        | {{t('engine.start')}}
+
+    //- Active Cycles
+    div(class="lg:col-span-2 glass-card p-5")
+        h2(class="text-sm font-semibold text-white mb-4") {{t('cycle.title')}}
+
+        div(*ngIf="cycles.length === 0", class="text-center py-8")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1", stroke="currentColor",
+                class="size-10 mx-auto text-slate-600 mb-2")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6")
+            p(class="text-[13px] text-slate-500") {{t('cycle.no_active')}}
+            p(class="text-xs text-slate-600 mt-1") {{t('cycle.no_active_desc')}}
+
+        div(class="space-y-3")
+            div(*ngFor="let cycle of cycles",
+                (click)="openCycleDetail(cycle)",
+                class="bg-white/5 rounded-lg p-4 border border-white/5 hover:border-white/10 transition-colors cursor-pointer",
+                [class]="cycle.status === 'PENDING_EXTENSION' ? 'border-orange-400/20' : ''")
+                //- Header
+                div(class="flex items-center justify-between mb-3")
+                    div(class="flex items-center gap-2")
+                        span(class="text-sm font-bold text-white") {{cycle.symbol}}
+                        span(*ngIf="cycle.cycle_number",
+                            class="text-[10px] text-slate-500") {{'#' + cycle.cycle_number}}
+                        span(class="text-xs px-2 py-0.5 rounded-full", [class]="statusBadge(cycle.status)")
+                            | {{cycle.status === 'PENDING_EXTENSION' ? 'PENDING' : cycle.status}}
+                    div(class="flex items-center gap-1.5")
+                        //- Cycle Control Buttons
+                        button(*ngIf="cycle.status !== 'COMPLETED'",
+                            (click)="openEditModal(cycle, $event)",
+                            [title]="t('cycle.edit_title')",
+                            class="p-1 rounded hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-400 transition-colors")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10")
+                        button(*ngIf="cycle.status === 'PAUSED'",
+                            (click)="resumeCycle(cycle, $event)",
+                            title="Resume",
+                            class="p-1 rounded hover:bg-emerald-500/20 text-slate-500 hover:text-emerald-400 transition-colors")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z")
+                        button(*ngIf="cycle.status !== 'PAUSED' && cycle.status !== 'COMPLETED' && cycle.status !== 'PENDING_EXTENSION'",
+                            (click)="pauseCycle(cycle, $event)",
+                            title="Pause",
+                            class="p-1 rounded hover:bg-amber-500/20 text-slate-500 hover:text-amber-400 transition-colors")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 5.25v13.5m-7.5-13.5v13.5")
+                        button(*ngIf="cycle.status !== 'COMPLETED'",
+                            (click)="forceCloseCycle(cycle, $event)",
+                            title="Force Close",
+                            class="p-1 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-colors")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M6 18 18 6M6 6l12 12")
+                        button(*ngIf="cycle.status === 'PAUSED' || cycle.status === 'COMPLETED'",
+                            (click)="deleteCycle(cycle, $event)",
+                            [title]="t('cycle.delete_btn')",
+                            class="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0")
+                        //- Profit Rate
+                        div(class="text-right ml-2")
+                            div(class="text-sm font-semibold", [class]="profitClass(cycle.profit_rate)")
+                                | {{cycle.profit_rate > 0 ? '+' : ''}}{{cycle.profit_rate | number:'1.2-2'}}%
+                            div(class="text-xs text-slate-500") {{t('common.target')}}: {{cycle.target_profit}}%
+
+                //- Paused overlay message
+                div(*ngIf="cycle.status === 'PAUSED'",
+                    class="mb-3 px-3 py-2 rounded-lg bg-slate-500/10 border border-slate-400/20 text-xs text-slate-400 flex items-center gap-2")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 shrink-0")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 5.25v13.5m-7.5-13.5v13.5")
+                    span {{t('cycle.paused_msg')}}
+
+                //- Pending Extension message + buttons
+                div(*ngIf="cycle.status === 'PENDING_EXTENSION'",
+                    class="mb-3 px-3 py-2.5 rounded-lg bg-orange-500/10 border border-orange-400/20")
+                    div(class="flex items-center gap-2 mb-2")
+                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                            class="size-4 shrink-0 text-orange-400")
+                            path(stroke-linecap="round", stroke-linejoin="round", d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z")
+                        span(class="text-xs text-orange-300 font-medium") {{cycle.division_count}}{{t('cycle.pending_suffix')}}
+                    div(class="flex items-center gap-2")
+                        button((click)="openExtensionModal(cycle, $event)",
+                            class="flex-1 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-medium hover:bg-indigo-500/30 transition-colors text-center")
+                            | {{t('cycle.extend_btn')}}
+                        button((click)="keepHolding(cycle, $event)",
+                            class="flex-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-xs font-medium hover:bg-white/10 transition-colors text-center")
+                            | {{t('cycle.keep_holding')}}
+
+                //- Progress Bar
+                div(class="mb-3")
+                    div(class="flex items-center justify-between text-xs text-slate-400 mb-1")
+                        span {{t('common.round')}} {{cycle.current_round}} / {{cycle.division_count}}
+                        span {{cycleProgress(cycle)}}%
+                    div(class="w-full h-1.5 bg-white/5 rounded-full overflow-hidden")
+                        div(class="h-full rounded-full transition-all duration-500",
+                            [class]="cycle.status === 'HOLDING' ? 'bg-amber-500' : cycle.status === 'PAUSED' ? 'bg-slate-500' : cycle.status === 'PENDING_EXTENSION' ? 'bg-orange-500' : 'bg-indigo-500'",
+                            [style.width.%]="cycleProgress(cycle)")
+
+                //- Details
+                div(class="grid grid-cols-4 gap-3 text-center")
                     div
-                        p(class="text-[13px] font-medium text-gray-900") 게시물 관리
-                        p(class="text-[11px] text-gray-400") 게시물 목록 및 작성
-
-                a(routerLink="/members", class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors group")
-                    div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-purple-50 text-purple-600 group-hover:bg-purple-100 transition-colors")
-                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('cycle.avg_price')}}
+                        div(class="text-xs font-medium text-slate-300 mt-0.5") ${{cycle.avg_price | number:'1.2-4'}}
                     div
-                        p(class="text-[13px] font-medium text-gray-900") 멤버 관리
-                        p(class="text-[11px] text-gray-400") 팀 멤버 초대 및 권한
-
-                a(routerLink="/mypage", class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors group")
-                    div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-orange-50 text-orange-600 group-hover:bg-orange-100 transition-colors")
-                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z")
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('cycle.current')}}
+                        div(class="text-xs font-medium text-slate-300 mt-0.5") ${{cycle.current_price | number:'1.2-2'}}
                     div
-                        p(class="text-[13px] font-medium text-gray-900") 내 프로필
-                        p(class="text-[11px] text-gray-400") 계정 정보 및 비밀번호
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('cycle.invested')}}
+                        div(class="text-xs font-medium text-slate-300 mt-0.5") ${{cycle.total_spent | number:'1.0-0'}}
+                    div
+                        div(class="text-[10px] text-slate-500 uppercase") {{t('cycle.remaining')}}
+                        div(class="text-xs font-medium text-slate-300 mt-0.5") ${{cycle.remaining_investment | number:'1.0-0'}}
+
+//- ============================================================
+//- Today's Trade Preview (Buy + Sell)
+//- ============================================================
+div(*ngIf="showLegacySections", class="glass-card p-5 mb-6")
+    div(class="flex items-center justify-between mb-3")
+        div(class="flex items-center gap-2")
+            h2(class="text-sm font-semibold text-white") {{t('dash.trade_preview')}}
+            span(*ngIf="tradePreviews.length > 0",
+                class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300") {{tradePreviews.length}}
+        div(class="flex items-center gap-2")
+            span(*ngIf="!tradePreviewApiConnected && !apiConnected && !tradePreviewLoading",
+                class="text-[10px] text-amber-400") {{t('dash.preview_no_api')}}
+            button((click)="loadTradePreview()",
+                [disabled]="tradePreviewLoading",
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors bg-indigo-500/10 border border-indigo-400/20 text-indigo-300 hover:bg-indigo-500/20 disabled:opacity-50")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992V4.356m-.58 13.23a9 9 0 0 1-15.292-3.154m-.78-4.183A9 9 0 0 1 8.98 3.98a8.998 8.998 0 0 1 6.043 2.338l1.0 1.03")
+                span {{t('engine.refresh')}}
+
+    //- Loading
+    div(*ngIf="tradePreviewLoading", class="flex items-center justify-center py-6")
+        div(class="text-[13px] text-slate-500") {{t('common.loading')}}
+
+    //- Preview Content
+    div(*ngIf="!tradePreviewLoading")
+        div(*ngIf="tradePreviews.length === 0", class="text-center py-4")
+            p(class="text-[13px] text-slate-500") {{t('dash.no_preview')}}
+
+        div(class="space-y-2")
+            div(*ngFor="let p of tradePreviews",
+                class="bg-white/5 rounded-lg p-3 border border-white/5")
+                //- Header Row
+                div(class="flex items-center justify-between mb-2")
+                    div(class="flex items-center gap-2")
+                        span(class="text-sm font-bold text-white") {{p.symbol}}
+                        span(class="text-[10px] text-slate-500") {{'#' + p.cycle_number}}
+                        //- Buy badge
+                        span(*ngIf="p.should_buy",
+                            class="text-[10px] px-1.5 py-0.5 rounded-full",
+                            [class]="tradePreviewBuyClass(p)") {{p.order_type}}
+                        //- Sell badge
+                        span(*ngIf="p.should_sell",
+                            class="text-[10px] px-1.5 py-0.5 rounded-full",
+                            [class]="tradePreviewSellClass(p)")
+                            | {{p.sell_type === 'PARTIAL_SELL' ? 'P.SELL' : 'SELL'}}
+                        span(*ngIf="!p.should_buy && !p.should_sell",
+                            class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-500/20 text-slate-400") —
+                    div(class="text-right")
+                        div(*ngIf="p.should_sell",
+                            class="text-sm font-semibold text-emerald-300") +{{p.profit_rate | number:'1.2-2'}}%
+                        div(*ngIf="p.should_buy && !p.should_sell",
+                            class="text-sm font-semibold text-indigo-300") ${{formatUSD(p.buy_amount)}}
+                        div(*ngIf="!p.should_buy && !p.should_sell",
+                            class="text-sm font-semibold text-slate-500") —
+
+                //- Buy Detail (when buying)
+                div(*ngIf="p.should_buy", class="grid grid-cols-4 gap-2 text-center mb-1")
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.preview_price')}}
+                        div(class="text-xs font-medium text-slate-300") ${{p.loc_price | number:'1.2-2'}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.preview_qty')}}
+                        div(class="text-xs font-medium text-slate-300") {{p.order_qty}}{{t('detail.shares')}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('common.round')}}
+                        div(class="text-xs font-medium text-slate-300") {{p.current_round + 1}}/{{p.division_count}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.preview_amount')}}
+                        div(class="text-xs font-medium text-indigo-300") ${{formatUSD(p.order_qty * p.loc_price)}}
+
+                //- Sell Detail (when selling)
+                div(*ngIf="p.should_sell", class="grid grid-cols-4 gap-2 text-center mb-1")
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.sell_current')}}
+                        div(class="text-xs font-medium text-slate-300") ${{p.current_price | number:'1.2-2'}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.sell_qty')}}
+                        div(class="text-xs font-medium text-emerald-300") {{p.sell_qty}}{{t('detail.shares')}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.sell_type')}}
+                        div(class="text-xs font-medium text-slate-300") {{p.sell_type === 'PARTIAL_SELL' ? t('dash.sell_partial') : t('dash.sell_full')}}
+                    div
+                        div(class="text-[10px] text-slate-500") {{t('dash.sell_profit')}}
+                        div(class="text-xs font-medium text-emerald-300") +{{p.profit_rate | number:'1.2-2'}}%
+
+                //- Reason
+                div(class="mt-1 text-[11px] text-slate-500 truncate")
+                    span(*ngIf="p.buy_reason") {{p.buy_reason}}
+                    span(*ngIf="p.sell_reason && p.buy_reason") &nbsp;|&nbsp;
+                    span(*ngIf="p.sell_reason") {{p.sell_reason}}
+
+//- Holdings Table
+div(*ngIf="showLegacySections", class="glass-card p-5 mb-6")
+    div(class="flex items-center justify-between mb-4")
+        h2(class="text-sm font-semibold text-white") {{t('holdings.title')}}
+        span(class="text-xs text-slate-500") {{holdings.length}} {{t('holdings.stocks')}}
+
+    div(*ngIf="holdings.length === 0", class="text-center py-6")
+        p(class="text-[13px] text-slate-500") {{t('holdings.no_holdings')}}
+
+    div(*ngIf="holdings.length > 0", class="overflow-x-auto")
+        table(class="w-full text-left")
+            thead
+                tr(class="border-b border-white/5")
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider") {{t('hist.symbol')}}
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider text-right") {{t('hist.qty')}}
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider text-right") {{t('cycle.avg_price')}}
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider text-right") {{t('cycle.current')}}
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider text-right") {{t('hist.eval')}}
+                    th(class="pb-2 text-xs font-medium text-slate-500 uppercase tracking-wider text-right") {{t('hist.pl')}}
+            tbody
+                tr(*ngFor="let h of holdings", class="border-b border-white/3 hover:bg-white/3 transition-colors")
+                    td(class="py-2.5 text-[13px] font-medium text-white") {{h.symbol}}
+                    td(class="py-2.5 text-[13px] text-slate-300 text-right") {{h.qty}}
+                    td(class="py-2.5 text-[13px] text-slate-300 text-right") ${{h.avg_price | number:'1.2-4'}}
+                    td(class="py-2.5 text-[13px] text-slate-300 text-right") ${{h.current_price | number:'1.2-2'}}
+                    td(class="py-2.5 text-[13px] text-slate-300 text-right") ${{h.eval_amount | number:'1.2-2'}}
+                    td(class="py-2.5 text-[13px] font-medium text-right", [class]="profitClass(h.profit_rate)")
+                        | {{h.profit_rate > 0 ? '+' : ''}}{{h.profit_rate | number:'1.2-2'}}%
+
+//- Recent Trade Logs
+div(*ngIf="showLegacySections", class="glass-card p-5")
+    div(class="flex items-center justify-between mb-4")
+        h2(class="text-sm font-semibold text-white") {{t('activity.title')}}
+        a(routerLink="/history", class="text-xs text-indigo-400 hover:text-indigo-300 font-medium") {{t('activity.view_all')}}
+
+    div(*ngIf="recentLogs.length === 0", class="text-center py-6")
+        p(class="text-[13px] text-slate-500") {{t('activity.no_activity')}}
+
+    div(class="space-y-2")
+        div(*ngFor="let log of recentLogs; let i = index",
+            (click)="expandedLogs.has(i) ? expandedLogs.delete(i) : expandedLogs.add(i); service.render();",
+            class="flex items-start gap-3 px-3 py-2 rounded-lg bg-white/3 hover:bg-white/5 transition-colors cursor-pointer")
+            div(class="flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold flex-shrink-0 mt-0.5",
+                [class]="log.action === 'BUY' ? 'bg-indigo-500/20 text-indigo-300' : log.action === 'SELL' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-500/20 text-slate-400'")
+                | {{log.action?.charAt(0) || '?'}}
+            div(class="flex-1 min-w-0")
+                div(class="text-[13px] text-slate-300",
+                    [class]="expandedLogs.has(i) ? 'whitespace-pre-wrap break-all' : 'truncate'")
+                    | {{log.message}}
+                div(class="text-[11px] text-slate-500") {{log.symbol}} · {{log.created}}
+            span(class="text-xs px-2 py-0.5 rounded-full flex-shrink-0",
+                [class]="log.event_type === 'ERROR' ? 'bg-red-500/20 text-red-300' : 'bg-white/5 text-slate-400'")
+                | {{log.event_type}}

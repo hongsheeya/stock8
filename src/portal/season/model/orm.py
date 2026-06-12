@@ -4,12 +4,16 @@ import time
 import datetime
 import string as _string
 import random as _random
+import threading as _threading
 import peewee as pw
 from playhouse.shortcuts import model_to_dict, dict_to_model
 
 config = wiz.model("portal/season/config")
 
 ORM_BASE = config.orm_base
+_DB_MAX_CONCURRENCY = max(2, int(os.environ.get("WIZ_DB_MAX_CONCURRENCY", "4") or 4))
+_DB_SEMAPHORE = _threading.BoundedSemaphore(_DB_MAX_CONCURRENCY)
+_DB_LOCAL = _threading.local()
 
 class Model:
     def __init__(self, tablename=None, module=None, id_size=32):
@@ -47,14 +51,46 @@ class Model:
         return wiz.model("portal/season/dbbase/mysql")(namespace)
 
     def query(self, sql):
+        self._db_enter()
         query = self.orm.raw(sql)
         rows = []
-        for row in query.dicts():
-            rows.append(row)
-        return rows
+        try:
+            for row in query.dicts():
+                rows.append(row)
+            return rows
+        finally:
+            self._close_connection()
+            self._db_exit()
     
     def select(self):
         return self.orm.select()
+
+    def _close_connection(self):
+        try:
+            database = self.orm._meta.database
+            if database is not None and database.is_closed() is False:
+                database.close()
+        except Exception:
+            pass
+
+    def _db_enter(self):
+        depth = int(getattr(_DB_LOCAL, "depth", 0) or 0)
+        if depth <= 0:
+            _DB_SEMAPHORE.acquire()
+            _DB_LOCAL.depth = 1
+            return
+        _DB_LOCAL.depth = depth + 1
+
+    def _db_exit(self):
+        depth = int(getattr(_DB_LOCAL, "depth", 0) or 0)
+        if depth <= 1:
+            _DB_LOCAL.depth = 0
+            try:
+                _DB_SEMAPHORE.release()
+            except Exception:
+                pass
+            return
+        _DB_LOCAL.depth = depth - 1
 
     def field(self, key):
         db = self.orm
@@ -134,6 +170,7 @@ class Model:
         return query
             
     def count(self, query=None, groupby=None, like=None, between=None, _or=None, **where):
+        self._db_enter()
         db = self.orm
         try:
             queryfn = query
@@ -162,9 +199,13 @@ class Model:
             return query.dicts()[0]['cnt']
         except Exception as e:
             pass
+        finally:
+            self._close_connection()
+            self._db_exit()
         return None
 
     def rows(self, query=None, groupby=None, order='ASC', orderby=None, page=None, dump=10, fields=None, like=None, between=None, _or=None, **where):
+        self._db_enter()
         db = self.orm
         queryfn = query
         query = db.select()
@@ -222,10 +263,14 @@ class Model:
 
         rows = []
 
-        for row in query.dicts():
-            rows.append(row)
+        try:
+            for row in query.dicts():
+                rows.append(row)
 
-        return rows
+            return rows
+        finally:
+            self._close_connection()
+            self._db_exit()
         
     def insert(self, *args, **data):
         def genId(max_length):
@@ -234,6 +279,7 @@ class Model:
         if len(args) > 0: data = args[0]
         if len(args) > 1: genId = args[1]
 
+        self._db_enter()
         db = self.orm
         if 'id' not in data and hasattr(db, "id"):
             fld_id = getattr(db, "id")
@@ -255,15 +301,20 @@ class Model:
         for key in data:
             if hasattr(db, key):
                 item[key] = data[key]
-        create_id = db.create(**item)
-        if obj_id is None:
-            obj_id = create_id
-        return obj_id
+        try:
+            create_id = db.create(**item)
+            if obj_id is None:
+                obj_id = create_id
+            return obj_id
+        finally:
+            self._close_connection()
+            self._db_exit()
 
     def update(self, data, like=None, **where):
         if self.count(like=like, **where) > 20:
             raise Exception("wizdb Error: update too many items")
 
+        self._db_enter()
         db = self.orm
         item = dict()
         for key in data:
@@ -291,15 +342,24 @@ class Model:
                         qo = (qo) | (field==v)
             query = query.where(qo)
         
-        query.execute()
+        try:
+            query.execute()
+        finally:
+            self._close_connection()
+            self._db_exit()
         
     def delete(self, **where):
+        self._db_enter()
         db = self.orm
         query = db.delete()
         for key in where:
             field = getattr(db, key)
             query = query.where(field==where[key])
-        query.execute()
+        try:
+            query.execute()
+        finally:
+            self._close_connection()
+            self._db_exit()
     
     def upsert(self, data, keys="id"):
         keys = keys.split(",")

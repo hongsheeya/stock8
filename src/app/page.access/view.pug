@@ -1,36 +1,217 @@
-div(class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8")
-    div(class="sm:mx-auto sm:w-full sm:max-w-sm")
-        div(class="flex justify-center")
-            div(class="flex items-center justify-center w-12 h-12 rounded-xl bg-indigo-600 text-white")
-                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-7")
-                    path(stroke-linecap="round", stroke-linejoin="round", d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9")
-        h2(class="mt-6 text-center text-xl font-bold text-gray-900") 서비스 로그인
-        p(class="mt-2 text-center text-[13px] text-gray-500") 계정 정보를 입력하여 로그인하세요.
+//- ============================================================
+//- Access Page — Login / Signup (Glassmorphism Dark Theme)
+//- ============================================================
 
-    div(class="mt-8 sm:mx-auto sm:w-full sm:max-w-sm")
-        div(class="space-y-5")
-            div
-                label(class="block text-[13px] font-medium text-gray-700 mb-1") 이메일
-                input(
-                    type="email",
-                    autocomplete="email",
-                    [(ngModel)]="data.email",
-                    placeholder="name@example.com",
-                    class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-[13px] text-gray-900 placeholder:text-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none")
+div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
 
-            div
-                label(class="block text-[13px] font-medium text-gray-700 mb-1") 비밀번호
-                input(
-                    type="password",
-                    autocomplete="current-password",
-                    [(ngModel)]="data.password",
-                    (keyup.enter)="login()",
-                    placeholder="비밀번호 입력",
-                    class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-[13px] text-gray-900 placeholder:text-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none")
+    div(class="w-full max-w-md")
 
-            button(
-                (click)="login()",
-                class="flex w-full justify-center rounded-lg bg-indigo-600 px-3 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 transition-colors")
-                | 로그인
+        //- Brand Header
+        div(class="text-center mb-8")
+            div(class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 mb-4")
+                svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 48 48", fill="none",
+                    class="w-9 h-9")
+                    //- Infinity symbol
+                    path(d="M12 18c-3.5 0-6.5 3-6.5 6s3 6 6.5 6c2.8 0 5-1.6 7-4l5-6c2-2.4 4.2-4 7-4 3.5 0 6.5 3 6.5 6s-3 6-6.5 6c-2.8 0-5-1.6-7-4l-5 6", stroke="url(#inf-lg)", stroke-width="3", stroke-linecap="round", fill="none")
+                    //- Dollar at center
+                    path(d="M24 20v8M22 22c0-1.1 1-2 2-2s2 .7 2 1.6c0 1.4-2 1.4-2 2.4 0 .9 1 1.6 2 1.6s2-1 2-2", stroke="#a5b4fc", stroke-width="1.5", stroke-linecap="round", fill="none")
+                    defs
+                        linearGradient(id="inf-lg", x1="5.5", y1="24", x2="42.5", y2="24", gradientUnits="userSpaceOnUse")
+                            stop(offset="0%", stop-color="#818cf8")
+                            stop(offset="100%", stop-color="#c084fc")
+            h1(class="text-2xl font-bold text-white")
+                span(class="infinity-text") ∞
+                | stock
+            p(class="text-sm text-slate-400 mt-1") Infinite Buy Strategy Trading
 
-        p(class="mt-8 text-center text-xs text-gray-400") &copy; 2026 Sample Service. All rights reserved.
+        //- Card Container
+        div(class="glass-card p-8")
+
+            //- ========== LOGIN VIEW ==========
+            div(*ngIf="view === 'login'")
+                h2(class="text-lg font-semibold text-white mb-1") 로그인
+                p(class="text-[13px] text-slate-400 mb-6") 계정 정보를 입력하여 로그인하세요.
+
+                //- Error Message
+                div(*ngIf="errorMsg",
+                    class="mb-4 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 text-[13px] flex items-center gap-2")
+                    svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-4 shrink-0")
+                        path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
+                    span {{errorMsg}}
+
+                div(class="space-y-4")
+                    //- Email
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이메일
+                        input(type="email",
+                            autocomplete="email",
+                            [(ngModel)]="loginData.email",
+                            placeholder="name@example.com",
+                            class="auth-input")
+
+                    //- Password
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 비밀번호
+                        input(type="password",
+                            autocomplete="current-password",
+                            [(ngModel)]="loginData.password",
+                            (keyup.enter)="login()",
+                            placeholder="비밀번호 입력",
+                            class="auth-input")
+
+                    //- Login Button
+                    button((click)="login()",
+                        [disabled]="loading",
+                        class="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors")
+                        svg(*ngIf="loading", class="size-4 animate-spin", xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24")
+                            circle(class="opacity-25", cx="12", cy="12", r="10", stroke="currentColor", stroke-width="4")
+                            path(class="opacity-75", fill="currentColor", d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z")
+                        span {{loading ? '로그인 중...' : '로그인'}}
+
+                //- Signup Link
+                div(class="mt-6 text-center")
+                    span(class="text-[13px] text-slate-500") 계정이 없으신가요?
+                    | &nbsp;
+                    button((click)="switchView('signup')",
+                        class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 회원가입
+                div(class="mt-3 flex items-center justify-center gap-3 text-[12px]")
+                    button((click)="switchView('find-id')", class="text-slate-400 hover:text-white transition-colors") 아이디 찾기
+                    button((click)="switchView('reset-password')", class="text-slate-400 hover:text-white transition-colors") 비밀번호 재설정
+
+            //- ========== SIGNUP VIEW ==========
+            div(*ngIf="view === 'signup'")
+                h2(class="text-lg font-semibold text-white mb-1") 회원가입
+                p(class="text-[13px] text-slate-400 mb-6") 새 계정을 만들어 시작하세요.
+
+                //- Error Message
+                div(*ngIf="errorMsg",
+                    class="mb-4 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 text-[13px] flex items-center gap-2")
+                    svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-4 shrink-0")
+                        path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
+                    span {{errorMsg}}
+
+                div(class="space-y-4")
+                    //- Name
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이름
+                        input(type="text",
+                            autocomplete="name",
+                            [(ngModel)]="signupData.name",
+                            placeholder="홍길동",
+                            class="auth-input")
+
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 휴대폰 번호
+                        input(type="text",
+                            autocomplete="tel",
+                            [(ngModel)]="signupData.mobile",
+                            placeholder="01012345678",
+                            class="auth-input")
+
+                    //- Email
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이메일
+                        input(type="email",
+                            autocomplete="email",
+                            [(ngModel)]="signupData.email",
+                            placeholder="name@example.com",
+                            class="auth-input")
+
+                    //- Password
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 비밀번호
+                        input(type="password",
+                            autocomplete="new-password",
+                            [(ngModel)]="signupData.password",
+                            placeholder="8자 이상 입력",
+                            class="auth-input")
+
+                    //- Password Confirm
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 비밀번호 확인
+                        input(type="password",
+                            autocomplete="new-password",
+                            [(ngModel)]="signupData.passwordConfirm",
+                            (keyup.enter)="signup()",
+                            placeholder="비밀번호 재입력",
+                            class="auth-input")
+
+                    //- Signup Button
+                    button((click)="signup()",
+                        [disabled]="loading",
+                        class="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors")
+                        svg(*ngIf="loading", class="size-4 animate-spin", xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24")
+                            circle(class="opacity-25", cx="12", cy="12", r="10", stroke="currentColor", stroke-width="4")
+                            path(class="opacity-75", fill="currentColor", d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z")
+                        span {{loading ? '처리 중...' : '회원가입'}}
+
+                //- Login Link
+                div(class="mt-6 text-center")
+                    span(class="text-[13px] text-slate-500") 이미 계정이 있으신가요?
+                    | &nbsp;
+                    button((click)="switchView('login')",
+                        class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 로그인
+
+            div(*ngIf="view === 'find-id'")
+                h2(class="text-lg font-semibold text-white mb-1") 아이디 찾기
+                p(class="text-[13px] text-slate-400 mb-6") 가입 시 입력한 이름과 휴대폰 번호로 아이디를 찾습니다.
+
+                div(*ngIf="errorMsg",
+                    class="mb-4 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 text-[13px] flex items-center gap-2")
+                    span {{errorMsg}}
+
+                div(*ngIf="successMsg",
+                    class="mb-4 px-3 py-2.5 rounded-lg bg-emerald-500/10 border border-emerald-400/20 text-emerald-300 text-[13px] flex items-center gap-2")
+                    span {{successMsg}}
+
+                div(class="space-y-4")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이름
+                        input(type="text", [(ngModel)]="findIdData.name", placeholder="홍길동", class="auth-input")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 휴대폰 번호
+                        input(type="text", [(ngModel)]="findIdData.mobile", (keyup.enter)="findId()", placeholder="01012345678", class="auth-input")
+                    button((click)="findId()",
+                        [disabled]="loading",
+                        class="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors")
+                        span {{loading ? '확인 중...' : '아이디 찾기'}}
+
+                div(class="mt-6 text-center flex items-center justify-center gap-3")
+                    button((click)="switchView('login')", class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 로그인으로
+                    button((click)="switchView('reset-password')", class="text-[13px] text-slate-400 hover:text-white font-medium transition-colors") 비밀번호 재설정
+
+            div(*ngIf="view === 'reset-password'")
+                h2(class="text-lg font-semibold text-white mb-1") 비밀번호 재설정
+                p(class="text-[13px] text-slate-400 mb-6") 본인 확인 후 새 비밀번호를 바로 설정합니다.
+
+                div(*ngIf="errorMsg",
+                    class="mb-4 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 text-[13px] flex items-center gap-2")
+                    span {{errorMsg}}
+
+                div(class="space-y-4")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이메일
+                        input(type="email", [(ngModel)]="resetPasswordData.email", placeholder="name@example.com", class="auth-input")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 이름
+                        input(type="text", [(ngModel)]="resetPasswordData.name", placeholder="홍길동", class="auth-input")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 휴대폰 번호
+                        input(type="text", [(ngModel)]="resetPasswordData.mobile", placeholder="01012345678", class="auth-input")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 새 비밀번호
+                        input(type="password", [(ngModel)]="resetPasswordData.newPassword", placeholder="8자 이상 입력", class="auth-input")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5") 새 비밀번호 확인
+                        input(type="password", [(ngModel)]="resetPasswordData.newPasswordConfirm", (keyup.enter)="resetPassword()", placeholder="비밀번호 재입력", class="auth-input")
+                    button((click)="resetPassword()",
+                        [disabled]="loading",
+                        class="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors")
+                        span {{loading ? '처리 중...' : '비밀번호 재설정'}}
+
+                div(class="mt-6 text-center flex items-center justify-center gap-3")
+                    button((click)="switchView('login')", class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 로그인으로
+                    button((click)="switchView('find-id')", class="text-[13px] text-slate-400 hover:text-white font-medium transition-colors") 아이디 찾기
+
+        //- Footer
+        p(class="mt-6 text-center text-[11px] text-slate-600") &copy; 2026 ∞stock. All rights reserved.

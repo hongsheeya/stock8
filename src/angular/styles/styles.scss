@@ -64,11 +64,28 @@
 html,
 body,
 app-root {
-    font-family: SUIT;
+    --bn-primary: #FCD535;
+    --bn-primary-active: #f0b90b;
+    --bn-canvas: #0b0e11;
+    --bn-card: #1e2329;
+    --bn-elevated: #2b3139;
+    --bn-body: #eaecef;
+    --bn-on-dark: #ffffff;
+    --bn-muted: #707a8a;
+    --bn-muted-strong: #929aa5;
+    --bn-up: #0ecb81;
+    --bn-down: #f6465d;
+    --bn-hairline: #2b3139;
+    --bn-radius-md: 6px;
+    --bn-radius-lg: 8px;
+    --bn-radius-xl: 12px;
+    font-family: "BinanceNova", SUIT, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     width: 100%;
     height: 100%;
     overflow: hidden;
     display: block;
+    background-color: var(--bn-canvas);
+    color: var(--bn-body);
 }
 
 app-root {
@@ -78,6 +95,56 @@ app-root {
 a,
 button {
     cursor: pointer;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+}
+
+.bn-number,
+.tabular-nums,
+[class*="number"],
+td.text-right,
+th.text-right {
+    font-family: "BinancePlex", "IBM Plex Sans", "JetBrains Mono", SUIT, ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.glass-card,
+.glass-card-light {
+    background: var(--bn-card);
+    border: 1px solid var(--bn-hairline);
+    border-radius: var(--bn-radius-xl);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.bn-primary-button {
+    background: var(--bn-primary);
+    color: #181a20;
+    border: 1px solid var(--bn-primary);
+    border-radius: var(--bn-radius-md);
+    font-weight: 700;
+}
+
+.bn-primary-button:active {
+    background: var(--bn-primary-active);
+}
+
+.bn-surface {
+    background: var(--bn-card);
+    border: 1px solid var(--bn-hairline);
+    border-radius: var(--bn-radius-xl);
+}
+
+.bn-label {
+    color: var(--bn-muted);
+    font-size: 12px;
+    font-weight: 600;
 }
 
 .text-orange-season {

@@ -1,0 +1,758 @@
+//- ============================================================
+//- Settings Page (5 Tabs: API / Risk / Watchlist / Parameters / Strategy)
+//- ============================================================
+
+//- Tab Navigation
+div(class="flex flex-wrap items-center gap-2 mb-6")
+    button(*ngIf="!isInfiniteBuyMode()", (click)="switchTab('api')", [class]="tabClass('api')")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z")
+        span {{t('set.api_settings')}}
+    button(*ngIf="!isInfiniteBuyMode()", (click)="switchTab('risk')", [class]="tabClass('risk')")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M12 3.75 4.5 6.75v5.25c0 4.142 3.134 7.84 7.5 8.25 4.366-.41 7.5-4.108 7.5-8.25V6.75L12 3.75Z")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M12 8.25v4.5m0 3h.008")
+        span 단타 ON/OFF
+    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('watchlist')", [class]="tabClass('watchlist')")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z")
+        span {{t('set.watchlist')}}
+    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('params')", [class]="tabClass('params')")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75")
+        span {{t('set.parameters')}}
+    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('strategy')", [class]="tabClass('strategy')")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605")
+        span {{t('set.sell_strategy')}}
+
+//- ============================================================
+//- TAB: API Settings
+//- ============================================================
+div(*ngIf="tab === 'api'")
+    div(class="glass-card p-6 max-w-2xl")
+        div(*ngIf="loadError", class="mb-5 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-200") {{loadError}}
+        div(*ngIf="!isInfiniteBuyMode()", class="mb-5 rounded-xl border border-white/10 bg-white/5 px-4 py-3")
+            div(class="text-[10px] uppercase tracking-[0.2em] text-slate-500") Settings
+            h2(class="mt-1 text-sm font-semibold text-white") 계정 및 KIS API 설정
+            p(class="mt-1 text-[12px] text-slate-400") 무한매수 관심종목과 매매 파라미터는 이제 무한매수 운영 페이지에서 관리합니다.
+        h2(class="text-sm font-semibold text-white mb-5") {{t('set.kis_config')}}
+
+        div(class="space-y-4")
+            //- App Key
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.app_key')}}
+                input([(ngModel)]="appKey",
+                    type="text",
+                    placeholder="PSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+
+            //- App Secret
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.app_secret')}}
+                div(class="relative")
+                    input([(ngModel)]="appSecret",
+                        [type]="showSecret ? 'text' : 'password'",
+                        placeholder="Secret Key",
+                        class="w-full px-3 py-2 pr-10 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                    button((click)="showSecret = !showSecret; service.render();",
+                        class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300")
+                        svg(*ngIf="!showSecret", xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                            path(stroke-linecap="round", stroke-linejoin="round", d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z")
+                            path(stroke-linecap="round", stroke-linejoin="round", d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z")
+                        svg(*ngIf="showSecret", xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                            path(stroke-linecap="round", stroke-linejoin="round", d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88")
+
+            //- Account
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.account_no')}}
+                input([(ngModel)]="accountNo",
+                    type="text",
+                    placeholder="12345678-01",
+                    maxlength="11",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                p(class="text-[11px] text-slate-500 mt-1") 예: 12345678-01 (8자리 계좌번호 + 하이픈 + 2자리 상품코드)
+
+            //- Mode Toggle
+            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+                div
+                    span(class="text-[13px] font-medium", [class]="isMock ? 'text-amber-300' : 'text-emerald-300'")
+                        | {{isMock ? t('set.mock_trading') : t('set.live_trading')}}
+                    p(class="text-[11px] text-slate-500 mt-0.5")
+                        | {{isMock ? t('set.mock_desc') : t('set.live_desc')}}
+                button((click)="isMock = !isMock; service.render();",
+                    class="relative w-10 h-5 rounded-full transition-colors",
+                    [class]="isMock ? 'bg-amber-500' : 'bg-emerald-500'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="isMock ? 'translate-x-0.5' : 'translate-x-5'")
+
+            //- Buttons
+            div(class="flex items-center gap-3 pt-2")
+                button((click)="saveApiSettings()",
+                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                    | {{t('set.save_settings')}}
+                button((click)="testApiConnection()",
+                    class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-slate-400 text-[13px] font-medium hover:bg-white/10 transition-colors")
+                    | {{t('set.test_connection')}}
+
+            //- Test Result
+            div(*ngIf="testResult",
+                class="mt-3 px-3 py-2 rounded-lg text-[13px]",
+                [class]="testOk ? 'bg-emerald-500/10 border border-emerald-400/20 text-emerald-300' : 'bg-red-500/10 border border-red-400/20 text-red-300'")
+                | {{testResult}}
+
+        div(class="mt-6 pt-5 border-t border-white/10 space-y-5")
+            h3(class="text-sm font-semibold text-white") 계정 정보
+
+            div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 아이디
+                    input([(ngModel)]="accountLoginId",
+                        type="text",
+                        placeholder="login id",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                    p(class="text-[11px] text-slate-500 mt-1") 이메일 로컬 파트(&#64; 앞부분)
+
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 이메일
+                    input([(ngModel)]="accountEmail",
+                        type="email",
+                        placeholder="user&#64;example.com",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") 사용자 고유 ID
+                input([value]="accountUserId",
+                    type="text",
+                    disabled,
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-500")
+
+            div(class="flex items-center gap-3")
+                button((click)="saveAccountProfile()",
+                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                    | 계정 정보 저장
+
+        div(class="mt-6 pt-5 border-t border-white/10 space-y-4")
+            h3(class="text-sm font-semibold text-white") 비밀번호 변경
+            div(class="grid grid-cols-1 md:grid-cols-3 gap-3")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 현재 비밀번호
+                    input([(ngModel)]="currentPassword",
+                        type="password",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 새 비밀번호
+                    input([(ngModel)]="newPassword",
+                        type="password",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 새 비밀번호 확인
+                    input([(ngModel)]="confirmPassword",
+                        type="password",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+
+            div(class="flex items-center gap-3")
+                button((click)="changeAccountPassword()",
+                    [disabled]="changingPassword",
+                    class="px-4 py-2 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-[13px] font-medium hover:bg-red-500/30 transition-colors disabled:opacity-50")
+                    | {{changingPassword ? '변경 중...' : '비밀번호 변경'}}
+
+//- ============================================================
+//- TAB: Risk Settings
+//- ============================================================
+div(*ngIf="tab === 'risk'")
+    div(class="glass-card p-6 max-w-2xl")
+        h2(class="text-sm font-semibold text-white mb-5") 단타 리스크 설정
+
+        div(class="space-y-5")
+            div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 국장 단타 기본 시드 (KRW)
+                    input([(ngModel)]="daytradeDefaultSeedKrw",
+                        type="number",
+                        step="100000",
+                        min="100000",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                    p(class="text-[10px] text-slate-600 mt-1") 스케줄러와 국장 단타 화면의 기본 요청 시드입니다.
+                    div(class="flex flex-wrap gap-2 mt-3")
+                        button((click)="setSeedPreset('KS', 1000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩1,000,000
+                        button((click)="setSeedPreset('KS', 3000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩3,000,000
+                        button((click)="setSeedPreset('KS', 5000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩5,000,000
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 미장 단타 기본 시드 (KRW)
+                    input([(ngModel)]="daytradeUsDefaultSeedKrw",
+                        type="number",
+                        step="100000",
+                        min="100000",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                    p(class="text-[10px] text-slate-600 mt-1") 미장 자동순환과 미장 단타 화면의 기본 요청 시드입니다.
+                    div(class="flex flex-wrap gap-2 mt-3")
+                        button((click)="setSeedPreset('US', 1000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩1,000,000
+                        button((click)="setSeedPreset('US', 3000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩3,000,000
+                        button((click)="setSeedPreset('US', 5000000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩5,000,000
+
+            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+                div
+                    span(class="text-[13px] font-medium text-slate-200") 국내 단타 자동순환
+                    p(class="text-[11px] text-slate-500 mt-0.5") 꺼두면 아무 작업도 하지 않습니다. 수동 운용만 유지됩니다.
+                button((click)="toggleDaytradeAutoEnabled()",
+                    class="relative w-10 h-5 rounded-full transition-colors",
+                    [class]="daytradeAutoEnabled ? 'bg-indigo-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="daytradeAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+
+            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+                div
+                    span(class="text-[13px] font-medium text-slate-200") 미장 단타 자동순환
+                    p(class="text-[11px] text-slate-500 mt-0.5") 꺼두면 아무 작업도 하지 않습니다. 수동 운용만 유지됩니다.
+                button((click)="toggleDaytradeUsAutoEnabled()",
+                    class="relative w-10 h-5 rounded-full transition-colors",
+                    [class]="daytradeUsAutoEnabled ? 'bg-blue-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="daytradeUsAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+
+            div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 일일 손실 제한 (KRW)
+                    input([(ngModel)]="daytradeDailyLossLimitKrw",
+                        type="number",
+                        step="10000",
+                        min="0",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-red-400/50 transition-colors")
+                    p(class="text-[10px] text-slate-600 mt-1") 도달하면 신규 매수만 차단하고 기존 포지션 청산 감시는 유지합니다. 0은 제한 없음입니다.
+                    div(class="flex flex-wrap gap-2 mt-3")
+                        button((click)="setDailyLossPreset(30000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩30,000
+                        button((click)="setDailyLossPreset(50000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩50,000
+                        button((click)="setDailyLossPreset(100000)", class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors") ₩100,000
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 최대 감시 종목 수
+                    div(class="flex items-center gap-3")
+                        input([(ngModel)]="daytradeAutoMaxSymbols",
+                            type="range", min="1", max="40", step="1",
+                            class="flex-1 accent-indigo-500")
+                        span(class="text-sm font-medium text-white w-10 text-right") {{daytradeAutoMaxSymbols}}
+                    p(class="text-[10px] text-slate-600 mt-1") 보유 종목을 포함해 동시에 자동 점검할 국내 단타 종목 수입니다.
+
+            div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
+                div
+                    label(class="block text-xs font-medium text-slate-400 mb-1") 진입 성향
+                    select([(ngModel)]="daytradeEntryAggressiveness",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                        option(value="defensive") 방어
+                        option(value="balanced") 균형
+                        option(value="aggressive") 적극
+                    p(class="text-[10px] text-slate-600 mt-1") 균형/적극은 1차·2차 기준가 근처에서 일부 탐색 진입을 허용합니다.
+                div
+                    div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+                        div
+                            span(class="text-[13px] font-medium text-slate-200") 탐색 진입
+                            p(class="text-[11px] text-slate-500 mt-0.5") 기준가 근처면 배정시드 일부로 먼저 진입합니다.
+                        button((click)="daytradeProbeEntryEnabled = !daytradeProbeEntryEnabled; service.render();",
+                            class="relative w-10 h-5 rounded-full transition-colors",
+                            [class]="daytradeProbeEntryEnabled ? 'bg-indigo-500' : 'bg-slate-600'")
+                            div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                                [class]="daytradeProbeEntryEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+                    div(*ngIf="daytradeProbeEntryEnabled", class="mt-3")
+                        label(class="block text-xs font-medium text-slate-400 mb-1") 탐색 진입 비율
+                        div(class="flex items-center gap-3")
+                            input([(ngModel)]="daytradeProbeEntryRatio",
+                                type="range", min="0.05", max="0.8", step="0.05",
+                                class="flex-1 accent-indigo-500")
+                            span(class="text-sm font-medium text-white w-12 text-right") {{((daytradeProbeEntryRatio || 0) * 100) | number:'1.0-0'}}%
+
+            div(class="pt-4 border-t border-white/10 space-y-4")
+                div(class="flex items-start justify-between gap-4")
+                    div
+                        h3(class="text-sm font-semibold text-white") 잭팟 청산
+                        p(class="text-[11px] text-slate-500 mt-1") 국장 현재 목표 +{{daytradeJackpotTakeProfitPct | number:'1.0-2'}}%, 예약 시작 약 +{{jackpotPreSellProfitPct() | number:'1.2-2'}}%
+                    span(class="shrink-0 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300") ACTIVE
+                div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") 국장 전량청산 수익률 (%)
+                        input([(ngModel)]="daytradeJackpotTakeProfitPct",
+                            type="number",
+                            step="0.1",
+                            min="0.1",
+                            max="20",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-emerald-400/50 transition-colors")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") 국장 예약 시작 간격 (%)
+                        input([(ngModel)]="daytradeJackpotPreSellGapPct",
+                            type="number",
+                            step="0.1",
+                            min="0",
+                            max="5",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-emerald-400/50 transition-colors")
+                        p(class="text-[10px] text-slate-600 mt-1") 목표가보다 이 비율만큼 아래부터 지정가 예약 매도를 준비합니다.
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") 미장 1차 익절 (%)
+                        input([(ngModel)]="daytradeUsJackpotTakeProfitPct",
+                            type="number",
+                            step="0.1",
+                            min="0.1",
+                            max="50",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-sky-400/50 transition-colors")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") 미장 2차 익절 (%)
+                        input([(ngModel)]="daytradeUsJackpot2TakeProfitPct",
+                            type="number",
+                            step="0.1",
+                            min="0.1",
+                            max="100",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-sky-400/50 transition-colors")
+
+            div(class="pt-2")
+                button((click)="saveParams()",
+                    class="px-4 py-2 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-[13px] font-medium hover:bg-red-500/30 transition-colors")
+                    | 리스크 설정 저장
+
+//- ============================================================
+//- TAB: Watchlist
+//- ============================================================
+div(*ngIf="tab === 'watchlist'")
+    div(class="glass-card p-6")
+        h2(class="text-sm font-semibold text-white mb-5") {{t('set.etf_watchlist')}}
+
+        //- Add Form
+        div(class="mb-6 pb-5 border-b border-white/5")
+            div(class="flex items-end gap-3")
+                //- Symbol (with search)
+                div(class="flex-1 relative")
+                    label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.symbol')}}
+                    input([(ngModel)]="newSymbol",
+                        (input)="onSymbolInput()",
+                        (blur)="closeSearchResults()",
+                        type="text",
+                        placeholder="TQQQ",
+                        autocomplete="off",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                    //- Search Dropdown
+                    div(*ngIf="showSearchResults",
+                        class="absolute top-full left-0 right-0 mt-1 z-10 rounded-lg bg-slate-800 border border-white/10 shadow-xl overflow-hidden")
+                        div(*ngIf="searchLoading", class="px-3 py-2 text-xs text-slate-500") {{t('common.loading')}}
+                        div(*ngIf="!searchLoading && searchResults.length === 0",
+                            class="px-3 py-2 text-xs text-slate-500") {{t('set.no_search_result')}}
+                        button(*ngFor="let r of searchResults",
+                            (mousedown)="selectSearchResult(r)",
+                            class="w-full px-3 py-2 flex items-center gap-3 hover:bg-white/10 transition-colors text-left")
+                            span(class="text-[13px] font-bold text-white") {{r.symbol}}
+                            span(class="text-xs px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300") {{r.exchange_label}}
+                            span(class="text-xs text-slate-400 truncate flex-1") {{r.name}}
+                            span(class="text-xs text-slate-500") ${{r.price | number:'1.2-2'}}
+
+                //- Exchange
+                div(style="width: 110px;")
+                    label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.exchange')}}
+                    select([(ngModel)]="newExchange",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                        option(value="NASD") NASDAQ
+                        option(value="NYSE") NYSE
+                        option(value="AMEX") AMEX
+
+                //- Name
+                div(class="flex-1")
+                    label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.name_opt')}}
+                    input([(ngModel)]="newName",
+                        type="text",
+                        placeholder="ProShares UltraPro QQQ",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+
+                //- Investment
+                div(style="width: 120px;")
+                    label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.investment_usd')}}
+                    input([(ngModel)]="newInvestment",
+                        type="number",
+                        class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+
+                //- Add Button
+                button((click)="addSymbol()",
+                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors whitespace-nowrap")
+                    | {{t('set.add')}}
+
+            div(class="mt-2 text-[10px] text-slate-600") {{t('set.search_hint')}}
+
+        //- List
+        div(*ngIf="watchlist.length === 0", class="text-center py-8")
+            p(class="text-[13px] text-slate-500") {{t('set.no_watchlist')}}
+            p(class="text-xs text-slate-600 mt-1") {{t('set.no_watchlist_desc')}}
+
+        div(class="space-y-2")
+            div(*ngFor="let item of watchlist",
+                class="flex items-center gap-4 px-4 py-3 rounded-lg bg-white/5 border border-white/5 hover:border-white/10 transition-colors")
+                //- Symbol & Name
+                div(class="w-32")
+                    div(class="flex items-center gap-1.5")
+                        span(class="text-[13px] font-bold text-white") {{item.symbol}}
+                        span(class="text-[9px] px-1 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-medium") {{item.exchange || 'NASD'}}
+                    div(class="text-[11px] text-slate-500 truncate") {{item.name || '-'}}
+
+                //- Investment
+                div(class="w-28")
+                    label(class="text-[10px] text-slate-500 uppercase") Investment
+                    input([(ngModel)]="item.total_investment",
+                        (blur)="updateWatchlistItem(item)",
+                        type="number",
+                        class="w-full mt-0.5 px-2 py-1 rounded bg-white/5 border border-white/5 text-xs text-slate-300 focus:outline-none focus:border-indigo-400/50")
+
+                //- Division
+                div(class="w-20")
+                    label(class="text-[10px] text-slate-500 uppercase") {{t('set.splits')}}
+                    input([(ngModel)]="item.division_count",
+                        (blur)="updateWatchlistItem(item)",
+                        type="number",
+                        class="w-full mt-0.5 px-2 py-1 rounded bg-white/5 border border-white/5 text-xs text-slate-300 focus:outline-none focus:border-indigo-400/50")
+
+                //- Target Profit
+                div(class="w-20")
+                    label(class="text-[10px] text-slate-500 uppercase") {{t('set.target_pct')}}
+                    input([(ngModel)]="item.target_profit",
+                        (blur)="updateWatchlistItem(item)",
+                        type="number",
+                        class="w-full mt-0.5 px-2 py-1 rounded bg-white/5 border border-white/5 text-xs text-slate-300 focus:outline-none focus:border-indigo-400/50")
+
+                //- Cycle Mode
+                div(class="w-24")
+                    label(class="text-[10px] text-slate-500 uppercase") {{t('set.cycle_mode')}}
+                    select([(ngModel)]="item.cycle_mode",
+                        (change)="updateWatchlistItem(item)",
+                        class="w-full mt-0.5 px-2 py-1 rounded bg-white/5 border border-white/5 text-xs text-slate-300 focus:outline-none focus:border-indigo-400/50")
+                        option(value="auto") {{t('set.auto')}}
+                        option(value="confirm") {{t('set.confirm')}}
+                        option(value="manual") {{t('set.manual')}}
+
+                div(class="flex-1")
+
+                //- Active Toggle
+                button((click)="toggleSymbol(item)",
+                    class="relative w-9 h-5 rounded-full transition-colors",
+                    [class]="item.is_active ? 'bg-emerald-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="item.is_active ? 'translate-x-4' : 'translate-x-0.5'")
+
+                //- Remove
+                button((click)="removeSymbol(item.id)",
+                    class="text-slate-600 hover:text-red-400 transition-colors p-1")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0")
+
+        //- Cycle Mode Legend
+        div(class="mt-4 pt-4 border-t border-white/5")
+            div(class="flex items-center gap-4")
+                span(class="text-[11px] text-slate-500") {{t('set.cycle_modes')}}
+                div(class="flex items-center gap-1.5")
+                    div(class="w-2 h-2 rounded-full bg-emerald-400")
+                    span(class="text-[11px] text-slate-400") {{t('set.auto_desc')}}
+                div(class="flex items-center gap-1.5")
+                    div(class="w-2 h-2 rounded-full bg-amber-400")
+                    span(class="text-[11px] text-slate-400") {{t('set.confirm_desc')}}
+                div(class="flex items-center gap-1.5")
+                    div(class="w-2 h-2 rounded-full bg-indigo-400")
+                    span(class="text-[11px] text-slate-400") {{t('set.manual_desc')}}
+
+//- ============================================================
+//- TAB: Parameters
+//- ============================================================
+div(*ngIf="tab === 'params'")
+    div(class="glass-card p-6 max-w-2xl")
+        h2(class="text-sm font-semibold text-white mb-5") {{t('set.trading_params')}}
+
+        div(class="space-y-5")
+            //- Division Count
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.default_division')}}
+                div(class="flex items-center gap-3")
+                    input([(ngModel)]="divisionCount",
+                        type="range", min="10", max="80", step="5",
+                        class="flex-1 accent-indigo-500")
+                    span(class="text-sm font-medium text-white w-10 text-right") {{divisionCount}}
+                p(class="text-[11px] text-slate-500 mt-1") {{t('set.division_desc')}}
+
+            //- Target Profit
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.default_target')}}
+                div(class="flex items-center gap-3")
+                    input([(ngModel)]="targetProfit",
+                        type="range", min="3", max="30", step="1",
+                        class="flex-1 accent-indigo-500")
+                    span(class="text-sm font-medium text-white w-10 text-right") {{targetProfit}}%
+                p(class="text-[11px] text-slate-500 mt-1") {{t('set.target_desc')}}
+
+            //- Commission & Tax Section
+            div(class="pt-3 border-t border-white/5")
+                h3(class="text-[13px] font-semibold text-slate-300 mb-4 flex items-center gap-2")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z")
+                    | {{t('set.commission_tax')}}
+
+                div(class="grid grid-cols-3 gap-4")
+                    //- Buy Commission
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.buy_commission')}}
+                        input([(ngModel)]="buyCommissionRate",
+                            type="number",
+                            step="0.01",
+                            min="0",
+                            max="5",
+                            placeholder="0.25",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.us_default')}}
+
+                    //- Sell Commission
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.sell_commission')}}
+                        input([(ngModel)]="sellCommissionRate",
+                            type="number",
+                            step="0.01",
+                            min="0",
+                            max="5",
+                            placeholder="0.25",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.us_default')}}
+
+                    //- Tax Rate
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.sell_tax')}}
+                        input([(ngModel)]="taxRate",
+                            type="number",
+                            step="0.01",
+                            min="0",
+                            max="5",
+                            placeholder="0",
+                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.kr_tax')}}
+
+                //- Preset buttons
+                div(class="flex items-center gap-2 mt-3")
+                    span(class="text-[11px] text-slate-500 mr-1") {{t('set.presets')}}
+                    button((click)="applyPreset('us')",
+                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
+                        | {{t('set.us_stock')}}
+                    button((click)="applyPreset('kr')",
+                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
+                        | {{t('set.kr_stock')}}
+                    button((click)="applyPreset('none')",
+                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
+                        | {{t('set.no_fee')}}
+
+            //- Auto Trade
+            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+                div
+                    span(class="text-[13px] font-medium text-slate-200") {{t('set.auto_trading')}}
+                    p(class="text-[11px] text-slate-500 mt-0.5") {{t('set.auto_trade_desc')}}
+                button((click)="autoTrade = !autoTrade; service.render();",
+                    class="relative w-10 h-5 rounded-full transition-colors",
+                    [class]="autoTrade ? 'bg-emerald-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                        [class]="autoTrade ? 'translate-x-5' : 'translate-x-0.5'")
+
+            //- Save
+            div(class="pt-2")
+                button((click)="saveParams()",
+                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                    | {{t('set.save_params')}}
+
+//- ============================================================
+//- TAB: Strategy
+//- ============================================================
+div(*ngIf="tab === 'strategy'")
+    div(class="glass-card p-6 max-w-2xl")
+        h2(class="text-sm font-semibold text-white mb-5") {{t('set.sell_strategy')}}
+
+        div(class="space-y-6")
+            //- Sell Method (Market vs LOC)
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-3") {{t('set.sell_method')}}
+                div(class="grid grid-cols-2 gap-3")
+                    //- Market
+                    button((click)="sellMethod = 'market'; service.render();",
+                        class="p-4 rounded-lg border text-left transition-all",
+                        [class]="sellMethod === 'market' ? 'bg-emerald-500/10 border-emerald-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                        div(class="flex items-center gap-2 mb-2")
+                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                [class]="sellMethod === 'market' ? 'border-emerald-400' : 'border-slate-600'")
+                                div(*ngIf="sellMethod === 'market'",
+                                    class="w-1.5 h-1.5 rounded-full bg-emerald-400")
+                            span(class="text-[13px] font-medium",
+                                [class]="sellMethod === 'market' ? 'text-emerald-300' : 'text-slate-300'")
+                                | {{t('set.sell_market')}}
+                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.sell_market_desc')}}
+
+                    //- LOC
+                    button((click)="sellMethod = 'loc'; service.render();",
+                        class="p-4 rounded-lg border text-left transition-all",
+                        [class]="sellMethod === 'loc' ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                        div(class="flex items-center gap-2 mb-2")
+                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                [class]="sellMethod === 'loc' ? 'border-cyan-400' : 'border-slate-600'")
+                                div(*ngIf="sellMethod === 'loc'",
+                                    class="w-1.5 h-1.5 rounded-full bg-cyan-400")
+                            span(class="text-[13px] font-medium",
+                                [class]="sellMethod === 'loc' ? 'text-cyan-300' : 'text-slate-300'")
+                                | {{t('set.sell_loc')}}
+                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.sell_loc_desc')}}
+
+            //- Sell Strategy Selection
+            div
+                label(class="block text-xs font-medium text-slate-400 mb-3") {{t('set.sell_strategy')}}
+                div(class="grid grid-cols-2 gap-3")
+                    //- Full Sell
+                    button((click)="setStrategy('full')",
+                        class="p-4 rounded-lg border text-left transition-all",
+                        [class]="sellStrategy === 'full' ? 'bg-indigo-500/10 border-indigo-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                        div(class="flex items-center gap-2 mb-2")
+                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                [class]="sellStrategy === 'full' ? 'border-indigo-400' : 'border-slate-600'")
+                                div(*ngIf="sellStrategy === 'full'",
+                                    class="w-1.5 h-1.5 rounded-full bg-indigo-400")
+                            span(class="text-[13px] font-medium",
+                                [class]="sellStrategy === 'full' ? 'text-indigo-300' : 'text-slate-300'")
+                                | {{t('set.strategy_full')}}
+                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.strategy_full_desc')}}
+
+                    //- Partial Sell
+                    button((click)="setStrategy('partial')",
+                        class="p-4 rounded-lg border text-left transition-all",
+                        [class]="sellStrategy === 'partial' ? 'bg-violet-500/10 border-violet-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                        div(class="flex items-center gap-2 mb-2")
+                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                [class]="sellStrategy === 'partial' ? 'border-violet-400' : 'border-slate-600'")
+                                div(*ngIf="sellStrategy === 'partial'",
+                                    class="w-1.5 h-1.5 rounded-full bg-violet-400")
+                            span(class="text-[13px] font-medium",
+                                [class]="sellStrategy === 'partial' ? 'text-violet-300' : 'text-slate-300'")
+                                | {{t('set.strategy_partial')}}
+                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.strategy_partial_desc')}}
+
+            //- Partial Sell Settings (shown only when partial selected)
+            div(*ngIf="sellStrategy === 'partial'",
+                class="p-4 rounded-lg bg-violet-500/5 border border-violet-400/10 space-y-4")
+                h3(class="text-[13px] font-semibold text-violet-300 mb-1") {{t('set.strategy_partial')}} {{t('set.parameters')}}
+                p(class="text-[11px] text-slate-500") {{t('set.partial_stage_desc')}}
+                div(class="space-y-2")
+                    div(*ngFor="let stage of partialSellStages",
+                        class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white/5 border border-white/5")
+                        div(class="text-[12px] text-slate-300 font-medium") {{stage.roundLabel}}
+                        div(class="text-[12px] text-slate-400") {{stage.triggerLabel}}
+                        div(class="text-[12px] text-violet-300 font-semibold") {{stage.sellLabel}}
+                div(class="px-3 py-3 rounded-lg bg-white/5 border border-white/5")
+                    span(class="text-[13px] font-medium text-slate-200") {{t('set.partial_full_exit')}}
+                    p(class="text-[11px] text-slate-500 mt-0.5") {{t('set.partial_rebuy_desc')}}
+
+            //- Crash Buy Section
+            div(class="pt-4 border-t border-white/5")
+                div(class="flex items-center justify-between mb-4")
+                    div
+                        h3(class="text-[13px] font-semibold text-slate-300 flex items-center gap-2")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-red-400")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 6 9 12.75l4.286-4.286a11.948 11.948 0 0 1 4.306 6.43l.776 2.898m0 0 3.182-5.511m-3.182 5.51-5.511-3.181")
+                            | {{t('set.crash_buy')}}
+                        p(class="text-[11px] text-slate-500 mt-1") {{t('set.crash_buy_desc')}}
+                    button((click)="crashBuyEnabled = !crashBuyEnabled; service.render();",
+                        class="relative w-10 h-5 rounded-full transition-colors",
+                        [class]="crashBuyEnabled ? 'bg-red-500' : 'bg-slate-600'")
+                        div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                            [class]="crashBuyEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+
+                //- Crash Buy Settings
+                div(*ngIf="crashBuyEnabled",
+                    class="p-4 rounded-lg bg-red-500/5 border border-red-400/10 space-y-4")
+
+                    div(class="grid grid-cols-2 gap-4")
+                        //- Daily Drop %
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.crash_drop_pct')}}
+                            input([(ngModel)]="crashBuyDropPct",
+                                type="number",
+                                step="0.5",
+                                min="1",
+                                max="30",
+                                placeholder="5",
+                                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-red-400/50 transition-colors")
+                            p(class="text-[10px] text-slate-600 mt-1") {{t('set.crash_drop_desc')}}
+
+                        //- MA5 Drop %
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.crash_ma_drop')}}
+                            input([(ngModel)]="crashBuyMaDropPct",
+                                type="number",
+                                step="0.5",
+                                min="1",
+                                max="50",
+                                placeholder="10",
+                                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-red-400/50 transition-colors")
+                            p(class="text-[10px] text-slate-600 mt-1") {{t('set.crash_ma_desc')}}
+
+                    div(class="grid grid-cols-2 gap-4")
+                        //- Buy Ratio
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.crash_ratio')}}
+                            div(class="flex items-center gap-3")
+                                input([(ngModel)]="crashBuyRatio",
+                                    type="range", min="5", max="50", step="5",
+                                    class="flex-1 accent-red-500")
+                                span(class="text-sm font-medium text-white w-10 text-right") {{crashBuyRatio}}%
+
+                        //- Max Per Cycle
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.crash_max')}}
+                            div(class="flex items-center gap-3")
+                                input([(ngModel)]="crashBuyMaxPerCycle",
+                                    type="range", min="1", max="10", step="1",
+                                    class="flex-1 accent-red-500")
+                                span(class="text-sm font-medium text-white w-10 text-right") {{crashBuyMaxPerCycle}}
+
+            //- Daytrade Auto Rotation
+            div(class="pt-4 border-t border-white/5")
+                div(class="flex items-center justify-between mb-4")
+                    div
+                        h3(class="text-[13px] font-semibold text-slate-300 flex items-center gap-2")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-indigo-300")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.5 8.25 8.25l4.5 4.5L21 4.5m0 0v6.75m0-6.75H14.25")
+                            | 국내 단타 자동순환
+                        p(class="text-[11px] text-slate-500 mt-1") 남는 원화 시드를 단타로 계속 돌리되, 변동성/유동성 점수가 높은 종목을 우선 감시합니다.
+                    button((click)="toggleDaytradeAutoEnabled()",
+                        class="relative w-10 h-5 rounded-full transition-colors",
+                        [class]="daytradeAutoEnabled ? 'bg-indigo-500' : 'bg-slate-600'")
+                        div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                            [class]="daytradeAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+
+                div(*ngIf="daytradeAutoEnabled",
+                    class="p-4 rounded-lg bg-indigo-500/5 border border-indigo-400/10 space-y-4")
+                    div(class="grid grid-cols-2 gap-4")
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") 일일 손실 제한 (KRW)
+                            input([(ngModel)]="daytradeDailyLossLimitKrw",
+                                type="number",
+                                step="10000",
+                                min="0",
+                                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
+                            p(class="text-[10px] text-slate-600 mt-1") 손실이 이 금액을 넘으면 신규 단타 진입을 막고 기존 포지션 청산만 허용합니다.
+                        div
+                            label(class="block text-xs font-medium text-slate-400 mb-1") 최대 감시 종목 수
+                            div(class="flex items-center gap-3")
+                                input([(ngModel)]="daytradeAutoMaxSymbols",
+                                    type="range", min="1", max="40", step="1",
+                                    class="flex-1 accent-indigo-500")
+                                span(class="text-sm font-medium text-white w-10 text-right") {{daytradeAutoMaxSymbols}}
+                            p(class="text-[10px] text-slate-600 mt-1") 현재 보유 종목을 우선 포함한 뒤, 변동성 높은 추천 종목을 이 개수까지 자동 감시합니다.
+
+            //- LOC Auto Schedule
+            div(class="pt-4 border-t border-white/5")
+                div(class="flex items-center justify-between")
+                    div
+                        h3(class="text-[13px] font-semibold text-slate-300 flex items-center gap-2")
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-cyan-300")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z")
+                            | 무한매수 LOC 자동 예약
+                        p(class="text-[11px] text-slate-500 mt-1") 매일 17:40 KST 이후 스케줄러 또는 대시보드 자동새로고침이 LOC 예약 접수를 시도합니다. 매수는 2회차 이후 LOC만 대상이고, 매도는 LOC 매도 방식일 때만 접수합니다.
+                    button((click)="locAutoScheduleEnabled = !locAutoScheduleEnabled; service.render();",
+                        class="relative w-10 h-5 rounded-full transition-colors",
+                        [class]="locAutoScheduleEnabled ? 'bg-cyan-500' : 'bg-slate-600'")
+                        div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                            [class]="locAutoScheduleEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+
+            //- Save
+            div(class="pt-4")
+                button((click)="saveParams()",
+                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
+                    | {{t('set.save_params')}}

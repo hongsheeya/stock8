@@ -6,6 +6,27 @@ LOGIN_URL = config.auth_login_uri
 if wiz.request.match(f"{BASEURI}/check") is not None:
     status = False if wiz.session.user_id() is None else True
     data = wiz.session.get()
+    try:
+        if status and isinstance(data, dict):
+            user = None
+            struct = wiz.model("struct")
+            user_id = data.get("id")
+            email = data.get("email")
+            if user_id:
+                user = struct.user.get(id=user_id)
+            if user is None and email:
+                user = struct.user.get_by_email(email=email)
+            if user is not None:
+                session_data = {
+                    "id": user.get("id", data.get("id")),
+                    "email": user.get("email", data.get("email")),
+                    "name": user.get("name", data.get("name")),
+                    "role": user.get("role", data.get("role", "user")),
+                }
+                wiz.session.set(**session_data)
+                data.update(session_data)
+    except Exception:
+        pass
     wiz.response.status(200, status=status, session=data)
 
 if wiz.request.match(f"{BASEURI}/logout") is not None:

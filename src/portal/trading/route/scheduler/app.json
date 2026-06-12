@@ -1,0 +1,8 @@
+{
+    "id": "scheduler",
+    "title": "Trading Scheduler API",
+    "route": "/api/trading/scheduler/<path:path>",
+    "category": "",
+    "viewuri": "",
+    "controller": ""
+}

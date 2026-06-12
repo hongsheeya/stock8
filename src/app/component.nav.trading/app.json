@@ -1,0 +1,12 @@
+{
+    "id": "component.nav.trading",
+    "mode": "component",
+    "title": "nav.trading",
+    "namespace": "nav.trading",
+    "category": "nav.trading",
+    "viewuri": "",
+    "preview": "",
+    "controller": "base",
+    "layout": "",
+    "template": "wiz-component-nav-trading()"
+}

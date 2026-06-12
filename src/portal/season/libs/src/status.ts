@@ -1,6 +1,9 @@
 import Service from '../service';
 
 export default class Status {
+    [key: string]: any;
+    public loading: boolean = false;
+    public navbar: boolean = true;
 
     constructor(private service: Service) { }
 

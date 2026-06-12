@@ -22,6 +22,8 @@
 
 import datetime
 
+_TIME = wiz.model("portal/trading/kst")
+
 class Post:
     def __init__(self, core):
         """
@@ -69,7 +71,7 @@ class Post:
         Returns:
             생성된 게시물 ID (str)
         """
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = _TIME.normalize(_TIME.now())
         data['created'] = now
         data['updated'] = now
         data['author_id'] = self.core.getUserId()
@@ -88,7 +90,7 @@ class Post:
         """
         if id is None:
             id = self.id
-        data['updated'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data['updated'] = _TIME.normalize(_TIME.now())
         self.db.update(data, id=id)
 
     def delete(self, id=None):

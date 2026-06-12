@@ -1,0 +1,12 @@
+{
+    "id": "page.daytrade",
+    "mode": "page",
+    "title": "/daytrade",
+    "namespace": "daytrade",
+    "category": "daytrade",
+    "viewuri": "/daytrade",
+    "preview": "",
+    "controller": "admin",
+    "layout": "layout.trading",
+    "template": "wiz-page-daytrade()"
+}

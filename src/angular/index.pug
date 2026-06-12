@@ -2,7 +2,7 @@ doctype html
 html(lang="en")
     head
         meta(charset="utf-8")
-        title SEASON Cloud Services
+        title ∞stock
         base(href="/")
         
         meta(name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0')
@@ -13,27 +13,26 @@ html(lang="en")
         meta(name='theme-color' content='#6C8DF6')
         meta(name='apple-mobile-web-app-status-bar-style' content='black')
         meta(name='apple-mobile-web-app-capable' content='yes')
-        meta(name='apple-mobile-web-app-title' content='SEASON Cloud Services')
+        meta(name='apple-mobile-web-app-title' content='∞stock')
         meta(name='mobile-web-app-capable' content='yes')
         meta(name='HandheldFriendly' content='True')
         meta(name='MobileOptimized' content='320')
-        link(rel="shortcut icon", href="/assets/brand/icon.ico")
+        link(rel="icon", type="image/svg+xml", href="/assets/brand/favicon.svg")
+        link(rel="shortcut icon", href="/assets/brand/favicon.svg")
+        link(rel="apple-touch-icon", href="/assets/brand/favicon.svg")
 
-        link(rel="apple-touch-icon" sizes="72x72" href="/assets/brand/icon.ico")
-        link(rel="apple-touch-icon" sizes="114x114" href="/assets/brand/icon.ico")
-        link(rel="apple-touch-icon" href="/assets/brand/icon.ico")
-
-        link(rel="icon" sizes="72x72" href="/assets/brand/icon.ico")
-        link(rel="icon" sizes="114x114" href="/assets/brand/icon.ico")
-        link(rel="icon" sizes="192x192" href="/assets/brand/icon.ico")
-        link(rel="icon" sizes="57x57" href="/assets/brand/icon.ico")
-
-        link(rel="manifest" href="/manifest.json")
-
-        script(type="text/javascript").
-            if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('/sw.js', {scope: '/'}).then((reg) => {});
+        style.
+            html, body, app-root {
+                font-family: SUIT, ui-sans-serif, system-ui, sans-serif;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                display: block;
+                background-color: #0f172a;
+                margin: 0;
+                padding: 0;
             }
+            app-root { overflow: auto; }
 
     body
         app-root

@@ -1,0 +1,59 @@
+:host {
+    display: block;
+    min-height: 100vh;
+}
+
+.firegate-page {
+    display: flex;
+    min-height: calc(100vh - 24px);
+    flex-direction: column;
+    gap: 10px;
+    margin: -8px;
+}
+
+.firegate-toolbar {
+    display: flex;
+    min-height: 54px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.88);
+    padding: 8px 12px;
+}
+
+.firegate-shell {
+    flex: 1 1 auto;
+    min-height: calc(100vh - 92px);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    background: #fff;
+}
+
+.firegate-frame {
+    display: block;
+    width: 100%;
+    height: calc(100vh - 92px);
+    min-height: 760px;
+    border: 0;
+    background: #fff;
+}
+
+@media (max-width: 768px) {
+    .firegate-page {
+        margin: -12px;
+    }
+
+    .firegate-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .firegate-frame,
+    .firegate-shell {
+        min-height: calc(100vh - 132px);
+        height: calc(100vh - 132px);
+    }
+}

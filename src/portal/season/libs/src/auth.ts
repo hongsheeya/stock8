@@ -14,24 +14,42 @@ export default class Auth {
     }
 
     public async init() {
-        try {
-            let { code, data } = await this.request.post('/auth/check');
-            let { status, session } = data;
-            this.verified = session.verified;
-            this.loading = true;
-            if (code != 200)
+        let retries = 2;
+        let lastError: any = null;
+        
+        while (retries > 0) {
+            try {
+                let { code, data } = await this.request.post('/auth/check');
+                let { status, session } = data;
+                this.verified = session.verified;
+                this.loading = true;
+                if (code != 200)
+                    return this;
+                this.timestamp = new Date().getTime();
+                this.session = session;
+                this.status = status;
                 return this;
-            this.timestamp = new Date().getTime();
-            this.session = session;
-            this.status = status;
-        } catch (e) {
-            this.loading = true;
+            } catch (e) {
+                lastError = e;
+                retries--;
+                if (retries > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
+            }
         }
+        
+        // Fallback: allow app to continue with limited session
+        console.warn('[Auth] Failed after retries, using fallback session:', lastError);
+        this.loading = true;
+        this.timestamp = new Date().getTime();
+        this.session = { verified: 'unknown' };
+        this.status = { authenticated: false };
         return this;
     }
 
     public async update() {
-        while (this.loading === null) {
+        let timeout = new Date().getTime() + 5000; // 5 second timeout
+        while (this.loading === null && new Date().getTime() < timeout) {
             await this.service.render(100);
         }
 
@@ -98,5 +116,14 @@ export default class Auth {
 
     public hash(password: string = '') {
         return this.service.crypto.SHA256(password).toString();
+    }
+
+    public logout(returnTo: string = '/') {
+        this.status = false;
+        this.session = {};
+        this.loading = true;
+
+        const redirect = returnTo || '/';
+        location.href = `/auth/logout?returnTo=${encodeURIComponent(redirect)}`;
     }
 }

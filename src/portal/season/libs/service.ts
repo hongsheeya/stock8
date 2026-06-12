@@ -15,7 +15,9 @@ import Formatter from './util/formatter';
 @Injectable({ providedIn: 'root' })
 export class Service {
     public app: ChangeDetectorRef;
+    private apps: any[] = [];
     public inited: boolean = false;
+    private initPromise: Promise<void> | null = null;
 
     public auth: Auth;
     public modal: Modal;
@@ -30,33 +32,57 @@ export class Service {
 
     constructor() { }
 
+    private registerApp(app: any) {
+        if (!app) return;
+        if (!this.apps.includes(app)) {
+            this.apps.push(app);
+        }
+        if (!this.app) {
+            this.app = app;
+            return;
+        }
+        if (!this.app.router && app.router) {
+            this.app = app;
+        }
+    }
+
     public async init(app: any) {
         if (app) {
-            this.app = app;
+            this.registerApp(app);
+        }
 
-            this.crypto = new Crypto();
-            this.file = new File();
-            this.request = new Request();
-            this.formatter = new Formatter();
+        if (this.inited === false) {
+            if (this.initPromise === null) {
+                this.initPromise = (async () => {
+                    this.crypto = new Crypto();
+                    this.file = new File();
+                    this.request = new Request();
+                    this.formatter = new Formatter();
 
-            this.auth = new Auth(this);
-            this.modal = new Modal(this);
-            this.status = new Status(this);
-            this.event = new Event(this);
+                    this.auth = new Auth(this);
+                    this.modal = new Modal(this);
+                    this.status = new Status(this);
+                    this.event = new Event(this);
 
-            if (this.app.translate) {
-                this.lang = new Lang(this);
-                let lang: string = (navigator.language || navigator.userLanguage).substring(0, 2).toLowerCase();
-                if (!['ko', 'en'].includes(lang)) lang = 'en';
-                this.lang.set(lang);
+                    if (this.app.translate) {
+                        this.lang = new Lang(this);
+                        let lang: string = (navigator.language || navigator.userLanguage).substring(0, 2).toLowerCase();
+                        if (!['ko', 'en'].includes(lang)) lang = 'ko';
+                        this.lang.set(lang);
+                    }
+
+                    await this.auth.init();
+                    this.inited = true;
+                })().finally(() => {
+                    this.initPromise = null;
+                });
             }
 
-            await this.auth.init();
-            this.inited = true;
-            await this.render();
+            await this.initPromise;
         }
 
         await this.auth.update();
+        await this.render();
         return this;
     }
 
@@ -68,18 +94,60 @@ export class Service {
     }
 
     public async render(time: number = 0) {
+        if (!this.app && this.apps.length === 0) {
+            return;
+        }
+
         let timeout = () => new Promise((resolve) => {
             setTimeout(resolve, time);
         });
+
         if (time > 0) {
-            this.app.ref.detectChanges();
             await timeout();
         }
-        this.app.ref.detectChanges();
+
+        const targets = this.apps.length > 0 ? this.apps : [this.app];
+        const alive: any[] = [];
+
+        try {
+            for (const target of targets) {
+                if (!target) continue;
+                try {
+                    if (typeof target.detectChanges === 'function') {
+                        target.detectChanges();
+                        alive.push(target);
+                    } else if (target.ref && typeof target.ref.detectChanges === 'function') {
+                        target.ref.detectChanges();
+                        alive.push(target);
+                    }
+                } catch (e) {
+                    console.warn('[Service.render] Skip stale app:', e);
+                }
+            }
+        } catch (e) {
+            console.warn('[Service.render] Error calling detectChanges:', e);
+        }
+
+        this.apps = alive;
+        if ((!this.app || !alive.includes(this.app)) && alive.length > 0) {
+            this.app = alive[0];
+        }
     }
 
     public href(url: any) {
-        this.app.router.navigateByUrl(url);
+        if (this.app && this.app.router && typeof this.app.router.navigateByUrl === 'function') {
+            this.app.router.navigateByUrl(url);
+            return;
+        }
+
+        for (const target of this.apps) {
+            if (target && target.router && typeof target.router.navigateByUrl === 'function') {
+                target.router.navigateByUrl(url);
+                return;
+            }
+        }
+
+        location.href = url;
     }
 
     public random(stringLength: number = 16) {

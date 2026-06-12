@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.infinitebuy",
+    "title": "/infinite-buy",
+    "namespace": "infinitebuy",
+    "viewuri": "/infinite-buy",
+    "category": "",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-infinitebuy()"
+}

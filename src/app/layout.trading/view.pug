@@ -1,0 +1,15 @@
+div(class="trading-bg h-full flex flex-col", [class.theme-light]="themeMode === 'light'")
+    //- Top Navigation
+    wiz-component-nav-trading(style="display: contents;")
+
+    //- Main content area
+    div(class="flex-1 min-h-0 overflow-hidden")
+        div(class="w-full h-full overflow-auto trading-scroll")
+            div(class="max-w-7xl mx-auto px-4 py-6 min-h-full")
+                router-outlet
+
+//- Global overlays
+wiz-portal-season-modal
+div(*ngIf="service.status.loading",
+    class="fixed w-full h-full top-0 left-0 z-50 flex justify-center items-center bg-black/40 backdrop-blur-md")
+    wiz-portal-season-loading-season(className="w-12 h-12 text-indigo-400 animate-spin duration-700")

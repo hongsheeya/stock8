@@ -1,0 +1,438 @@
+//- ============================================================
+//- Simulation Page (Admin Only) — Yahoo Finance Backtest
+//- ============================================================
+
+//- Header
+div(class="flex items-center justify-between mb-6")
+    div
+        h1(class="text-lg font-semibold text-white") {{t('sim.title')}}
+        p(class="text-xs text-slate-500 mt-0.5") {{t('sim.subtitle')}}
+    div(class="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-400/20")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5 text-amber-400")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z")
+        span(class="text-xs font-medium text-amber-300") {{t('sim.admin_only')}}
+
+//- Config Form
+div(class="glass-card p-6 mb-6")
+    h2(class="text-sm font-semibold text-white mb-4") {{t('sim.settings')}}
+
+    div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
+        //- Symbol
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.symbol')}}
+            select([(ngModel)]="symbol",
+                (ngModelChange)="onSymbolChange($event)",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                option(value="", disabled="") {{t('sim.select_symbol')}}
+                option(*ngFor="let w of watchlist", [value]="w.symbol") {{w.symbol}} — {{w.name || ''}}
+                option(value="__custom__") {{t('sim.custom_symbol')}}
+            div(*ngIf="symbol === '__custom__'", class="mt-2")
+                div(class="flex gap-2")
+                    input([(ngModel)]="customSymbol",
+                        type="text",
+                        [placeholder]="t('sim.custom_placeholder')",
+                        (keyup.enter)="validateCustomSymbol()",
+                        class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                    button((click)="validateCustomSymbol()",
+                        [disabled]="symbolValidating || !customSymbol",
+                        class="px-3 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-medium hover:bg-indigo-500/30 disabled:opacity-30 transition-colors whitespace-nowrap")
+                        span(*ngIf="!symbolValidating") 검증
+                        span(*ngIf="symbolValidating") ...
+                //- Validation Result
+                div(*ngIf="symbolValid === true", class="mt-1.5 flex items-center gap-2 text-xs text-emerald-400")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="2", stroke="currentColor", class="size-3.5")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="m4.5 12.75 6 6 9-13.5")
+                    span {{symbolInfo?.name}} ({{symbolInfo?.exchange}}) — ${{symbolInfo?.last_price}}
+                div(*ngIf="symbolValid === false", class="mt-1.5 text-xs text-red-400")
+                    | {{symbolInfo?.message || '종목을 찾을 수 없습니다'}}
+
+        //- Start Date
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.start_date')}}
+            input([(ngModel)]="startDate",
+                type="date",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+        //- End Date
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.end_date')}}
+            input([(ngModel)]="endDate",
+                type="date",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+    div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
+        //- Investment
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.initial_inv')}}
+            input([(ngModel)]="investment",
+                type="number", min="100",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+        //- Division
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.division_count')}}
+            input([(ngModel)]="divisionCount",
+                type="number", min="10", max="80",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+        //- Target Profit
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.target_profit')}}
+            input([(ngModel)]="targetProfit",
+                type="number", min="1", max="50",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+    //- Commission & Tax Row
+    div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.buy_commission')}}
+            input([(ngModel)]="buyCommissionRate",
+                type="number", step="0.01", min="0", max="5",
+                placeholder="0.25",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.sell_commission')}}
+            input([(ngModel)]="sellCommissionRate",
+                type="number", step="0.01", min="0", max="5",
+                placeholder="0.25",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+        div
+            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.sell_tax')}}
+            input([(ngModel)]="taxRate",
+                type="number", step="0.01", min="0", max="5",
+                placeholder="0",
+                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+
+    //- Extension Option + My Strategy Toggle + Run Button
+    div(class="flex items-center justify-between mb-0")
+        //- Toggles
+        div(class="flex items-center gap-3")
+            //- Allow Extension Toggle
+            button((click)="toggleAllowExtension()",
+                [title]="t('sim.auto_extend_desc')",
+                class="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border",
+                [class]="allowExtension ? 'bg-orange-500/10 border-orange-400/20 hover:bg-orange-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'")
+                div(class="relative w-8 h-4 rounded-full transition-colors",
+                    [class]="allowExtension ? 'bg-orange-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform",
+                        [class]="allowExtension ? 'translate-x-4' : 'translate-x-0.5'")
+                span(class="text-[13px] font-medium",
+                    [class]="allowExtension ? 'text-orange-300' : 'text-slate-400'")
+                    | {{t('sim.auto_extend')}}
+
+            //- My Strategy Toggle
+            button(*ngIf="myStrategyLoaded",
+                (click)="toggleMyStrategy()",
+                class="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border",
+                [class]="useMyStrategy ? 'bg-cyan-500/10 border-cyan-400/20 hover:bg-cyan-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'")
+                div(class="relative w-8 h-4 rounded-full transition-colors",
+                    [class]="useMyStrategy ? 'bg-cyan-500' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform",
+                        [class]="useMyStrategy ? 'translate-x-4' : 'translate-x-0.5'")
+                span(class="text-[13px] font-medium",
+                    [class]="useMyStrategy ? 'text-cyan-300' : 'text-slate-400'")
+                    | {{t('sim.use_my_strategy')}}
+
+        div(class="flex items-center gap-2")
+            button((click)="toggleComparison()",
+                class="px-4 py-2.5 rounded-lg border text-[13px] font-medium transition-colors",
+                [class]="showComparison ? 'bg-violet-500/20 border-violet-400/30 text-violet-300 hover:bg-violet-500/30' : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                    class="size-4 inline-block mr-1.5 -mt-0.5")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z")
+                | {{t('sim.compare')}}
+            button((click)="runSimulation()",
+                [disabled]="running",
+                class="px-6 py-2.5 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors disabled:opacity-50")
+                span(*ngIf="!running")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                        class="size-4 inline-block mr-1.5 -mt-0.5")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z")
+                    | {{t('sim.run')}}
+                span(*ngIf="running") {{t('sim.running')}}
+
+//- My Strategy Info Badge
+div(*ngIf="useMyStrategy && myStrategyLoaded",
+    class="glass-card p-4 mb-6 border border-cyan-400/20 bg-cyan-500/5")
+    div(class="flex items-center gap-2")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+            class="size-4 text-cyan-400 shrink-0")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z")
+        span(class="text-[13px] text-cyan-300 font-medium") {{t('sim.my_strategy_applied')}}:
+        span(class="text-[13px] text-cyan-200 ml-1") {{strategyLabel()}}
+
+//- Strategy Comparison Panel
+div(*ngIf="showComparison", class="glass-card p-6 mb-6 border border-violet-400/10")
+    h2(class="text-sm font-semibold text-violet-300 mb-4 flex items-center gap-2")
+        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+            path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605")
+        | {{t('sim.compare')}} — {{t('sim.compare_desc')}}
+
+    //- Fixed Partial Sell Rules
+    div(class="mb-4 space-y-2")
+        p(class="text-[12px] text-slate-400") {{t('sim.partial_compare_note')}}
+        div(*ngFor="let stage of partialSellStages",
+            class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white/5 border border-white/10")
+            div(class="text-[12px] text-slate-300 font-medium") {{stage.roundLabel}}
+            div(class="text-[12px] text-slate-400") {{stage.triggerLabel}}
+            div(class="text-[12px] text-violet-300 font-semibold") {{stage.sellLabel}}
+
+    //- Crash Buy Params
+    div(class="mb-4")
+        button((click)="crashBuyEnabled = !crashBuyEnabled",
+            class="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border mb-3",
+            [class]="crashBuyEnabled ? 'bg-amber-500/10 border-amber-400/20 hover:bg-amber-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'")
+            div(class="relative w-7 h-3.5 rounded-full transition-colors",
+                [class]="crashBuyEnabled ? 'bg-amber-500' : 'bg-slate-600'")
+                div(class="absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-transform",
+                    [class]="crashBuyEnabled ? 'translate-x-3.5' : 'translate-x-0.5'")
+            span(class="text-[13px] font-medium",
+                [class]="crashBuyEnabled ? 'text-amber-300' : 'text-slate-400'") {{t('set.crash_buy')}}
+
+        div(*ngIf="crashBuyEnabled",
+            class="grid grid-cols-1 md:grid-cols-4 gap-3 pl-4 border-l-2 border-amber-400/20")
+            div
+                label(class="block text-[11px] font-medium text-slate-500 mb-1") {{t('set.crash_drop_pct')}}
+                div(class="flex items-center gap-2")
+                    input([(ngModel)]="crashBuyDropPct",
+                        type="number", step="1", min="1", max="30",
+                        class="w-full px-2 py-1.5 rounded bg-white/5 border border-white/10 text-[12px] text-slate-200 focus:outline-none focus:border-amber-400/50")
+                    span(class="text-[11px] text-slate-500") %
+            div
+                label(class="block text-[11px] font-medium text-slate-500 mb-1") {{t('set.crash_ma_drop')}}
+                div(class="flex items-center gap-2")
+                    input([(ngModel)]="crashBuyMaDropPct",
+                        type="number", step="1", min="1", max="50",
+                        class="w-full px-2 py-1.5 rounded bg-white/5 border border-white/10 text-[12px] text-slate-200 focus:outline-none focus:border-amber-400/50")
+                    span(class="text-[11px] text-slate-500") %
+            div
+                label(class="block text-[11px] font-medium text-slate-500 mb-1") {{t('set.crash_ratio')}}
+                div(class="flex items-center gap-2")
+                    input([(ngModel)]="crashBuyRatio",
+                        type="number", step="5", min="5", max="100",
+                        class="w-full px-2 py-1.5 rounded bg-white/5 border border-white/10 text-[12px] text-slate-200 focus:outline-none focus:border-amber-400/50")
+                    span(class="text-[11px] text-slate-500") %
+            div
+                label(class="block text-[11px] font-medium text-slate-500 mb-1") {{t('set.crash_max')}}
+                input([(ngModel)]="crashBuyMaxPerCycle",
+                    type="number", step="1", min="1", max="10",
+                    class="w-full px-2 py-1.5 rounded bg-white/5 border border-white/10 text-[12px] text-slate-200 focus:outline-none focus:border-amber-400/50")
+
+    //- Run Comparison Button
+    div(class="flex justify-end")
+        button((click)="runComparison()",
+            [disabled]="comparing",
+            class="px-4 py-2 rounded-lg bg-violet-500/20 border border-violet-400/30 text-violet-300 text-[13px] font-medium hover:bg-violet-500/30 transition-colors disabled:opacity-50")
+            span(*ngIf="!comparing") {{t('sim.compare')}}
+            span(*ngIf="comparing") {{t('sim.running')}}
+
+    //- Comparison Results
+    div(*ngIf="hasComparison && comparisonResult")
+        div(class="grid grid-cols-2 gap-4 mt-4")
+            //- Full Sell Summary
+            div(class="p-4 rounded-lg bg-indigo-500/5 border border-indigo-400/10")
+                h3(class="text-[13px] font-semibold text-indigo-300 mb-3") {{t('sim.full_sell_result')}}
+                div(class="space-y-2")
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_return')}}
+                        span(class="font-medium", [class]="profitClass(comparisonResult.full_sell?.total_return || 0)")
+                            | {{comparisonResult.full_sell?.total_return > 0 ? '+' : ''}}{{comparisonResult.full_sell?.total_return | number:'1.2-2'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.final')}}
+                        span(class="font-medium text-white") ${{formatUSD(comparisonResult.full_sell?.final_asset || 0)}}
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_cycles')}}
+                        span(class="font-medium text-white") {{comparisonResult.full_sell?.total_cycles || 0}}
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.win_rate')}}
+                        span(class="font-medium text-white") {{comparisonResult.full_sell?.win_rate | number:'1.1-1'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.max_drawdown')}}
+                        span(class="font-medium text-red-400") {{comparisonResult.full_sell?.max_drawdown | number:'1.2-2'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_fees')}}
+                        span(class="font-medium text-amber-400") ${{formatUSD(comparisonResult.full_sell?.total_commission || 0)}}
+
+            //- Partial Sell Summary
+            div(class="p-4 rounded-lg bg-violet-500/5 border border-violet-400/10")
+                h3(class="text-[13px] font-semibold text-violet-300 mb-3") {{t('sim.partial_sell_result')}}
+                div(class="space-y-2")
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_return')}}
+                        span(class="font-medium", [class]="profitClass(comparisonResult.partial_sell?.total_return || 0)")
+                            | {{comparisonResult.partial_sell?.total_return > 0 ? '+' : ''}}{{comparisonResult.partial_sell?.total_return | number:'1.2-2'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.final')}}
+                        span(class="font-medium text-white") ${{formatUSD(comparisonResult.partial_sell?.final_asset || 0)}}
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_cycles')}}
+                        span(class="font-medium text-white") {{comparisonResult.partial_sell?.total_cycles || 0}}
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.win_rate')}}
+                        span(class="font-medium text-white") {{comparisonResult.partial_sell?.win_rate | number:'1.1-1'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.max_drawdown')}}
+                        span(class="font-medium text-red-400") {{comparisonResult.partial_sell?.max_drawdown | number:'1.2-2'}}%
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.total_fees')}}
+                        span(class="font-medium text-amber-400") ${{formatUSD(comparisonResult.partial_sell?.total_commission || 0)}}
+                    div(class="flex justify-between text-[12px]")
+                        span(class="text-slate-500") {{t('sim.partial_sells')}}
+                        span(class="font-medium text-violet-300") {{comparisonResult.partial_sell?.partial_sell_count || 0}}
+
+        //- Difference Summary
+        div(*ngIf="comparisonResult.full_sell && comparisonResult.partial_sell",
+            class="mt-4 p-3 rounded-lg bg-white/5 border border-white/5")
+            div(class="flex items-center justify-center gap-6 text-[12px]")
+                div(class="text-center")
+                    span(class="text-slate-500 block") {{t('sim.total_return')}} {{t('sim.compare_desc')}}
+                    span(class="font-semibold",
+                        [class]="diffClass(comparisonResult.partial_sell?.total_return || 0, comparisonResult.full_sell?.total_return || 0)")
+                        | {{(comparisonResult.partial_sell?.total_return - comparisonResult.full_sell?.total_return) > 0 ? '+' : ''}}{{(comparisonResult.partial_sell?.total_return - comparisonResult.full_sell?.total_return) | number:'1.2-2'}}%p
+                div(class="text-center")
+                    span(class="text-slate-500 block") {{t('sim.final')}} {{t('sim.compare_desc')}}
+                    span(class="font-semibold",
+                        [class]="diffClass(comparisonResult.partial_sell?.final_asset || 0, comparisonResult.full_sell?.final_asset || 0)")
+                        | ${{formatUSD((comparisonResult.partial_sell?.final_asset || 0) - (comparisonResult.full_sell?.final_asset || 0))}}
+
+//- Error Message
+div(*ngIf="errorMessage", class="glass-card p-4 mb-6 border border-red-500/30 bg-red-500/5")
+    div(class="flex items-center gap-2")
+        svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-5 text-red-400 shrink-0")
+            path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
+        span(class="text-[13px] text-red-300") {{errorMessage}}
+
+//- Results
+div(*ngIf="hasResult")
+    //- Strategy Applied Info
+    div(*ngIf="summary.use_my_strategy && summary.sell_strategy === 'partial'",
+        class="glass-card p-3 mb-4 border border-cyan-400/10 bg-cyan-500/5")
+        div(class="flex items-center gap-2 text-[12px]")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                class="size-3.5 text-cyan-400 shrink-0")
+                path(stroke-linecap="round", stroke-linejoin="round", d="m4.5 12.75 6 6 9-13.5")
+            span(class="text-cyan-300") {{t('sim.my_strategy_applied')}}
+
+    //- Summary Cards
+    div(class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6")
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_cycles')}}
+            div(class="text-xl font-bold text-white") {{summary.total_cycles || 0}}
+            div(class="text-[10px] text-slate-500 mt-0.5") {{t('sim.completed')}}: {{summary.completed_cycles || 0}}
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_return')}}
+            div(class="text-xl font-bold", [class]="profitClass(summary.total_return || 0)")
+                | {{summary.total_return > 0 ? '+' : ''}}{{summary.total_return | number:'1.2-2'}}%
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.win_rate')}}
+            div(class="text-xl font-bold", [class]="(summary.win_rate || 0) >= 50 ? 'text-emerald-400' : 'text-amber-400'")
+                | {{summary.win_rate | number:'1.1-1'}}%
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.avg_days')}}
+            div(class="text-xl font-bold text-white") {{summary.avg_cycle_days | number:'1.0-0'}}
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.max_drawdown')}}
+            div(class="text-xl font-bold text-red-400") {{summary.max_drawdown | number:'1.2-2'}}%
+        div(class="glass-card p-4 text-center")
+            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_fees')}}
+            div(class="text-xl font-bold text-amber-400") ${{formatUSD(summary.total_commission || 0)}}
+
+    //- Extension Info (if used)
+    div(*ngIf="summary.allow_extension && summary.extension_count > 0",
+        class="glass-card p-4 mb-6 border border-orange-400/20 bg-orange-500/5")
+        div(class="flex items-center gap-2")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                class="size-4 text-orange-400 shrink-0")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182")
+            span(class="text-[13px] text-orange-300 font-medium")
+                | {{t('sim.auto_extend')}} — {{summary.extension_count}} extension(s)
+
+    //- Final Asset + Period Info
+    div(class="glass-card p-4 mb-6")
+        div(class="flex items-center justify-between")
+            div
+                div(class="text-xs text-slate-500 uppercase") {{t('sim.initial')}}
+                div(class="text-lg font-bold text-slate-300") ${{formatUSD(summary.initial_investment || 0)}}
+            div(class="text-center")
+                div(class="text-2xl text-slate-600") →
+                div(class="text-[10px] text-slate-600") {{summary.trading_days}} {{t('sim.days')}}
+            div(class="text-right")
+                div(class="text-xs text-slate-500 uppercase") {{t('sim.final')}}
+                div(class="text-lg font-bold", [class]="profitClass(summary.total_return || 0)")
+                    | ${{formatUSD(summary.final_asset || 0)}}
+
+    //- Cycle Summary Table
+    div(*ngIf="cycles.length > 0", class="glass-card p-5 mb-6")
+        h2(class="text-sm font-semibold text-white mb-4")
+            | {{t('sim.cycle_summary')}} ({{cycles.length}})
+
+        div(class="overflow-x-auto")
+            table(class="w-full text-left")
+                thead
+                    tr(class="border-b border-white/5")
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") #
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.start')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.end')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.rounds')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.div')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.invested')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.sell_amt')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.fees')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.return')}}
+                tbody
+                    tr(*ngFor="let c of cycles; let i = index",
+                        class="border-b border-white/3 hover:bg-white/3 transition-colors")
+                        td(class="py-2 text-[13px] text-slate-400") {{c.cycle_num || i + 1}}
+                        td(class="py-2 text-[13px] text-slate-300") {{c.start_date}}
+                        td(class="py-2 text-[13px] text-slate-300") {{c.end_date}}
+                        td(class="py-2 text-[13px] text-slate-300 text-right") {{c.rounds}}
+                        td(class="py-2 text-[13px] text-right",
+                            [class]="c.division_count > divisionCount ? 'text-orange-400' : 'text-slate-300'")
+                            | {{c.division_count || divisionCount}}
+                        td(class="py-2 text-[13px] text-slate-300 text-right") ${{c.total_spent | number:'1.2-2'}}
+                        td(class="py-2 text-[13px] text-slate-300 text-right") ${{c.sell_amount | number:'1.2-2'}}
+                        td(class="py-2 text-[13px] text-amber-400 text-right") ${{c.commission | number:'1.2-2'}}
+                        td(class="py-2 text-[13px] font-medium text-right", [class]="profitClass(c.return_rate)")
+                            | {{c.return_rate > 0 ? '+' : ''}}{{c.return_rate | number:'1.2-2'}}%
+
+    //- Trade Detail Table
+    div(*ngIf="trades.length > 0", class="glass-card p-5")
+        div(class="flex items-center justify-between mb-4")
+            h2(class="text-sm font-semibold text-white")
+                | {{t('sim.trade_details')}} ({{filteredTrades.length}})
+            //- Filter buttons
+            div(class="flex items-center gap-1")
+                button(*ngFor="let f of ['ALL','BUY','SELL','SKIP','EXTEND','PARTIAL_SELL','CRASH_BUY']",
+                    (click)="setTradeFilter(f)",
+                    class="px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                    [class]="tradeFilter === f ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'text-slate-500 hover:text-slate-300'")
+                    | {{f}}
+
+        div(class="overflow-x-auto max-h-96 overflow-y-auto trading-scroll")
+            table(class="w-full text-left")
+                thead(class="sticky top-0 bg-slate-900/90 backdrop-blur-sm")
+                    tr(class="border-b border-white/5")
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.cycle')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.date')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.rounds')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.action')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.price')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.qty')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.amount')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.fee')}}
+                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.avg_price')}}
+                tbody
+                    tr(*ngFor="let t of filteredTrades",
+                        class="border-b border-white/3 hover:bg-white/3 transition-colors")
+                        td(class="py-1.5 text-[12px] text-slate-500") {{t.cycle_num}}
+                        td(class="py-1.5 text-[12px] text-slate-300") {{t.date}}
+                        td(class="py-1.5 text-[12px] text-slate-300") {{t.round}}
+                        td(class="py-1.5 text-[12px] font-medium",
+                            [class]="t.action === 'BUY' ? 'text-indigo-300' : t.action === 'SELL' ? 'text-emerald-300' : t.action === 'EXTEND' ? 'text-orange-300' : t.action === 'CRASH_BUY' ? 'text-amber-300' : t.action === 'PARTIAL_SELL' ? 'text-violet-300' : 'text-slate-500'")
+                            | {{t.action}}
+                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.price | number:'1.2-2'}}
+                        td(class="py-1.5 text-[12px] text-slate-300 text-right") {{t.qty}}
+                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.amount | number:'1.2-2'}}
+                        td(class="py-1.5 text-[12px] text-amber-400 text-right") ${{t.commission | number:'1.2-2'}}
+                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.avg_price | number:'1.4-4'}}

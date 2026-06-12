@@ -13,7 +13,7 @@ export class Component implements OnInit {
     public loaded: boolean = false;
 
     public async ngOnInit() {
-        await this.service.init();
+        await this.service.init(this);
         await this.load();
         this.loaded = true;
         this.config.rootNode = this.rootNode.bind(this);

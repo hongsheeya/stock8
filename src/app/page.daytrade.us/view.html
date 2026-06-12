@@ -1,0 +1,333 @@
+<div *ngIf="loading" class="flex h-full items-center justify-center">
+    <div class="text-center">
+        <div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></div>
+        <p class="text-sm text-slate-400">미장 단타 화면 로딩 중...</p>
+    </div>
+</div>
+
+<div *ngIf="!loading" class="h-full overflow-auto trading-scroll">
+    <div class="space-y-4 pb-4">
+        <section class="glass-card p-5">
+            <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div class="space-y-4 xl:max-w-3xl">
+                    <div>
+                        <div class="mb-2 inline-flex items-center rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold text-blue-300">US 자동 단타</div>
+                        <h1 class="text-lg font-semibold text-white">미장 자동 단타</h1>
+                        <p class="mt-1 text-[12px] leading-5 text-slate-400">자동으로 후보를 고르고 예약매수와 청산 감시를 이어갑니다.</p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">현재 후보</div>
+                            <div class="mt-1 text-[15px] font-semibold text-white">{{symbol}}</div>
+                            <div class="mt-1 text-[11px] text-slate-400">{{selectedStrategySpec?.name || strategy}}</div>
+                        </div>
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">자동 운전</div>
+                            <div class="mt-1 inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold" [class]="autoStatusBadgeClass">{{autoStateLabel}}</div>
+                            <div class="mt-2 text-[11px] text-slate-400">{{marketSessionLabel}}</div>
+                        </div>
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">매매 신호</div>
+                            <div class="mt-1 inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold" [class]="signalBadgeClass(signalAction)">{{signalAction}}</div>
+                            <div class="mt-2 truncate text-[11px] text-slate-400">{{signalReason}}</div>
+                        </div>
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">사용 가능 금액</div>
+                            <div class="mt-1 text-[15px] font-semibold text-white">₩{{formatMoney(budgetStatus?.actual_orderable_seed_krw || budgetStatus?.available_for_daytrade)}}원</div>
+                            <div class="mt-1 text-[11px] text-slate-400">USD {{formatUsd(budgetStatus?.us_orderable_amount_usd || 0)}}</div>
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg border px-4 py-3" [class]="autoStatusPanelClass">
+	                        <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+	                            <div>
+	                                <div class="text-[12px] font-semibold text-white">자동매매 상태</div>
+	                                <div class="mt-1 text-[12px] text-slate-300">{{autoStateReason || '상태를 확인하는 중입니다.'}}</div>
+	                            </div>
+	                            <div class="flex flex-col gap-2 lg:min-w-[280px]">
+	                                <button (click)="toggleBriefingCollapsed()" class="self-start rounded border border-white/10 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:text-white lg:self-end">{{briefingCollapsed ? '펼치기' : '접기'}}</button>
+	                                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+	                                <div class="rounded-lg bg-black/20 px-3 py-2">
+	                                    <div class="text-slate-500">워커</div>
+	                                    <div class="mt-1 font-semibold" [class]="workerStarted ? 'text-emerald-300' : 'text-red-300'">{{workerStarted ? 'RUNNING' : 'STOPPED'}}</div>
+	                                </div>
+	                                <div class="rounded-lg bg-black/20 px-3 py-2">
+	                                    <div class="text-slate-500">자동매매 토글</div>
+	                                    <div class="mt-1 font-semibold" [class]="isUsAutoEnabled ? 'text-emerald-300' : 'text-slate-300'">{{isUsAutoEnabled ? 'ON' : 'OFF'}}</div>
+	                                </div>
+	                                </div>
+	                            </div>
+	                        </div>
+	                        <div *ngIf="!briefingCollapsed" class="mt-3 rounded-lg bg-black/20 px-3 py-3 text-[11px] text-slate-300">
+	                            <div class="font-semibold text-white">자동매매 거래 시간</div>
+	                            <div class="mt-1">{{autoBuyScheduleLabel}}</div>
+	                            <div class="mt-1 text-slate-400">기준 시간 {{autoBuyScheduleAt}}<span *ngIf="autoBuyCurrentTime"> · 현재 {{autoBuyCurrentTime}}</span></div>
+	                            <div class="mt-1" [class]="autoBuyReady ? 'text-emerald-300' : 'text-amber-300'">{{autoBuyReady ? '예약매수 가능 시간입니다.' : '예약매수 시작 전 대기 중입니다.'}}</div>
+	                        </div>
+	                        <div *ngIf="!briefingCollapsed && briefReasonList.length > 0" class="mt-3 space-y-1 text-[11px] text-slate-300">
+	                            <div *ngFor="let item of briefReasonList">- {{item}}</div>
+	                        </div>
+	                        <div *ngIf="briefingCollapsed" class="mt-3 rounded-lg bg-black/20 px-3 py-2 text-[11px] text-slate-400">자세한 브리핑은 접힘 상태입니다.</div>
+	                    </div>
+                </div>
+
+                <div class="glass-card p-4 xl:w-[360px]">
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                        <h2 class="text-sm font-semibold text-white">운영 제어</h2>
+                        <button (click)="refreshLight()" [disabled]="refreshing" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50">{{refreshing ? '갱신 중...' : '새로고침'}}</button>
+                    </div>
+                    <div class="space-y-3">
+                        <button (click)="toggleAuto()" [disabled]="refreshing" class="w-full rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors disabled:opacity-50" [class]="isUsAutoEnabled ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-red-500/10 hover:border-red-400/30 hover:text-red-300' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-emerald-500/10 hover:border-emerald-400/30 hover:text-emerald-300'">{{isUsAutoEnabled ? '자동매매 ON · 중지' : '자동매매 OFF · 시작'}}</button>
+                        <button (click)="toggleAdvancedControls()" class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:bg-white/10">{{advancedControlsCollapsed ? '고급 설정' : '고급 설정 접기'}}</button>
+                        <div *ngIf="!advancedControlsCollapsed" class="space-y-3 rounded-lg border border-white/10 bg-black/10 p-3">
+                            <select [(ngModel)]="strategy" class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[13px] text-slate-200 focus:border-blue-400/50 focus:outline-none">
+                                <option *ngFor="let item of strategyOptions" [ngValue]="item.id">{{item.name}}</option>
+                            </select>
+                            <div class="text-[11px] text-slate-500">요청 시드 (KRW)</div>
+                            <input [ngModel]="seedDraft" (ngModelChange)="onSeedDraftChange($event)" type="number" min="0" class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[13px] text-slate-200 focus:border-blue-400/50 focus:outline-none" />
+                            <button (click)="syncSeed()" [disabled]="seedSaving" class="w-full rounded-lg bg-blue-500/80 px-3 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{{seedSaving ? '저장 중...' : '시드 저장'}}</button>
+                            <div class="grid grid-cols-2 gap-2 text-[12px]">
+                                <div class="rounded-lg bg-black/20 px-3 py-2">
+                                    <div class="text-[10px] text-slate-500">남은 시드</div>
+                                    <div class="mt-1 font-semibold text-white">₩{{formatMoney(budgetStatus?.remaining_seed_krw || 0)}}</div>
+                                    <div class="mt-1 text-[10px] text-slate-500">계획 ₩{{formatMoney(totalPlannedSeed)}}</div>
+                                </div>
+                                <div class="rounded-lg bg-black/20 px-3 py-2">
+                                    <div class="text-[10px] text-slate-500">사용 중</div>
+                                    <div class="mt-1 font-semibold text-white">₩{{formatMoney(sharedUsedSeed)}}</div>
+                                    <div class="mt-1 text-[10px] text-slate-500">사용률 {{formatPct(budgetUsagePct)}}</div>
+                                </div>
+                            </div>
+                            <div *ngIf="seedLockedByOtherPositions" class="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">기존 포지션이 공유 시드를 사용 중이라 미장 신규 진입 가능 시드가 0원입니다.</div>
+                        </div>
+                    </div>
+                    <div *ngIf="errorMessage" class="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{{errorMessage}}</div>
+                    <div *ngIf="backgroundLoading" class="mt-3 rounded-lg border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-[12px] text-blue-300">실시간 상태를 불러오는 중입니다.</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <div *ngIf="!advancedControlsCollapsed" class="space-y-4 xl:col-span-2">
+                <section class="glass-card p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <h2 class="text-sm font-semibold text-white">미장 후보 유니버스</h2>
+                            <div class="mt-1 text-[12px] text-slate-400">{{universePolicy?.summary || '유동성/변동성 기준을 통과한 후보를 자동으로 추립니다.'}}</div>
+                        </div>
+                        <div class="w-full lg:max-w-[360px]">
+                            <div class="flex items-center gap-2">
+                                <input [(ngModel)]="symbolQuery" (keyup.enter)="searchSymbols()" placeholder="미장 심볼 검색 (예: TSM, AVGO, RKLB)" class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-200 focus:border-blue-400/50 focus:outline-none" />
+                                <button (click)="searchSymbols()" [disabled]="searchLoading" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50">{{searchLoading ? '검색 중...' : '검색'}}</button>
+                            </div>
+                            <div *ngIf="symbolResults.length > 0" class="mt-2 space-y-1 rounded-lg border border-white/10 bg-black/20 p-2">
+                                <button *ngFor="let item of symbolResults" (click)="applySearchResult(item)" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-[12px] transition-colors hover:bg-white/5">
+                                    <span class="font-semibold text-white">{{item.symbol}}</span>
+                                    <span class="truncate text-slate-400">{{item.name}}</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+                        <button *ngFor="let item of candidates" (click)="selectSymbol(item.symbol)" class="rounded-lg border px-3 py-3 text-left transition-colors" [class]="item.symbol === symbol ? 'border-blue-400/30 bg-blue-500/10 text-blue-200' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'">
+                            <div class="font-semibold">{{item.symbol}}</div>
+                            <div class="mt-1 truncate text-[11px]" [class]="item.symbol === symbol ? 'text-blue-100/80' : 'text-slate-500'">{{item.name}}</div>
+                        </button>
+                    </div>
+
+                    <div *ngIf="universePolicy?.selection_rules?.length" class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        <div *ngFor="let item of universePolicy.selection_rules" class="rounded-lg bg-white/5 px-3 py-3 text-[12px] text-slate-400">{{item}}</div>
+                    </div>
+                </section>
+
+                <section class="glass-card p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h2 class="text-sm font-semibold text-white">미장 모델 랭킹</h2>
+                            <div class="mt-1 text-[12px] text-slate-400">최근 10일 · 5분봉 · 최대 {{rankingSymbolTarget}}종목 기준. 검증 수익, 승률, 거래 빈도, 견고성을 함께 봅니다.</div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[11px] text-slate-500">{{rankingLoading ? '분석 중...' : (ranking.length > 0 ? ranking.length + '개 전략 · ' + (rankingMeta?.symbolCount || 0) + '종목' : '랭킹 준비 전')}}</span>
+                            <button (click)="refreshRanking()" [disabled]="rankingLoading" class="rounded-lg bg-blue-500/80 px-3 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{{rankingLoading ? '갱신 중...' : '랭킹 분석 실행'}}</button>
+                        </div>
+                    </div>
+
+                    <div class="mt-2 text-[11px] text-slate-500">
+                        <span *ngIf="rankingMeta?.generatedAt">마지막 계산 {{rankingMeta?.generatedAt}}</span>
+                        <span *ngIf="rankingMeta?.cached"> · 캐시 {{rankingMeta?.cacheAgeSec || 0}}초 경과</span>
+                    </div>
+
+                    <div *ngIf="rankingQualityGate?.warningMessage" class="mt-4 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-3 text-[12px] text-red-300">{{rankingQualityGate.warningMessage}}</div>
+
+                    <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3" *ngIf="topRanking || recommendedPair || researchAnalysis">
+                        <div *ngIf="topRanking" class="rounded-lg bg-white/5 px-4 py-4">
+                            <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Top Strategy</div>
+                            <div class="mt-2 text-[16px] font-semibold text-white">{{topRanking.strategy_name}}</div>
+                            <div class="mt-3 space-y-1 text-[12px] text-slate-400">
+                                <div>검증수익 {{formatPct(topRanking.avg_validation_return)}}</div>
+                                <div>평균승률 {{formatPct(topRanking.avg_win_rate)}}</div>
+                                <div>거래빈도 {{formatNumber(topRanking.avg_trades)}} / day</div>
+                            </div>
+                        </div>
+                        <div *ngIf="recommendedPair" class="rounded-lg bg-blue-500/10 px-4 py-4">
+                            <div class="text-[11px] uppercase tracking-[0.16em] text-blue-200/70">Recommended Pair</div>
+                            <div class="mt-2 text-[16px] font-semibold text-white">{{recommendedPair.symbol}}</div>
+                            <div class="mt-3 space-y-1 text-[12px] text-slate-300">
+                                <div>검증수익 {{formatPct(recommendedPair.validation_return)}}</div>
+                                <div>견고성 {{formatNumber(recommendedPair.robustness)}}</div>
+                            </div>
+                        </div>
+                        <div *ngIf="researchAnalysis" class="rounded-lg bg-amber-500/10 px-4 py-4">
+                            <div class="text-[11px] uppercase tracking-[0.16em] text-amber-300/80">Why Win Rate Fell</div>
+                            <div class="mt-2 text-[12px] leading-6 text-amber-100">{{researchAnalysis.message}}</div>
+                        </div>
+                    </div>
+
+                    <div *ngIf="researchSummary?.top_strategy || blockedStrategies.length > 0" class="mt-4 rounded-lg bg-white/5 px-4 py-4 text-[12px] text-slate-300">
+                        <div class="font-semibold text-white">추가 검토 결과</div>
+                        <div *ngIf="researchSummary?.top_strategy" class="mt-2">추가 검토 기준 1순위는 <span class="font-semibold text-white">{{researchSummary.top_strategy.strategy_name}}</span>이며, 검증수익 {{formatPct(researchSummary.top_strategy.avg_validation_return)}}, 견고성 {{formatNumber(researchSummary.top_strategy.avg_robustness)}} 수준입니다.</div>
+                        <div *ngIf="blockedStrategies.length > 0" class="mt-3 space-y-1 text-[11px] text-slate-500">
+                            <div *ngFor="let item of blockedStrategies">- {{item.strategy_name}} 보류: {{item.reason}}</div>
+                        </div>
+                    </div>
+
+                    <div *ngIf="ranking.length === 0 && !rankingLoading" class="mt-4 rounded-lg border border-white/10 bg-white/5 px-4 py-4 text-[12px] text-slate-500">랭킹 결과가 아직 없습니다. 상단 버튼으로 갱신하거나 백그라운드 로드를 기다려주세요.</div>
+
+                    <div class="mt-4 space-y-3">
+                        <div *ngFor="let row of ranking" class="rounded-lg border border-white/10 bg-white/5 px-4 py-4 text-[12px]">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <span class="text-[15px] font-semibold text-white">랭킹 {{row.rank}}위 · {{row.strategy_name}}</span>
+                                    <span class="ml-2 text-slate-500">{{row.strategy_id}}</span>
+                                </div>
+                                <div class="rounded-full bg-black/20 px-3 py-1 text-[11px] text-slate-400">테스트 {{row.tested_symbols}}종목</div>
+                            </div>
+                            <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5 text-[11px] text-slate-500">
+                                <div class="rounded-lg bg-black/20 px-3 py-3">검증수익 <div class="mt-1 text-[14px] font-semibold text-white">{{formatPct(row.avg_validation_return)}}</div></div>
+                                <div class="rounded-lg bg-black/20 px-3 py-3">승률 <div class="mt-1 text-[14px] font-semibold text-white">{{formatPct(row.avg_win_rate)}}</div></div>
+                                <div class="rounded-lg bg-black/20 px-3 py-3">검증승률 <div class="mt-1 text-[14px] font-semibold text-white">{{formatPct(row.avg_validation_win_rate)}}</div></div>
+                                <div class="rounded-lg bg-black/20 px-3 py-3">거래빈도 <div class="mt-1 text-[14px] font-semibold text-white">{{formatNumber(row.avg_trades)}} / day</div></div>
+                                <div class="rounded-lg bg-black/20 px-3 py-3">견고성 <div class="mt-1 text-[14px] font-semibold text-white">{{formatNumber(row.avg_robustness)}}</div></div>
+                            </div>
+                            <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-500 md:grid-cols-4">
+                                <div>평균수익 <span class="font-semibold text-white">{{formatPct(row.avg_return)}}</span></div>
+                                <div>검증빈도 <span class="font-semibold text-white">{{formatNumber(row.avg_validation_trades)}} / day</span></div>
+                                <div>MDD <span class="font-semibold text-white">{{formatPct(row.avg_max_drawdown)}}</span></div>
+                                <div>점수 <span class="font-semibold text-white">{{formatNumber(row.rank_score)}}</span></div>
+                            </div>
+                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{row.explanation}}</div>
+                            <div class="mt-1 text-[11px] text-slate-500">{{row.strategy_summary}}</div>
+                            <div *ngIf="row.best_symbol" class="mt-2 rounded-lg bg-blue-500/10 px-3 py-2 text-[11px] text-blue-200">대표 종목 {{row.best_symbol.symbol}} · 검증수익 {{formatPct(row.best_symbol.validation_return)}} · 견고성 {{formatNumber(row.best_symbol.robustness)}}</div>
+                            <div *ngIf="row.tradable === false" class="mt-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">실거래 비권장: {{row.quality_note}}</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div [class]="advancedControlsCollapsed ? 'space-y-4 xl:col-span-3' : 'space-y-4'">
+                <section class="glass-card p-4">
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                        <h2 class="text-sm font-semibold text-white">실시간 진단</h2>
+                        <span class="rounded-full px-2 py-1 text-[11px] font-semibold" [class]="riskBadgeClass(statusRisk)">{{statusRisk}}</span>
+                    </div>
+                    <div class="space-y-3 text-[12px]">
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">현재가 / 평균단가</div>
+                            <div class="mt-1 flex items-center justify-between gap-3">
+                                <div class="text-[15px] font-semibold text-white">{{formatUsd(currentPrice)}}</div>
+                                <div class="text-[11px] text-slate-400">평단 {{formatUsd(status?.state?.avg_price || 0)}}</div>
+                            </div>
+                        </div>
+                        <div class="rounded-lg bg-white/5 px-3 py-3">
+                            <div class="text-[10px] text-slate-500">신호 사유</div>
+                            <div class="mt-1 text-slate-300">{{signalReason}}</div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="rounded-lg bg-white/5 px-3 py-3">
+                                <div class="text-[10px] text-slate-500">오늘 체결</div>
+                                <div class="mt-1 text-[15px] font-semibold text-white">{{daily?.trade_count || 0}}건</div>
+                            </div>
+                            <div class="rounded-lg bg-white/5 px-3 py-3">
+                                <div class="text-[10px] text-slate-500">오늘 승률</div>
+                                <div class="mt-1 text-[15px] font-semibold text-white">{{formatPct(daily?.win_rate || 0)}}</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="glass-card p-4">
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                        <h2 class="text-sm font-semibold text-white">실행 검증</h2>
+                        <span class="rounded-full px-2 py-1 text-[11px] font-semibold" [class]="verify?.ok ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'">{{verify?.ok ? 'PASS' : 'CHECK'}}</span>
+                    </div>
+                    <div class="space-y-2 text-[12px]">
+                        <div *ngFor="let item of verify?.checks || []" class="rounded-lg border px-3 py-2" [class]="item.ok ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-400/20 bg-amber-500/10 text-amber-300'">
+                            <div class="font-semibold">{{item.label}}</div>
+                            <div class="mt-1 text-[11px] text-slate-300">{{item.message || '-'}}</div>
+                        </div>
+                    </div>
+                    <div *ngIf="verifyHardFails.length > 0" class="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-3 text-[11px] text-red-300">
+                        <div *ngFor="let item of verifyHardFails">- {{item.label}}: {{item.message}}</div>
+                    </div>
+                </section>
+
+                <section class="glass-card p-4">
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                        <h2 class="text-sm font-semibold text-white">진행 포지션</h2>
+                        <span class="text-[11px] text-slate-500">{{usActivePositions.length}}건</span>
+                    </div>
+                    <div *ngIf="usActivePositions.length === 0" class="rounded-lg bg-white/5 px-3 py-4 text-center text-[12px] text-slate-500">현재 진행 중인 미장 포지션이 없습니다.</div>
+                    <div *ngIf="usActivePositions.length > 0" class="space-y-2">
+                        <div *ngFor="let item of usActivePositions" class="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-[12px]">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <div class="font-semibold text-white">{{item.name || item.symbol}}</div>
+                                    <div class="mt-1 text-[11px] text-slate-500">{{item.symbol}} · {{item.strategy_id || '-'}}</div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-semibold text-white">{{item.position_qty || 0}}주</div>
+                                    <div class="mt-1 text-[11px]" [class]="(item.pnl_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'">{{formatPct(item.pnl_pct || 0)}}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="glass-card p-4">
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                        <h2 class="text-sm font-semibold text-white">전략 프로파일</h2>
+                        <span class="text-[11px] text-slate-500">{{strategy}}</span>
+                    </div>
+                    <div class="space-y-3">
+                        <div *ngFor="let item of strategyOptions" class="rounded-lg border px-3 py-3 text-[12px]" [class]="item.id === strategy ? 'border-blue-400/30 bg-blue-500/10' : 'border-white/10 bg-white/5'">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <div class="font-semibold text-white">{{item.name}}</div>
+                                    <div class="text-[11px] text-slate-500">{{item.id}}</div>
+                                </div>
+                                <div *ngIf="item.id === strategy" class="text-[11px] font-semibold text-blue-300">현재 선택</div>
+                            </div>
+                            <div class="mt-2 text-slate-400">{{item.summary}}</div>
+                            <div class="mt-3 grid grid-cols-1 gap-2">
+                                <div class="rounded-lg bg-black/20 px-3 py-2">
+                                    <div class="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">진입 규칙</div>
+                                    <ul class="space-y-1 text-slate-300">
+                                        <li *ngFor="let row of item.entry || []">• {{row}}</li>
+                                    </ul>
+                                </div>
+                                <div class="rounded-lg bg-black/20 px-3 py-2">
+                                    <div class="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">청산 규칙</div>
+                                    <ul class="space-y-1 text-slate-300">
+                                        <li *ngFor="let row of item.exit || []">• {{row}}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</div>

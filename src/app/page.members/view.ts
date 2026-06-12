@@ -10,7 +10,7 @@ export class Component implements OnInit {
         role: ""
     };
 
-    public roles: string[] = ['admin', 'editor', 'viewer'];
+    public roles: string[] = ['admin', 'user'];
 
     public showInviteModal: boolean = false;
     public inviteData: any = { email: '', role: 'viewer' };
@@ -18,7 +18,7 @@ export class Component implements OnInit {
     constructor(public service: Service) { }
 
     public async ngOnInit() {
-        await this.service.init();
+        await this.service.init(this);
         await this.service.auth.allow("/access");
         await this.load();
     }
@@ -42,7 +42,7 @@ export class Component implements OnInit {
     }
 
     public async openInvite() {
-        this.inviteData = { email: '', role: 'viewer' };
+        this.inviteData = { email: '', role: 'user' };
         this.showInviteModal = true;
         await this.service.render();
     }

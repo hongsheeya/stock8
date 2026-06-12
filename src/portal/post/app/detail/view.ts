@@ -23,7 +23,7 @@ export class Component implements OnInit, OnDestroy {
     }
 
     public async ngOnInit() {
-        await this.service.init();
+        await this.service.init(this);
 
         // 탭 전환 감지: NavigationEnd 구독
         this.routerSub = this.router.events.subscribe(async (event) => {

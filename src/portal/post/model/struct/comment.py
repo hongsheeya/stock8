@@ -12,6 +12,8 @@
 
 import datetime
 
+_TIME = wiz.model("portal/trading/kst")
+
 class Comment:
     def __init__(self, core):
         """
@@ -44,7 +46,7 @@ class Comment:
         Returns:
             생성된 댓글 ID (str)
         """
-        data['created'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data['created'] = _TIME.normalize(_TIME.now())
         data['author_id'] = self.core.getUserId()
         data['author_name'] = self.core.getUserName()
         return self.db.insert(data)

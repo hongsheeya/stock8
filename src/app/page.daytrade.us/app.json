@@ -1,0 +1,12 @@
+{
+    "id": "page.daytrade.us",
+    "mode": "page",
+    "title": "\ubbf8\uad6d \uc8fc\uc2dd \ub2e8\ud0c0",
+    "namespace": "daytrade.us",
+    "category": "daytrade.us",
+    "viewuri": "/daytrade/us",
+    "preview": "",
+    "controller": "admin",
+    "layout": "layout.trading",
+    "template": "wiz-page-daytrade-us([title]=\"\")"
+}

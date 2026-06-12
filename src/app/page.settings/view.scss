@@ -1,0 +1,102 @@
+:host {
+    display: block;
+    width: 100%;
+    max-width: 1120px;
+    min-height: 100%;
+    margin: 0 auto;
+    padding: 0 0 48px;
+}
+
+:host-context(.theme-light) {
+    color: #162033;
+}
+
+:host-context(.theme-light) .glass-card,
+:host-context(.theme-light) .glass-card-light {
+    background: #ffffff;
+    border-color: #d8e0ec;
+    color: #162033;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
+}
+
+:host-context(.theme-light) .text-white,
+:host-context(.theme-light) .text-slate-100,
+:host-context(.theme-light) .text-slate-200,
+:host-context(.theme-light) .text-slate-300 {
+    color: #162033 !important;
+}
+
+:host-context(.theme-light) .text-slate-400,
+:host-context(.theme-light) .text-slate-500,
+:host-context(.theme-light) .text-slate-600 {
+    color: #475569 !important;
+}
+
+:host-context(.theme-light) input,
+:host-context(.theme-light) select,
+:host-context(.theme-light) textarea {
+    background: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #111827 !important;
+}
+
+:host-context(.theme-light) input::placeholder,
+:host-context(.theme-light) textarea::placeholder {
+    color: #64748b !important;
+}
+
+:host-context(.theme-light) .bg-white\/5,
+:host-context(.theme-light) .bg-white\/10 {
+    background-color: #f8fafc !important;
+}
+
+:host-context(.theme-light) .border-white\/5,
+:host-context(.theme-light) .border-white\/10 {
+    border-color: #d8e0ec !important;
+}
+
+:host-context(.theme-light) .hover\:bg-white\/10:hover {
+    background-color: #eef2f7 !important;
+}
+
+:host-context(.theme-light) .hover\:text-white:hover {
+    color: #111827 !important;
+}
+
+:host-context(.theme-light) .bg-slate-800 {
+    background-color: #ffffff !important;
+    border-color: #d8e0ec !important;
+    box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12);
+}
+
+.preset-outline-button {
+    border-color: rgba(148, 163, 184, 0.48) !important;
+    background: rgba(15, 23, 42, 0.28) !important;
+    color: #cbd5e1 !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.preset-outline-button:hover {
+    border-color: rgba(99, 102, 241, 0.72) !important;
+    background: rgba(99, 102, 241, 0.14) !important;
+    color: #ffffff !important;
+}
+
+:host-context(.theme-light) .preset-outline-button {
+    border-color: #94a3b8 !important;
+    background: #ffffff !important;
+    color: #334155 !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+:host-context(.theme-light) .preset-outline-button:hover {
+    border-color: #4f46e5 !important;
+    background: #eef2ff !important;
+    color: #1e1b4b !important;
+}
+
+@media (max-width: 640px) {
+    :host {
+        max-width: 100%;
+    }
+}

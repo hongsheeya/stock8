@@ -1,0 +1,105 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.trading-bg {
+    --bn-canvas: #0b0e11;
+    --bn-card: #1e2329;
+    --bn-elevated: #2b3139;
+    --bn-hairline: #2b3139;
+    --bn-body: #eaecef;
+    --bn-muted: #707a8a;
+    --bn-muted-strong: #929aa5;
+    --bn-primary: #fcd535;
+    --bn-primary-active: #f0b90b;
+    --bn-up: #0ecb81;
+    --bn-down: #f6465d;
+    --bn-on-dark: #ffffff;
+    --bn-radius-sm: 4px;
+    --bn-radius-md: 6px;
+    --bn-radius-lg: 8px;
+    --bn-radius-xl: 12px;
+    background: #0b0e11;
+    color: #eaecef;
+    position: relative;
+    overflow: hidden;
+}
+
+.trading-bg.theme-light {
+    --bn-canvas: #f5f7fb;
+    --bn-card: #ffffff;
+    --bn-elevated: #f1f5f9;
+    --bn-hairline: #d8e0ec;
+    --bn-body: #162033;
+    --bn-muted: #6b7280;
+    --bn-muted-strong: #475467;
+    --bn-primary: #2563eb;
+    --bn-primary-active: #1d4ed8;
+    --bn-up: #059669;
+    --bn-down: #dc2626;
+    --bn-on-dark: #111827;
+    background: #f5f7fb;
+    color: #162033;
+}
+
+.trading-scroll {
+    scrollbar-color: var(--bn-hairline, #2b3139) var(--bn-canvas, #0b0e11);
+
+    &::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: var(--bn-canvas, #0b0e11);
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: var(--bn-hairline, #2b3139);
+        border-radius: 8px;
+    }
+}
+
+.glass-card,
+.glass-card-light {
+    background: var(--bn-card, #1e2329);
+    border: 1px solid var(--bn-hairline, #2b3139);
+    border-radius: 12px;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.price-up {
+    color: var(--bn-up, #0ecb81);
+}
+
+.price-down {
+    color: var(--bn-down, #f6465d);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+
+    &.online {
+        background: var(--bn-up, #0ecb81);
+    }
+
+    &.offline {
+        background: var(--bn-muted, #707a8a);
+    }
+}
+
+.infinity-text {
+    color: var(--bn-primary, #fcd535);
+    font-weight: 800;
+}
+
+.trading-bg.theme-light .glass-card,
+.trading-bg.theme-light .glass-card-light {
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}

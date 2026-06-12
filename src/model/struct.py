@@ -6,6 +6,7 @@
 #   struct.user.list()                    # 프로젝트 고유 User Sub-Struct
 #   struct.user.authenticate(email, pw)   # 사용자 인증
 #   struct.post.post.search()             # portal/post 패키지 Struct → Post Sub-Struct
+#   struct.trading.db("etf_watchlist")    # portal/trading 패키지 Struct
 # =============================================================================
 
 class Struct:
@@ -48,8 +49,8 @@ class Struct:
         if name not in self._packages:
             try:
                 self._packages[name] = wiz.model(f"portal/{name}/struct")
-            except Exception:
-                raise AttributeError(f"Package '{name}' not found")
+            except Exception as e:
+                raise AttributeError(f"Package '{name}' load failed: {e}")
         return self._packages[name]
 
 Model = Struct()

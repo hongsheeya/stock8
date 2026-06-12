@@ -6,6 +6,6 @@
     "viewuri": "/dashboard",
     "category": "",
     "controller": "user",
-    "layout": "layout.sidebar",
-    "template": "wiz-page-dashboard()"
+    "layout": "layout.trading",
+    "template": "wiz-page-dashboard([publiclegacyMode]=\"\")"
 }

@@ -22,11 +22,14 @@ def list():
     wiz.response.status(200, members)
 
 def invite():
-    email = wiz.request.query("email", "")
-    role = wiz.request.query("role", "viewer")
+    email = str(wiz.request.query("email", "") or "").strip().lower()
+    role = wiz.request.query("role", "user")
 
     if not email:
         wiz.response.status(400, message="이메일을 입력해주세요.")
+
+    if role not in ["admin", "user"]:
+        wiz.response.status(400, message="허용되지 않은 역할입니다.")
 
     # 이미 존재하는지 확인
     existing = struct.user.db.get(email=email)

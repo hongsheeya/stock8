@@ -12,6 +12,8 @@
 import datetime
 import bcrypt
 
+_TIME = wiz.model("portal/trading/kst")
+
 class User:
     def __init__(self, core):
         self.core = core
@@ -64,6 +66,18 @@ class User:
             user.pop('password', None)
         return user
 
+    def get_by_email(self, email=None):
+        user = self.db.get(email=email)
+        if user:
+            user.pop('password', None)
+        return user
+
+    def find_email(self, name, mobile):
+        user = self.db.get(name=name, mobile=mobile)
+        if user is None:
+            return None
+        return user.get('email', '')
+
     def list(self, text="", role=""):
         """사용자 목록 조회
 
@@ -102,12 +116,14 @@ class User:
         Returns:
             생성된 사용자 ID
         """
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = _TIME.normalize(_TIME.now())
         data['password'] = self._hash_password(data['password'])
         data['created'] = now
         data['updated'] = now
         if not data.get('role'):
             data['role'] = 'user'
+        if not data.get('mobile'):
+            data['mobile'] = ''
         return self.db.insert(data)
 
     def update_profile(self, id, **fields):
@@ -117,7 +133,7 @@ class User:
             id: 사용자 ID
             **fields: 업데이트할 필드
         """
-        fields['updated'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fields['updated'] = _TIME.normalize(_TIME.now())
         self.db.update(fields, id=id)
 
     def change_password(self, id, current_password, new_password):
@@ -139,8 +155,18 @@ class User:
         hashed = self._hash_password(new_password)
         self.db.update(dict(
             password=hashed,
-            updated=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            updated=_TIME.normalize(_TIME.now())
         ), id=id)
+        return True
+
+    def reset_password_by_identity(self, email, name, mobile, new_password):
+        user = self.db.get(email=email, name=name, mobile=mobile)
+        if user is None:
+            return False
+        self.db.update(dict(
+            password=self._hash_password(new_password),
+            updated=_TIME.normalize(_TIME.now())
+        ), id=user.get('id'))
         return True
 
     def count(self, **kwargs):

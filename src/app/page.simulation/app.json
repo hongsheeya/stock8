@@ -1,0 +1,12 @@
+{
+    "id": "page.simulation",
+    "mode": "page",
+    "title": "/simulation",
+    "namespace": "simulation",
+    "category": "simulation",
+    "viewuri": "/simulation",
+    "preview": "",
+    "controller": "admin",
+    "layout": "layout.trading",
+    "template": "wiz-page-simulation()"
+}

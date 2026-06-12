@@ -1,0 +1,53 @@
+div(class="firegate-page")
+    div(class="firegate-toolbar")
+        div(class="min-w-0")
+            h1(class="truncate text-base font-semibold text-white") Fire Gate
+            div(class="mt-1 text-[11px] text-slate-400") {{bridgeStatusText()}}
+        div(class="flex shrink-0 flex-wrap items-center justify-end gap-2")
+            button((click)="connectFireGateBridge()",
+                [disabled]="bridgeBusy",
+                class="inline-flex items-center gap-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[13px] font-medium text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.25a8.25 8.25 0 0 1 15 0")
+                span {{bridgeActionText()}}
+            button((click)="reloadFireGate()",
+                class="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[13px] font-medium text-slate-200 hover:bg-white/10")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M20.985 4.356v4.992m0 0h-4.992m4.992 0-3.181-3.183a8.25 8.25 0 0 0-13.803 3.7")
+                span 새로고침
+            button((click)="openFireGate()",
+                class="inline-flex items-center gap-2 rounded-lg border border-blue-400/25 bg-blue-500/10 px-3 py-2 text-[13px] font-medium text-blue-200 hover:bg-blue-500/20")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25")
+                span 새 탭
+            button((click)="toggleBridgeTools()",
+                class="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[13px] font-medium text-slate-300 hover:bg-white/10")
+                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                    path(stroke-linecap="round", stroke-linejoin="round", d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75")
+                span 도구
+
+    div(*ngIf="error", class="mx-3 mb-3 rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-200") {{error}}
+    div(*ngIf="bridgeMessage", class="mx-3 mb-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-[12px] text-emerald-200") {{bridgeMessage}}
+    div(*ngIf="showBridgeTools", class="mx-3 mb-3 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-3")
+        button((click)="syncFireGate()",
+            [disabled]="bridgeBusy || !bridge?.configured",
+            class="inline-flex items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[13px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M20.985 4.356v4.992m0 0h-4.992m4.992 0-3.181-3.183a8.25 8.25 0 0 0-13.803 3.7")
+            span 동기화
+        button((click)="loginFireGate()",
+            class="inline-flex items-center gap-2 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-[13px] font-medium text-emerald-200 hover:bg-emerald-500/20")
+            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9")
+            span FireGate 로그인
+
+    div(class="firegate-shell")
+        div(*ngIf="loading", class="flex h-full items-center justify-center bg-white text-sm text-slate-500") 로딩 중
+        iframe(*ngIf="!loading",
+            id="fireGateIframe",
+            src="https://fire-gate.app/",
+            title="Fire Gate",
+            class="firegate-frame",
+            referrerpolicy="no-referrer-when-downgrade",
+            allow="clipboard-read; clipboard-write; fullscreen; payment",
+            allowfullscreen)

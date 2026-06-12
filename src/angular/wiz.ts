@@ -1,6 +1,14 @@
 import $ from "jquery";
 import { io } from "socket.io-client";
 
+function sanitizeJsonText(text: string): any {
+    const sanitized = text
+        .replace(/\bNaN\b/g, 'null')
+        .replace(/\b-Infinity\b/g, 'null')
+        .replace(/\bInfinity\b/g, 'null');
+    return JSON.parse(sanitized);
+}
+
 export default class Wiz {
     public namespace: any;
     public baseuri: any;
@@ -74,12 +82,25 @@ export default class Wiz {
             url: this.url(function_name),
             type: "POST",
             data: data,
+            dataType: "text",
             ...options
         };
 
         return new Promise((resolve) => {
-            $.ajax(ajax).always(function (res) {
-                resolve(res);
+            $.ajax(ajax).done(function (responseText: string) {
+                try {
+                    resolve(sanitizeJsonText(responseText));
+                } catch (e) {
+                    resolve(responseText);
+                }
+            }).fail(function (jqXHR: any) {
+                if (jqXHR && typeof jqXHR.responseText === "string") {
+                    try {
+                        resolve(sanitizeJsonText(jqXHR.responseText));
+                        return;
+                    } catch (e) {}
+                }
+                resolve(jqXHR);
             });
         });
     }

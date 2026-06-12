@@ -1,0 +1,12 @@
+{
+    "id": "page.history",
+    "mode": "page",
+    "title": "/history",
+    "namespace": "history",
+    "category": "history",
+    "viewuri": "/history",
+    "preview": "",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-history()"
+}

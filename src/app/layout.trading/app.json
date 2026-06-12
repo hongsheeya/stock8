@@ -1,0 +1,12 @@
+{
+    "id": "layout.trading",
+    "mode": "layout",
+    "title": "Trading",
+    "namespace": "trading",
+    "category": "trading",
+    "viewuri": "",
+    "preview": "",
+    "controller": "base",
+    "layout": "",
+    "template": "wiz-layout-trading()"
+}

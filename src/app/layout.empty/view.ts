@@ -5,6 +5,6 @@ export class Component implements OnInit {
     constructor(public service: Service) { }
 
     public async ngOnInit() {
-        await this.service.init();
+        await this.service.init(this);
     }
 }
