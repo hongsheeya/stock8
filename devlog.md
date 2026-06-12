@@ -1,3 +1,4 @@
+| 2026-06-12 | 001 | 저장소 문서를 WIZ 샘플 설명에서 Stock8 주식 자동화 프로젝트 중심으로 전면 재작성 | [상세](devlog/2026-06-12/001-stock-automation-docs-rewrite.md) |
 | 2026-06-11 | 005 | 설정 화면 실사용 HTML 토글에도 단타 경고 팝업 직접 반영 | [상세](devlog/2026-06-11/005-settings-html-daytrade-toggle-warning.md) |
 | 2026-06-11 | 004 | 설정 단타 토글 즉시 경고 추가 및 OFF 무동작으로 정정 | [상세](devlog/2026-06-11/004-daytrade-settings-toggle-warning-and-off-noop.md) |
 | 2026-06-11 | 003 | 단타 OFF→ON 전환 시 경고 모달 추가 | [상세](devlog/2026-06-11/003-daytrade-enable-warning-modal.md) |

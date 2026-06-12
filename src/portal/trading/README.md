@@ -1,104 +1,160 @@
 # Trading Package
 
-무한매수법(라오어) 기반 미국 레버리지 ETF 자동매매 시스템.
+`portal/trading`은 Stock8의 핵심 도메인 패키지다. 국내 단타, 미국 단타, 무한매수, 브로커 연동, 스케줄 실행, 유지보수 기능이 모두 이 패키지에 모여 있다.
 
----
+## 담당 범위
 
-## 구성요소
+- 한국투자증권(KIS) 인증/시세/주문/잔고 조회
+- FireGate 포트폴리오 및 사이클 동기화
+- 국내 단타 자동매매
+- 미국 단타 자동매매
+- 레버리지 ETF 무한매수 엔진
+- 전략 시뮬레이션 및 결과 저장
+- 거래 로그/계좌 스냅샷/일별 요약 관리
 
-### Model
+## 패키지 구조
 
-| 경로 | 설명 |
+```text
+src/portal/trading/
+├── model/
+│   ├── db/
+│   │   ├── trading_config.py
+│   │   ├── etf_watchlist.py
+│   │   ├── trading_cycle.py
+│   │   ├── cycle_trade.py
+│   │   ├── trade_log.py
+│   │   ├── account_snapshot.py
+│   │   ├── daily_trade_summary.py
+│   │   ├── simulation_run.py
+│   │   └── simulation_trade.py
+│   ├── kst.py
+│   ├── maintenance.py
+│   ├── scheduler.py
+│   └── struct/
+│       ├── daytrade.py
+│       ├── daytrade_engine.py
+│       ├── engine.py
+│       ├── firegate_bridge.py
+│       ├── kis_api.py
+│       └── strategy.py
+├── route/scheduler/
+└── libs/i18n.ts
+```
+
+## 핵심 모듈
+
+### `model/struct.py`
+
+트레이딩 패키지의 루트 진입점이다. 설정 DB, 워치리스트 DB, 엔진 객체, 브로커 연동 객체를 묶어 제공한다.
+
+### `model/struct/kis_api.py`
+
+실계좌와 직접 맞닿는 계층이다.
+
+- KIS 인증
+- 국내/해외 시세 조회
+- 매수/매도 주문
+- 주문가능금액/잔고 조회
+- 체결/주문 상태 확인
+
+### `model/struct/engine.py`
+
+무한매수 엔진이다.
+
+- 사이클 생성/재개/정지
+- 회차별 분할 매수
+- 목표수익 매도
+- LOC 예약 매수/매도
+- 추가 매수 확장
+- FireGate 연동 사이클 정합성 유지
+
+### `model/struct/daytrade.py`
+
+단타 설정과 상태를 다루는 고수준 인터페이스다.
+
+- 시장별 설정 조회
+- 자동매매 ON/OFF 상태 관리
+- 추천/활성 포지션/운영 상태 집계
+- 화면에서 필요한 단타 상태 조합
+
+### `model/struct/daytrade_engine.py`
+
+단타 자동매매 실행기다.
+
+- 추천 기반 진입 실행
+- 자동 청산 감시
+- 손절/익절/보호가 처리
+- 브로커 보유 종목 동기화
+- 시장별 장시간 정책 반영
+
+### `model/struct/firegate_bridge.py`
+
+FireGate를 권위 데이터 소스로 활용해 포트폴리오/사이클/예약 상태를 보정한다.
+
+### `model/struct/strategy.py`
+
+랭킹, 품질 게이트, 추천 필터, 단타 전략 비교 로직을 보조한다.
+
+## 주요 데이터 모델
+
+| 모델 | 설명 |
 |------|------|
-| `model/struct.py` | Composite Struct (싱글톤) |
-| `model/struct/kis_api.py` | 한국투자증권 API 연동 |
-| `model/struct/engine.py` | 무한매수법 알고리즘 엔진 |
-| `model/db/trading_config.py` | 전역 매매 설정 |
-| `model/db/etf_watchlist.py` | 운용 종목 리스트 |
-| `model/db/trading_cycle.py` | 매매 사이클 |
-| `model/db/cycle_trade.py` | 사이클 내 개별 거래 |
-| `model/db/trade_log.py` | 전체 거래 로그 |
-| `model/db/account_snapshot.py` | 일별 계좌 스냅샷 |
-| `model/db/simulation_run.py` | 모의투자 실행 기록 |
-| `model/db/simulation_trade.py` | 모의투자 거래 기록 |
+| `trading_config` | 전역 운용 설정 |
+| `etf_watchlist` | 감시 종목/레버리지 ETF 목록 |
+| `trading_cycle` | 무한매수 사이클 상태 |
+| `cycle_trade` | 사이클 내 체결 기록 |
+| `trade_log` | 단타/무한매수 통합 이벤트 로그 |
+| `account_snapshot` | 계좌 스냅샷 |
+| `daily_trade_summary` | 일별 거래 요약 |
+| `simulation_run` | 시뮬레이션 실행 요약 |
+| `simulation_trade` | 시뮬레이션 상세 거래 |
 
-### 사용법
+## 사용하는 화면
 
-```python
-# struct 로드
-trading = wiz.model("portal/trading/struct")
+이 패키지는 다음 주요 화면이 사용한다.
 
-# DB 접근
-config_db = trading.db("trading_config")
-watchlist_db = trading.db("etf_watchlist")
+- [src/app/page.dashboard](src/app/page.dashboard)
+- [src/app/page.daytrade](src/app/page.daytrade)
+- [src/app/page.daytrade.us](src/app/page.daytrade.us)
+- [src/app/page.infinitebuy](src/app/page.infinitebuy)
+- [src/app/page.history](src/app/page.history)
+- [src/app/page.simulation](src/app/page.simulation)
+- [src/app/page.settings](src/app/page.settings)
 
-# 한투 API
-api = trading.kis_api
-price = api.get_current_price("TQQQ")
+## 스케줄 실행
 
-# 엔진
-engine = trading.engine
-engine.run_daily("TQQQ")
-```
+스케줄 엔드포인트는 자동 실행 워커나 외부 호출에서 사용한다.
 
-## 최신 무한매수법 규칙
+관련 경로:
+- [src/portal/trading/route/scheduler/controller.py](src/portal/trading/route/scheduler/controller.py)
+- [src/portal/trading/model/scheduler.py](src/portal/trading/model/scheduler.py)
 
-### 매수 규칙
+스케줄은 주로 다음을 담당한다.
 
-- 1회차는 시장가 매수
-- 2회차부터 기본 분할 횟수까지는 LOC 지정가 매수
-- 분할 매수를 모두 소진하면 사이클은 `PENDING_EXTENSION` 상태로 전환되며, 대시보드에서 추가 매수 또는 홀딩 유지를 선택할 수 있음
-- KIS 자동환전 주문을 고려하여, 대시보드의 매수 가능액은 USD 주문가능액 + 원화 잔고의 USD 환산값을 함께 표시함
+- 단타 자동 실행 루프
+- 무한매수 사이클 실행
+- 요약/정리 배치
+- 동기화 작업
 
-### 매도 규칙
+## 운영 안전 규칙
 
-- 기본 전략은 목표 수익률 도달 시 전량 매도
-- 고급 전략으로 분할 매도 지원
-	- 설정된 시작 회차 이후 목표 수익률 도달 시 보유 수량의 일부만 매도
-	- 분할 매도 후 잔량이 다시 목표 수익률에 도달하면, `partial_sell_remaining_full_exit=true` 설정 시 전량 매도
-- 수수료/세금을 반영한 순수익률 기준으로 매도 판단
+- `auto_enabled = false`일 때는 자동 진입뿐 아니라 자동 청산 감시도 멈춰야 한다.
+- 브로커/KIS 기준 데이터와 내부 상태가 다르면 브로커 기준을 우선 검토한다.
+- 무한매수와 단타는 예산/상태를 분리해서 계산한다.
+- 화면에 보이는 수익/자산 지표는 FireGate, 스냅샷, 브로커 응답과 교차 검증한다.
 
-### 폭락장 추가 매입 규칙
+## 관련 테스트
 
-- 옵션 활성화 시 전일 대비 하락률 또는 5일 이동평균 이탈률 기준으로 폭락장 감지
-- 폭락장으로 판단되면 잔여 투자금의 일부를 추가 LOC 매수
-- 사이클별 최대 추가 매입 횟수 제한 지원
+- [tests/test_daytrade_engine_regressions.py](tests/test_daytrade_engine_regressions.py)
+- [tests/test_daytrade_recommendation_cache.py](tests/test_daytrade_recommendation_cache.py)
+- [tests/test_daytrade_vrev_filters.py](tests/test_daytrade_vrev_filters.py)
+- [tests/test_infinite_buy_firegate_v4.py](tests/test_infinite_buy_firegate_v4.py)
+- [tests/test_firegate_bridge.py](tests/test_firegate_bridge.py)
+- [tests/test_kis_api_buying_power.py](tests/test_kis_api_buying_power.py)
 
-### 대시보드 수동 제어
+## 참고 문서
 
-- 대시보드 `Engine Control` 패널에서 시작 가능한 종목을 선택하고 즉시 사이클 시작 가능
-- 빠른 시작 버튼 목록으로 종목별 수동 시작 가능
-- 자동 매매 토글, 즉시 실행, 강제 종료, 일시정지/재개를 모두 UI에서 제어 가능
-
-### DB 네임스페이스
-
-- `trading`: SQLite (`data/db/trading.db`)
-
-### 의존성
-
-- `portal/season`: ORM, Session, Config
-- Python: `requests`, `peewee`
-
-## Version
-
-- **Package**: trading
-- **Version**: 1.0.0
-
-## Structure
-
-```
-trading/
-├── portal.json      # Package configuration
-├── README.md        # This file
-├── app/             # Application components
-├── controller/      # Controllers
-└── route/           # Routes
-```
-
-## Usage
-
-This package can be used within WIZ Framework projects.
-
-## License
-
-MIT License
+- [README.md](../../../README.md)
+- [DATABASE_CLEANUP_GUIDE.md](../../../DATABASE_CLEANUP_GUIDE.md)
+- [docs/daytrade/architecture.md](../../../docs/daytrade/architecture.md)
+- [docs/daytrade/strategy-playbook.md](../../../docs/daytrade/strategy-playbook.md)

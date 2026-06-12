@@ -1,228 +1,111 @@
-# 데이터베이스 정리 및 최적화 가이드
+# Stock8 데이터 정리 가이드
 
-## 개요
+이 문서는 Stock8 주식 자동화 프로젝트의 거래 데이터와 시뮬레이션 데이터를 어떻게 유지·정리하는지 설명한다. 목표는 단순 용량 절감이 아니라, 대시보드/이력/전략 검증에 필요한 핵심 정보는 유지하면서 운영 DB를 가볍게 관리하는 것이다.
 
-기존의 무제한 거래 기록 저장에서 벗어나, **일일 요약 기반 아키텍처**로 전환합니다.
+## 왜 정리가 필요한가
 
-### 핵심 변경사항
+Stock8은 다음 데이터를 지속적으로 쌓는다.
 
-| 항목 | 기존 | 변경 후 |
-|------|------|--------|
-| **trade_log** | 모든 개별 거래 기록 (무한 증가) | 최근 30일만 유지 → 매 30일마다 정리 |
-| **cycle_trade** | 완료된 거래만 유지 | 변경 없음 (필요한 정보) |
-| **simulation_run** | 완료된 시뮬레이션 결과 저장 | 최근 90일만 유지 |
-| **simulation_trade** | 모든 상세 거래 기록 | **삭제** (용량 절약) |
-| **daily_trade_summary** (신규) | 없음 | 일별 거래 요약 저장 (KRW 현황) |
+- 무한매수 사이클 거래 기록
+- 국내/미국 단타 체결 로그
+- 브로커 동기화 로그
+- 계좌 스냅샷
+- 시뮬레이션 상세 거래 기록
 
----
+특히 `trade_log`, `simulation_trade`, 런타임 로그성 데이터는 장기간 방치하면 성능 저하와 분석 지연의 원인이 된다.
 
-## 테이블 설명
+## 정리 대상과 유지 정책
 
-### 1. daily_trade_summary (신규)
+| 대상 | 역할 | 유지 정책 |
+|------|------|-----------|
+| `trade_log` | 단타/무한매수 통합 이벤트 로그 | 최근 30일 중심 유지 |
+| `cycle_trade` | 실제 거래 사이클 기록 | 장기 보존 |
+| `account_snapshot` | 계좌 상태 스냅샷 | 운영 기준 보존 |
+| `daily_trade_summary` | 일별 요약 지표 | 장기 보존 |
+| `simulation_run` | 시뮬레이션 실행 요약 | 최근 90일 중심 유지 |
+| `simulation_trade` | 시뮬레이션 상세 체결 | 필요 시 정리 대상 |
 
-각 거래일의 요약 정보를 한 줄로 저장합니다.
+## 핵심 원칙
 
-```sql
-SELECT * FROM daily_trade_summary WHERE trade_date = '2026-05-08';
+### 1. 요약은 남기고 원시 로그는 줄인다
 
--- 결과:
--- trade_date        | buy_count | sell_count | total_buy_amount | realized_profit | ...
--- 2026-05-08        | 15        | 12         | 15000000.00      | 125000.00       | ...
-```
+운영 화면에서 자주 보는 값은 대부분 `daily_trade_summary`, `cycle_trade`, `account_snapshot`으로 복원할 수 있다. 따라서 오래된 원시 이벤트 로그는 무기한 유지할 필요가 없다.
 
-**포함 정보:**
-- 거래 개수 (매수/매도/총계)
-- 거래 금액 (총 매수/매도/순매수)
-- 수익성 (실현 손익, 수익률)
-- 거래 유형별 분류 (무한매수/단타/사이클 거래)
-- 참여 종목 (리스트)
+### 2. 실거래 복기에 필요한 데이터는 보존한다
 
-### 2. trade_log (정리됨)
+다음 정보는 함부로 지우지 않는다.
 
-최근 30일의 개별 거래 이벤트만 보관합니다.
+- 완료된 무한매수 사이클
+- 실계좌 손익 검증에 필요한 스냅샷
+- 일별 요약 및 핵심 성과 지표
 
-```sql
--- 정리 전: 100,000+ 레코드
--- 정리 후: 2,000~5,000 레코드 (최근 30일만)
-SELECT COUNT(*) FROM trade_log;
-```
+### 3. 시뮬레이션 상세 데이터는 운영 DB와 분리해서 생각한다
 
-**정리 방식:**
-- 매 30일마다 오래된 레코드 삭제
-- daily_trade_summary에 요약 저장됨
+시뮬레이션 상세 거래는 연구 중에는 유용하지만, 장기 운영 시 가장 빨리 불어나는 데이터다. 오래된 실험 데이터는 요약만 남기고 정리하는 편이 낫다.
 
-### 3. simulation_trade (삭제됨)
+## 권장 정리 순서
 
-시뮬레이션 상세 거래 기록은 필요 없으므로 모두 삭제합니다.
+1. 설정 화면에서 현재 테이블 상태 확인
+2. 최근 실거래/시뮬레이션 검토가 끝났는지 확인
+3. 거래 로그 정리 실행
+4. 오래된 시뮬레이션 정리 실행
+5. 일별 요약 재생성 또는 검증
 
-```sql
--- 정리 전: 1,000,000+ 레코드 (모든 시뮬레이션)
-DELETE FROM simulation_trade;
+## 설정 화면 기준 운영 작업
 
--- 정리 후: 0 레코드
-SELECT COUNT(*) FROM simulation_trade;
-```
+설정 화면의 데이터 관리 기능은 다음 목적에 사용한다.
 
-### 4. simulation_run (90일 유지)
+- 테이블별 적재량 확인
+- 오래된 거래 로그 삭제
+- 오래된 시뮬레이션 정리
+- 일별 요약 재생성
+- 불완전 거래 정리
 
-시뮬레이션 결과 요약만 90일 유지합니다.
+관련 구현:
+- [src/app/page.settings/api.py](src/app/page.settings/api.py)
+- [src/app/page.settings/maintenance_api.py](src/app/page.settings/maintenance_api.py)
+- [src/portal/trading/model/maintenance.py](src/portal/trading/model/maintenance.py)
 
-```sql
--- 정리 전: 500+ 레코드 (모든 연구 결과)
--- 정리 후: 50~100 레코드 (최근 90일만)
-SELECT COUNT(*) FROM simulation_run WHERE created > DATE_SUB(NOW(), INTERVAL 90 DAY);
-```
+## 실무적으로 남겨야 하는 것
 
----
+### 반드시 남길 것
 
-## 실행 방법
+- 일별 수익 요약
+- 실계좌 검증용 스냅샷
+- 완료 사이클 기록
+- 운영 장애 분석에 필요한 최근 로그
 
-### 방법 1: 수동 실행 (API)
+### 정리 후보
 
-```bash
-# 1. 현재 데이터베이스 상태 확인
-curl -X POST http://localhost:3000/wiz/api/page.settings/maintenance_status \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data ""
+- 30일이 지난 이벤트성 `trade_log`
+- 장기 보관 가치가 낮은 `simulation_trade`
+- 오래된 연구용 `simulation_run`
 
-# 응답:
-# {
-#   "tables": {
-#     "trade_log": 85000,
-#     "cycle_trade": 1200,
-#     "simulation_run": 450,
-#     "simulation_trade": 1200000,
-#     "daily_trade_summary": 30
-#   },
-#   "old_trade_logs_count": 40000
-# }
-```
+## 예시 운영 정책
 
-```bash
-# 2. 전체 정리 실행
-curl -X POST http://localhost:3000/wiz/api/page.settings/cleanup_database \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data ""
+| 작업 | 권장 주기 |
+|------|-----------|
+| 거래 로그 정리 | 매일 또는 주 1회 |
+| 시뮬레이션 상세 정리 | 주 1회 |
+| 일별 요약 재생성 | 매일 야간 |
+| 불완전 거래 정리 | 매일 야간 |
 
-# 응답:
-# {
-#   "removed_incomplete_trades": 35,
-#   "archived_trade_logs": 40000,
-#   "cleaned_simulation_runs": 250,
-#   "cleaned_simulation_trades": 1200000,
-#   "built_daily_summaries": 30
-# }
-```
+## 정리 전 체크리스트
 
-```bash
-# 3. 각각 실행
-
-# 거래 로그 정리 (30일 이상 삭제)
-curl -X POST http://localhost:3000/wiz/api/page.settings/cleanup_trade_logs \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data "days=30"
-
-# 시뮬레이션 정리 (90일 이상 삭제)
-curl -X POST http://localhost:3000/wiz/api/page.settings/cleanup_simulations \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data "days=90"
-
-# 일일 요약 재생성 (최근 30일)
-curl -X POST http://localhost:3000/wiz/api/page.settings/rebuild_summaries \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data "from_date=2026-04-08&to_date=2026-05-08"
-```
-
-### 방법 2: 자동 실행 (스케줄)
-
-설정 > 데이터 관리 페이지에서 "자동 정리 활성화" 체크
-
-- **실행 시간:** 매일 오후 11:00
-- **정리 항목:** 
-  - 오래된 거래 로그 (30일 이상)
-  - 불완전한 거래 (7일 이상 PENDING)
-  - 오래된 시뮬레이션 (90일 이상)
-  - 일일 요약 재생성 (최근 30일)
-
----
-
-## 데이터 복구
-
-### 거거래 로그 필요 시
-
-일별 요약에서 필요한 일자의 상세 정보 조회:
-
-```sql
--- 특정 날짜의 거래 요약 조회
-SELECT * FROM daily_trade_summary WHERE trade_date = '2026-05-08';
-
--- 해당 날짜의 완료된 사이클 조회 (거래 가능)
-SELECT * FROM cycle_trade WHERE trade_date = '2026-05-08' AND status = 'FILLED';
-```
-
-### 시뮬레이션 결과 필요 시
-
-simulation_run 요약에서 결과만 조회 가능:
-
-```sql
--- 특정 심볼의 시뮬레이션 결과만 확인
-SELECT symbol, start_date, end_date, total_profit_rate, win_rate 
-FROM simulation_run 
-WHERE symbol = 'AAPL' 
-ORDER BY created DESC 
-LIMIT 5;
-```
-
----
-
-## 예상 저장공간 절감
-
-| 항목 | 정리 전 | 정리 후 | 절감 |
-|------|--------|--------|------|
-| trade_log | 500MB | 50MB | **90%** |
-| simulation_trade | 800MB | 0MB | **100%** |
-| simulation_run | 100MB | 30MB | **70%** |
-| **총합** | **1.4GB** | **0.2GB** | **85%** |
-
----
+- 최근 거래 복기가 끝났는가
+- 필요한 시뮬레이션 결과를 문서/스크린샷 등으로 남겼는가
+- 대시보드 및 거래이력 화면 검증이 끝났는가
+- 삭제 후 복구 불가한 데이터인지 이해했는가
 
 ## 주의사항
 
-⚠️ **정리 전 필수:**
-1. 최근 거래 내역 확인 완료
-2. 필요한 시뮬레이션 결과 내려받기
-3. 데이터 정리 후 복구 불가 (성능 최우선)
+- 정리는 성능 최적화 작업이지, 실거래 근거를 없애는 작업이 되면 안 된다.
+- 브로커/KIS 기준 검증이 끝나기 전에는 최근 거래 로그를 대량 삭제하지 않는다.
+- 운영 중 장애 분석이 필요한 기간의 로그는 최소한 보관한다.
+- `data/` 아래 런타임 파일과 DB는 백업 없이 임의 삭제하지 않는다.
 
-⚠️ **시뮬레이션 주의:**
-- simulation_trade는 **재현 불가**
-- simulation_run의 **요약 정보만 유지**
-- 상세 거래 필요 시 새로 시뮬레이션 실행
+## 관련 문서
 
----
-
-## 정리 일정
-
-| 일시 | 정리 대상 | 유지 기간 |
-|------|---------|---------|
-| **매일 23:00** | 거래 로그 | 30일 |
-| **매일 23:15** | 불완전 거래 | 7일 |
-| **주 1회 (월요일 23:30)** | 시뮬레이션 | 90일 |
-| **매일 23:45** | 일일 요약 | 무제한 |
-
----
-
-## FAQ
-
-**Q: 거래 로그가 정말 필요 없는가?**
-A: daily_trade_summary가 모든 필요한 정보를 요약 보관합니다. 상세 거래가 필요하면 cycle_trade에서 조회 가능합니다.
-
-**Q: 시뮬레이션 재현을 원할 때는?**
-A: 시뮬레이션 재설정 후 재실행하면 됩니다. 상세 거래 기록(simulation_trade)이 필요 없으므로 재현은 불가능하지만, 결과 요약(simulation_run)으로 참고 가능합니다.
-
-**Q: 데이터 정리 중 문제 발생시?**
-A: 로그 확인: `/tmp/wiz_dashboard_api_errors.log`
-
-**Q: 정리 주기를 변경하려면?**
-A: `maintenance.py`의 호출 함수 파라미터 수정:
-- `archive_old_trade_logs(days_to_keep=60)` → 60일 유지
-- `cleanup_old_simulations(days_to_keep=180)` → 180일 유지
+- [README.md](README.md)
+- [src/portal/trading/README.md](src/portal/trading/README.md)
+- [docs/daytrade/live-trading-mechanism.md](docs/daytrade/live-trading-mechanism.md)
