@@ -102,6 +102,26 @@ class DomesticDaytradeEngine:
         """매 요청 DB 쿼리 대신 Struct 싱글톤 캐시에서 읽음 — 연결 고갈 방지"""
         return self.struct.get_config(key, default)
 
+    def _hard_locked(self):
+        return bool(getattr(self.struct, "daytrade_hard_locked", False))
+
+    def _hard_lock_message(self):
+        return str(getattr(self.struct, "daytrade_lock_message", "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."))
+
+    def _hard_locked_result(self):
+        return {
+            "executed": False,
+            "message": self._hard_lock_message(),
+            "hard_locked": True,
+            "results": [],
+            "candidates": [],
+        }
+
+    def _feature_enabled(self):
+        if self._hard_locked():
+            return False
+        return str(self._config("daytrade_feature_enabled", "false") or "false").lower() in ("1", "true", "yes", "y", "on")
+
     def _state_key(self, symbol, market="KS"):
         return f"{symbol}.{market}"
 
@@ -490,16 +510,19 @@ class DomesticDaytradeEngine:
     def _us_auto_buy_ready(self, now=None):
         now = now or self._now()
         hhmm = now.hour * 100 + now.minute
-        return hhmm >= 1740
+        cutoff = 2220 if self._is_us_dst() else 2320
+        return 1000 <= hhmm <= cutoff
 
     def _us_auto_buy_window(self, now=None):
         now = now or self._now()
         ready = self._us_auto_buy_ready(now)
+        cutoff_label = "22:20" if self._is_us_dst() else "23:20"
+        window_label = f"10:00-{cutoff_label} KST"
         return {
             "ready": ready,
-            "scheduled_at": "17:40 KST",
-            "label": "17:40 KST 이후 예약매수 시작",
-            "message": ("17:40 KST 이후 원화 자동환전 예약매수 허용" if ready else "17:40 KST 전이라 원화 자동환전 예약매수 대기 중"),
+            "scheduled_at": "10:00 KST",
+            "label": f"{window_label} 예약매수 가능",
+            "message": (f"{window_label} 원화 자동환전 예약매수 허용" if ready else f"{window_label} 전/후라 원화 자동환전 예약매수 대기 중"),
             "current_time": now.strftime("%H:%M KST"),
         }
 
@@ -1673,6 +1696,8 @@ class DomesticDaytradeEngine:
         }
 
     def kr_auto_cycle(self, requested_seed=0, force_recommend=False):
+        if self._hard_locked():
+            return self._hard_locked_result()
         if self.auto_enabled() is False:
             return {
                 "executed": False,
@@ -1920,6 +1945,23 @@ class DomesticDaytradeEngine:
         return live_supported and spec_market != "US"
 
     def execute_live(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True):
+        if self._hard_locked():
+            return {
+                "executed": False,
+                "message": self._hard_lock_message(),
+                "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
+                "action": "HARD_LOCKED",
+                "order_value": 0,
+                "hard_locked": True,
+            }
+        if self._feature_enabled() is False:
+            return {
+                "executed": False,
+                "message": "단타 기능이 관리자 설정에서 비활성화되어 주문을 실행하지 않습니다.",
+                "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
+                "action": "DISABLED",
+                "order_value": 0,
+            }
         strategy_id = self.strategy._normalize_strategy(strategy_id)
         status = self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
         signal = status.get("signal", {}) or {}
@@ -2024,14 +2066,14 @@ class DomesticDaytradeEngine:
                 if self._is_us_market(market):
                     auto_buy_window = self._us_auto_buy_window()
                     if auto_buy_window.get("ready") is False:
-                        message = str(auto_buy_window.get("message", "17:40 KST 전이라 미장 예약매수 대기 중입니다.") or "17:40 KST 전이라 미장 예약매수 대기 중입니다.")
+                        message = str(auto_buy_window.get("message", "10:00 KST 전이라 미장 예약매수 대기 중입니다.") or "10:00 KST 전이라 미장 예약매수 대기 중입니다.")
                         self._append_runtime_log(
                             "info",
                             f"{symbol} 예약매수 대기: {message}",
                             symbol=symbol,
                             strategy_id=strategy_id,
                             meta=self._compact_runtime_meta(status, {
-                                "scheduled_at": auto_buy_window.get("scheduled_at", "17:40 KST"),
+                                "scheduled_at": auto_buy_window.get("scheduled_at", "10:00 KST"),
                                 "current_time": auto_buy_window.get("current_time", ""),
                             }),
                         )
@@ -2228,8 +2270,14 @@ class DomesticDaytradeEngine:
                 "executed_count": 0,
                 "watched_count": 0,
                 "message": message,
+                "hard_locked": self._hard_locked(),
                 "results": [],
             }
+
+        if self._hard_locked():
+            return _disabled_result(self._hard_lock_message())
+        if self._feature_enabled() is False:
+            return _disabled_result("단타 기능이 관리자 설정에서 비활성화되어 자동청산 감시를 실행하지 않습니다.")
 
         def _market_exit_watch_enabled(target_market):
             if self._is_us_market(target_market):
@@ -2333,6 +2381,8 @@ class DomesticDaytradeEngine:
 
     def kr_execute_exit_watch(self, requested_seed=0):
         """활성 포지션에 대해 자동청산 감시 실행 (신규 매수 없음)"""
+        if self._hard_locked():
+            return {"executed": False, "executed_count": 0, "watched_count": 0, "message": self._hard_lock_message(), "hard_locked": True, "results": []}
         with self._global_lock("engine_cycle"):
             positions = [p for p in self.active_positions() if not self._is_us_market(p.get("market", "KS"))]
             results = []
@@ -2382,6 +2432,10 @@ class DomesticDaytradeEngine:
             return {"executed": executed_count > 0, "executed_count": executed_count, "watched_count": watched_count, "message": message, "results": results}
 
     def manual_sell(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", qty=None):
+        if self._hard_locked():
+            raise Exception(self._hard_lock_message())
+        if self._feature_enabled() is False:
+            raise Exception("단타 기능이 관리자 설정에서 비활성화되어 수동 단타 매도를 실행하지 않습니다.")
         state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
         position_qty = self._safe_int(state.get("position_qty", 0), 0)
         if position_qty <= 0:
@@ -3539,6 +3593,10 @@ class DomesticDaytradeEngine:
         return self.period_trade_summary(date_from=today, date_to=today, sync_broker=sync_broker, include_valuation=include_valuation)
 
     def auto_enabled(self, market="KS"):
+        if self._hard_locked():
+            return False
+        if self._feature_enabled() is False:
+            return False
         if self._is_us_market(market):
             modern = str(self._config("daytrade_us_auto_enabled", "")).lower()
             legacy = str(self._config("us_daytrade_auto_enabled", "")).lower()
@@ -4065,12 +4123,16 @@ class DomesticDaytradeEngine:
         return None
 
     def auto_cycle(self, requested_seed=0, force_recommend=False, market="KS", user_id=""):
+        if self._hard_locked():
+            return self._hard_locked_result()
         if self._is_us_market(market):
             return self.us_auto_cycle(requested_seed=requested_seed, force_recommend=force_recommend, user_id=user_id)
         return self.kr_auto_cycle(requested_seed=requested_seed, force_recommend=force_recommend)
 
     def us_auto_cycle(self, requested_seed=0, force_recommend=False, user_id=""):
         """미국 주식 자동매매 사이클"""
+        if self._hard_locked():
+            return self._hard_locked_result()
         if self.auto_enabled(market="US") is False:
             return {
                 "executed": False,
@@ -4278,6 +4340,8 @@ class DomesticDaytradeEngine:
 
     def us_execute_exit_watch(self, requested_seed=0, market="US"):
         """미장 활성 포지션에 대해 자동청산 감시 실행 (신규 매수 없음)"""
+        if self._hard_locked():
+            return {"executed": False, "executed_count": 0, "watched_count": 0, "message": self._hard_lock_message(), "hard_locked": True, "results": []}
         with self._global_lock("engine_cycle"):
             positions = [p for p in self.active_positions() if self._is_us_market(p.get("market", "KS"))]
             results = []

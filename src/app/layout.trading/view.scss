@@ -25,6 +25,24 @@
     color: #eaecef;
     position: relative;
     overflow: hidden;
+
+    button,
+    [role="button"],
+    .preset-outline-button {
+        white-space: nowrap;
+    }
+
+    button > span,
+    [role="button"] > span,
+    button > div,
+    [role="button"] > div {
+        min-width: 0;
+    }
+
+    button svg,
+    [role="button"] svg {
+        flex: 0 0 auto;
+    }
 }
 
 .trading-bg.theme-light {

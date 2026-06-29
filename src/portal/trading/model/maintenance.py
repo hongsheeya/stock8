@@ -286,3 +286,15 @@ def _log(level, message):
         getattr(logger, level)(message)
     except Exception:
         pass
+
+
+class _MaintenanceModel:
+    generate_daily_trade_summary = staticmethod(generate_daily_trade_summary)
+    archive_old_trade_logs = staticmethod(archive_old_trade_logs)
+    cleanup_old_simulations = staticmethod(cleanup_old_simulations)
+    remove_incomplete_trade_entries = staticmethod(remove_incomplete_trade_entries)
+    rebuild_daily_summaries = staticmethod(rebuild_daily_summaries)
+    database_maintenance = staticmethod(database_maintenance)
+
+
+Model = _MaintenanceModel()

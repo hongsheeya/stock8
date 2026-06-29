@@ -4,6 +4,7 @@ import os as _os
 import time as _time
 import datetime as _datetime
 import copy as _copy
+import re as _re
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -32,6 +33,8 @@ _active_positions_cache = {}
 _ACTIVE_POSITION_QUOTE_TTL_SEC = 4.0
 _active_position_quote_cache = {}
 _BROKER_SYNC_LOOKBACK_DAYS = 7
+_DAYTRADE_HARD_LOCKED = True
+_DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 
 def _kst_now():
     return _TIME.now()
@@ -69,6 +72,82 @@ def _daytrade():
 
 def _engine():
     return _get_struct().trading.daytrade_engine
+
+
+def _get_config(key, default=""):
+    trading = _get_struct().trading
+    getter = getattr(trading, "get_config", None)
+    if callable(getter):
+        return getter(key, default)
+    row = trading.db("trading_config").get(key=key)
+    return row.get("value", default) if row else default
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _csv_items(value):
+    return [token.strip() for token in _re.split(r"[\s,;\n]+", str(value or "")) if token.strip()]
+
+
+def _is_admin_user(user):
+    role = str((user or {}).get("role", "") or "").lower()
+    email = str((user or {}).get("email", "") or "").strip().lower()
+    return role == "admin" or email == "gigukbyun@gmail.com"
+
+
+def _session_user():
+    session = wiz.model("portal/season/session").use()
+    user_id = session.get("id")
+    if not user_id:
+        wiz.response.status(401, message="로그인이 필요합니다.")
+    user = _get_struct().user.get(id=user_id)
+    if not user:
+        wiz.response.status(404, message="사용자 정보를 찾을 수 없습니다.")
+    return user
+
+
+def _listed_user(user, id_key, email_key):
+    user_id = str((user or {}).get("id", "") or "").strip()
+    email = str((user or {}).get("email", "") or "").strip().lower()
+    ids = {str(item).strip() for item in _csv_items(_get_config(id_key, ""))}
+    emails = {str(item).strip().lower() for item in _csv_items(_get_config(email_key, ""))}
+    return (user_id and user_id in ids) or (email and email in emails)
+
+
+def _daytrade_access_payload():
+    user = _session_user()
+    is_admin = _is_admin_user(user)
+    feature_enabled = False if _DAYTRADE_HARD_LOCKED else _truthy(_get_config("daytrade_feature_enabled", "false"))
+    authorized = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_authorized_user_ids", "daytrade_authorized_user_emails")
+    confirmed = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_confirmed_user_ids", "daytrade_confirmed_user_emails")
+    return {
+        "is_admin": is_admin,
+        "daytrade_feature_enabled": feature_enabled,
+        "daytrade_user_authorized": authorized,
+        "daytrade_user_confirmed": confirmed,
+        "daytrade_access_enabled": False if _DAYTRADE_HARD_LOCKED else feature_enabled and authorized and confirmed,
+        "daytrade_hard_locked": _DAYTRADE_HARD_LOCKED,
+        "message": _DAYTRADE_LOCK_MESSAGE if _DAYTRADE_HARD_LOCKED else "",
+    }
+
+
+def _require_daytrade_access():
+    payload = _daytrade_access_payload()
+    if payload.get("daytrade_hard_locked"):
+        wiz.response.status(403, message=_DAYTRADE_LOCK_MESSAGE, **payload)
+    if payload.get("daytrade_feature_enabled") is False:
+        wiz.response.status(403, message="단타 기능이 관리자 설정에서 비활성화되어 있습니다.", **payload)
+    if payload.get("daytrade_user_authorized") is False:
+        wiz.response.status(403, message="관리자 인증을 받은 사용자만 단타 기능을 사용할 수 있습니다.", **payload)
+    if payload.get("daytrade_user_confirmed") is False:
+        wiz.response.status(403, message="단타 위험 확인 문구 입력이 필요합니다.", **payload)
+    return payload
+
+
+def access_status():
+    wiz.response.status(200, **_daytrade_access_payload())
 
 def _recommendation_price_cap(engine, budget_status, seed):
     fallback_seed = float(seed or 0) if float(seed or 0) > 0 else 0
@@ -1706,3 +1785,51 @@ def us_execute_exit_watch():
     except Exception as e:
         wiz.response.status(400, message=str(e))
     wiz.response.status(200, result=result)
+
+
+def _guard_daytrade_api(name):
+    original = globals().get(name)
+    if not callable(original):
+        return
+
+    def _wrapped(*args, **kwargs):
+        _require_daytrade_access()
+        return original(*args, **kwargs)
+
+    globals()[name] = _wrapped
+
+
+for _daytrade_api_name in [
+    "bootstrap",
+    "active_positions_snapshot",
+    "initial_data",
+    "recommend",
+    "sync_seed",
+    "train_symbol",
+    "debug_balance",
+    "live_status",
+    "execute_live",
+    "update_trade_settings",
+    "manual_sell",
+    "search_symbols",
+    "daily_log",
+    "period_summary",
+    "run_auto_cycle",
+    "toggle_auto_enabled",
+    "toggle_ignore_reserve",
+    "get_auto_status",
+    "us_candidate_universe",
+    "us_search_symbols",
+    "us_bootstrap",
+    "us_live_status",
+    "us_execute_live",
+    "us_toggle_auto",
+    "us_get_auto_status",
+    "us_daily_log",
+    "us_verify_runtime",
+    "us_model_ranking",
+    "us_manual_sell",
+    "us_auto_cycle",
+    "us_execute_exit_watch",
+]:
+    _guard_daytrade_api(_daytrade_api_name)

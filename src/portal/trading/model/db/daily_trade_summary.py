@@ -14,7 +14,8 @@ class Model(base):
         db_table = "daily_trade_summary"
 
     id = pw.CharField(max_length=32, primary_key=True)
-    trade_date = pw.CharField(max_length=10, index=True, unique=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
+    trade_date = pw.CharField(max_length=10, index=True)
     
     # 거래 개수
     buy_count = pw.IntegerField(default=0)

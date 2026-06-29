@@ -19,6 +19,7 @@ FIRE_GATE_WATCHLIST_MEMO_PREFIX = "FireGate portfolio "
 INFINITYSTOCK_SOURCE = "infinitystock"
 INFINITYSTOCK_PORTFOLIO_GROUP = "InfinityStock Auto"
 INFINITYSTOCK_PORTFOLIO_CATEGORY = "infinite_buy"
+KIS_US_ONLINE_COMMISSION_RATE = 0.25
 
 
 class FireGateBridgeError(Exception):
@@ -54,6 +55,22 @@ def _safe_int(value, default=0):
             return int(default)
         except Exception:
             return 0
+
+
+def _is_synthetic_trade_row(row):
+    row = row or {}
+    markers = [
+        str(row.get("order_type", "") or ""),
+        str(row.get("source", "") or ""),
+        str(row.get("broker_order_no", "") or ""),
+    ]
+    memo = str(row.get("memo", "") or "")
+    upper_markers = [item.upper().strip() for item in markers]
+    if any(item.startswith(("RECON", "AUDIT")) for item in upper_markers):
+        return True
+    if "브로커 잔고 기준 사이클 스냅샷 정렬" in memo:
+        return True
+    return False
 
 
 def _round2(value):
@@ -382,6 +399,69 @@ def _parse_firegate_datetime(value, fallback=None):
     return fallback
 
 
+def _transaction_sort_key(tx):
+    parsed = _parse_firegate_datetime((tx or {}).get("date"), None)
+    if parsed is None:
+        parsed = _parse_firegate_datetime((tx or {}).get("createdAt"), None)
+    if parsed is None:
+        parsed = _parse_firegate_datetime((tx or {}).get("created"), None)
+    if parsed is None:
+        parsed = datetime.datetime.min
+    return (
+        parsed,
+        str((tx or {}).get("id", "") or (tx or {}).get("_doc_id", "") or ""),
+    )
+
+
+def _portfolio_with_transaction_state(portfolio, transactions):
+    transactions = [dict(tx or {}) for tx in (transactions or [])]
+    valid_transactions = []
+    for tx in transactions:
+        if _is_synthetic_trade_row({
+            "order_type": tx.get("orderType"),
+            "source": tx.get("source"),
+            "broker_order_no": tx.get("sourceTradeId"),
+            "memo": tx.get("memo", ""),
+        }):
+            continue
+        tx_type = str(tx.get("type", "") or "").lower()
+        price = _safe_float(tx.get("price"), 0)
+        size = _safe_int(tx.get("size"), 0)
+        if tx_type in ("buy", "sell") and price > 0 and size > 0:
+            valid_transactions.append(tx)
+    if not valid_transactions:
+        return dict(portfolio or {})
+
+    static = dict(portfolio or {})
+    raw_has_cycle_state = (
+        _safe_int(static.get("holdingQty"), 0) > 0
+        or _safe_float(static.get("avgPrice"), 0) > 0
+        or _safe_float(static.get("tValue"), 0) > 0
+        or _safe_float(static.get("totalBuy"), 0) > 0
+        or _safe_float(static.get("totalSell"), 0) > 0
+    )
+    if _is_infinitystock_portfolio(static) and raw_has_cycle_state:
+        static["_transactionDerived"] = False
+        static["_transactionCount"] = len(valid_transactions)
+        return static
+
+    derived = {
+        **static,
+        "holdingQty": 0,
+        "avgPrice": 0,
+        "totalBuy": 0,
+        "totalSell": 0,
+        "tValue": 0,
+        "reverseMode": False,
+        "reverseModeStarPrice": 0,
+    }
+    for tx in sorted(valid_transactions, key=_transaction_sort_key):
+        derived = apply_v4_transaction(derived, tx)
+    derived["_transactionDerived"] = True
+    derived["_transactionCount"] = len(valid_transactions)
+    return derived
+
+
 def _firegate_running(portfolio):
     return bool((portfolio or {}).get("isRunning", False))
 
@@ -400,6 +480,51 @@ def _latest_cycle(cycle_db, symbol):
         return rows[0] if rows else None
     except Exception:
         return None
+
+
+def _local_filled_trade_state(trading, cycle_id):
+    state = {"buy_rounds": 0, "qty": 0, "spent": 0.0}
+    if not cycle_id:
+        return state
+    try:
+        trade_db = trading.db("cycle_trade")
+        rows = trade_db.rows(cycle_id=cycle_id, orderby="created", order="ASC", dump=1000) or []
+    except Exception:
+        return state
+    qty = 0
+    spent = 0.0
+    buy_rounds = 0
+    for row in rows:
+        if _is_synthetic_trade_row(row):
+            continue
+        if str(row.get("status", "") or "").upper() != "FILLED":
+            continue
+        action = str(row.get("action", "") or "").upper()
+        filled_qty = max(_safe_int(row.get("filled_qty"), 0), 0)
+        filled_amount = max(_safe_float(row.get("filled_amount"), 0), 0.0)
+        commission = max(_safe_float(row.get("commission"), 0), 0.0)
+        if action == "BUY":
+            qty += filled_qty
+            spent += filled_amount + commission
+            buy_rounds += 1
+        elif action == "SELL":
+            qty = max(0, qty - filled_qty)
+            if qty == 0:
+                spent = 0.0
+    return {"buy_rounds": buy_rounds, "qty": qty, "spent": round(spent, 2)}
+
+
+def _local_state_newer_than_portfolio(trading, cycle, remote_round, remote_qty, remote_spent):
+    if not cycle:
+        return False
+    trade_state = _local_filled_trade_state(trading, cycle.get("id"))
+    if trade_state["buy_rounds"] > _safe_int(remote_round, 0):
+        return True
+    if trade_state["qty"] > _safe_int(remote_qty, 0):
+        return True
+    if trade_state["spent"] > _safe_float(remote_spent, 0) + 0.01:
+        return True
+    return False
 
 
 def _watchlist_from_portfolio(trading, portfolio):
@@ -452,9 +577,11 @@ def _cycle_from_portfolio(trading, portfolio):
     target_profit = _safe_float((portfolio or {}).get("targetProfit"), 10)
     holding_qty = max(_safe_int((portfolio or {}).get("holdingQty"), 0), 0)
     avg_price = _safe_float((portfolio or {}).get("avgPrice"), 0)
+    reservation_avg_price = _round2(avg_price)
     total_buy = _safe_float((portfolio or {}).get("totalBuy"), 0)
     total_sell = _safe_float((portfolio or {}).get("totalSell"), 0)
     t_value = _safe_float((portfolio or {}).get("tValue"), 0)
+    buying_unit = _safe_float((portfolio or {}).get("buyingUnit"), 0)
     total_spent = avg_price * holding_qty if holding_qty > 0 else max(total_buy - total_sell, 0)
     remaining = max(seed - max(total_buy - total_sell, 0), 0)
     current_round = int(math.floor(max(t_value, 0)))
@@ -462,7 +589,12 @@ def _cycle_from_portfolio(trading, portfolio):
     started_at = _parse_firegate_datetime((portfolio or {}).get("startDate"), now)
     completed_at = _parse_firegate_datetime((portfolio or {}).get("endDate"), now if status == "COMPLETED" else None)
     current_price = _safe_float((portfolio or {}).get("sellPrice"), 0)
+    if holding_qty > 0 and current_price <= 0:
+        current_price = _safe_float((existing or {}).get("current_price"), 0)
+    if holding_qty > 0 and current_price <= 0:
+        current_price = avg_price
     current_eval = round(holding_qty * current_price, 2) if holding_qty > 0 and current_price > 0 else round(total_sell, 2)
+    profit_rate = ((current_eval - total_spent) / total_spent * 100) if total_spent > 0 and current_eval > 0 else 0.0
     data = {
         "symbol": symbol,
         "status": status,
@@ -474,9 +606,11 @@ def _cycle_from_portfolio(trading, portfolio):
         "total_spent": round(total_spent, 2),
         "total_qty": holding_qty,
         "avg_price": round(avg_price, 4),
+        "_firegate_raw_avg_price": round(avg_price, 4),
+        "_firegate_reservation_avg_price": reservation_avg_price,
         "current_price": current_price,
         "current_eval": current_eval,
-        "profit_rate": 0.0,
+        "profit_rate": round(profit_rate, 2),
         "remaining_investment": round(remaining, 2) if status != "COMPLETED" else 0.0,
         "started_at": started_at,
         "completed_at": completed_at,
@@ -501,6 +635,85 @@ def _cycle_from_portfolio(trading, portfolio):
         "created": now,
     })
     return "created"
+
+
+def _authoritative_cycle_state_from_portfolio(portfolio):
+    symbol = _portfolio_symbol(portfolio)
+    if not symbol:
+        return None
+    seed = _safe_float((portfolio or {}).get("seed"), 0)
+    division_count = max(_safe_int((portfolio or {}).get("divisionDate"), 20), 1)
+    target_profit = _safe_float((portfolio or {}).get("targetProfit"), default_target_profit(symbol))
+    holding_qty = max(_safe_int((portfolio or {}).get("holdingQty"), 0), 0)
+    avg_price = _safe_float((portfolio or {}).get("avgPrice"), 0)
+    reservation_avg_price = _round2(avg_price)
+    total_buy = _safe_float((portfolio or {}).get("totalBuy"), 0)
+    total_sell = _safe_float((portfolio or {}).get("totalSell"), 0)
+    t_value = _safe_float((portfolio or {}).get("tValue"), 0)
+    buying_unit = _safe_float((portfolio or {}).get("buyingUnit"), 0)
+    invested = max(total_buy - total_sell, 0)
+    total_spent = avg_price * holding_qty if holding_qty > 0 and avg_price > 0 else invested
+    remaining = max(seed - invested, 0)
+    current_price = _safe_float((portfolio or {}).get("sellPrice"), 0)
+    if holding_qty > 0 and current_price <= 0:
+        current_price = avg_price
+    current_eval = round(holding_qty * current_price, 2) if holding_qty > 0 and current_price > 0 else round(total_sell, 2)
+    profit_rate = ((current_eval - total_spent) / total_spent * 100) if total_spent > 0 and current_eval > 0 else 0.0
+    return {
+        "symbol": symbol,
+        "status": _cycle_status_from_portfolio(portfolio, holding_qty=holding_qty, total_buy=total_buy, total_sell=total_sell),
+        "current_round": int(math.floor(max(t_value, 0))),
+        "t_value": t_value,
+        "division_count": division_count,
+        "target_profit": target_profit,
+        "total_investment": seed,
+        "buying_unit": round(buying_unit, 4),
+        "buyingUnit": round(buying_unit, 4),
+        "total_buy": round(total_buy, 2),
+        "total_sell": round(total_sell, 2),
+        "total_spent": round(total_spent, 2),
+        "total_qty": holding_qty,
+        "avg_price": round(avg_price, 4),
+        "_firegate_raw_avg_price": round(avg_price, 4),
+        "_firegate_reservation_avg_price": reservation_avg_price,
+        "current_price": current_price,
+        "current_eval": current_eval,
+        "profit_rate": round(profit_rate, 2),
+        "remaining_investment": round(remaining, 2),
+        "_firegate_authoritative": True,
+        "_firegate_portfolio_id": str((portfolio or {}).get("id", "") or ""),
+        "_firegate_source": _portfolio_source(portfolio),
+        "_firegate_source_cycle_id": str((portfolio or {}).get("sourceCycleId", "") or ""),
+        "_firegate_updated_at": str((portfolio or {}).get("updatedAt", "") or ""),
+    }
+
+
+def authoritative_portfolio_states(struct, symbol_filter=""):
+    symbol_filter = _normalize_symbol(symbol_filter)
+
+    def _load(bridge, _cfg):
+        portfolios = bridge.list_portfolios() or []
+        rows = _select_pull_portfolios(portfolios, symbol_filter=symbol_filter)
+        states = {}
+        duplicate_ids = {}
+        for portfolio in rows:
+            state = _authoritative_cycle_state_from_portfolio(portfolio)
+            if not state:
+                continue
+            symbol = state.get("symbol")
+            if symbol in states:
+                duplicate_ids.setdefault(symbol, [states[symbol].get("_firegate_portfolio_id", "")])
+                duplicate_ids[symbol].append(state.get("_firegate_portfolio_id", ""))
+                states[symbol]["_firegate_ambiguous"] = True
+                states[symbol]["_firegate_duplicate_portfolio_ids"] = [
+                    item for item in duplicate_ids[symbol] if item
+                ]
+                continue
+            states[symbol] = state
+        return states
+
+    result = _bridge_call_from_config(struct, _load)
+    return result or {}
 
 
 def _cleanup_removed_portfolios(trading, remote_symbols, symbol_filter=""):
@@ -580,8 +793,16 @@ def sync_portfolios_to_local(struct, symbol_filter=""):
         watchlist_updated = 0
         cycles_created = 0
         cycles_updated = 0
+        transaction_derived = 0
         symbols = []
         for portfolio in rows:
+            try:
+                transactions = bridge.list_transactions(portfolio.get("id"))
+            except Exception:
+                transactions = []
+            portfolio = _portfolio_with_transaction_state(portfolio, transactions)
+            if portfolio.get("_transactionDerived"):
+                transaction_derived += 1
             symbol = _portfolio_symbol(portfolio)
             if symbol:
                 symbols.append(symbol)
@@ -607,6 +828,7 @@ def sync_portfolios_to_local(struct, symbol_filter=""):
             "watchlist_updated": watchlist_updated,
             "cycles_created": cycles_created,
             "cycles_updated": cycles_updated,
+            "transaction_derived_portfolios": transaction_derived,
             "removed_watchlists": cleanup.get("removed_watchlists", 0),
             "archived_cycles": cleanup.get("archived_cycles", 0),
             "synced_symbols": symbols,
@@ -624,6 +846,7 @@ def sync_portfolios_to_local(struct, symbol_filter=""):
             "watchlist_updated": 0,
             "cycles_created": 0,
             "cycles_updated": 0,
+            "transaction_derived_portfolios": 0,
             "removed_watchlists": 0,
             "archived_cycles": 0,
             "synced_symbols": [],
@@ -725,6 +948,7 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 division_count=division_count,
                 target_profit=target_profit,
                 nickname=infinitystock_portfolio_nickname(symbol, cycle),
+                commission_rate=_safe_float(trading.get_config("buy_commission_rate", KIS_US_ONLINE_COMMISSION_RATE), KIS_US_ONLINE_COMMISSION_RATE),
                 cycle=cycle,
                 include_state=False,
                 source=INFINITYSTOCK_SOURCE,
@@ -752,6 +976,9 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 if trade_id in synced_trade_ids:
                     skipped_trades += 1
                     continue
+                if _is_synthetic_trade_row(trade):
+                    skipped_trades += 1
+                    continue
                 if str(trade.get("status", "")).upper() != "FILLED":
                     skipped_trades += 1
                     continue
@@ -770,6 +997,7 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                     division_count=division_count,
                     target_profit=target_profit,
                     nickname=infinitystock_portfolio_nickname(symbol, cycle),
+                    commission_rate=_safe_float(trading.get_config("buy_commission_rate", KIS_US_ONLINE_COMMISSION_RATE), KIS_US_ONLINE_COMMISSION_RATE),
                     cycle=cycle,
                     include_state=True,
                     source=INFINITYSTOCK_SOURCE,
@@ -818,6 +1046,23 @@ def sync_local_to_firegate(struct, symbol_filter=""):
     return result
 
 
+def sync_firegate_authoritative(struct, symbol_filter=""):
+    pull = sync_portfolios_to_local(struct, symbol_filter=symbol_filter)
+    return {
+        **(pull or {}),
+        "executed": bool((pull or {}).get("executed", False)),
+        "mode": "firegate_pull_authoritative",
+        "message": (
+            f"FireGate 기준 동기화 완료: 풀 {(pull or {}).get('firegate_portfolios', 0)}건"
+        ),
+        "pull": pull,
+        "pushed_portfolios": 0,
+        "created_portfolios": 0,
+        "pushed_trades": 0,
+        "skipped_trades": 0,
+    }
+
+
 def sync_portfolios_bidirectional(struct, symbol_filter=""):
     push = sync_local_to_firegate(struct, symbol_filter=symbol_filter)
     pull = sync_portfolios_to_local(struct, symbol_filter=symbol_filter)
@@ -847,7 +1092,7 @@ def build_v4_portfolio(
     division_count=20,
     target_profit=15,
     nickname="",
-    commission_rate=0,
+    commission_rate=KIS_US_ONLINE_COMMISSION_RATE,
     cycle=None,
     include_state=True,
     source="",
@@ -879,9 +1124,9 @@ def build_v4_portfolio(
         reverse_mode = bool(cycle.get("reverseMode", cycle.get("reverse_mode", False)))
         status = str(cycle.get("status", "") or "").upper()
         is_running = status != "COMPLETED"
+        sell_price = _safe_float(cycle.get("current_price", cycle.get("sellPrice", 0)), 0)
         if status == "COMPLETED":
             end_date = format_firegate_date(cycle.get("completed_at", ""))
-            sell_price = _safe_float(cycle.get("current_price", 0), 0)
 
     payload = {
         "id": now_id,
@@ -922,6 +1167,8 @@ def build_v4_portfolio(
 
 
 def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
+    if _is_synthetic_trade_row(trade):
+        return None
     action = str((trade or {}).get("action", "") or "").upper()
     if action not in ("BUY", "SELL"):
         return None
@@ -929,6 +1176,11 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
     size = _safe_int((trade or {}).get("filled_qty") or (trade or {}).get("order_qty"), 0)
     if price <= 0 or size <= 0:
         return None
+    source_trade_id = (
+        str((trade or {}).get("id", "") or "").strip()
+        or str((trade or {}).get("broker_order_no", "") or "").strip()
+        or f"{str((trade or {}).get('cycle_id', '') or '')}:{action}:{format_firegate_date((trade or {}).get('trade_date'))}:{price}:{size}"
+    )
     tx = {
         "type": "buy" if action == "BUY" else "sell",
         "ticker": _normalize_symbol((trade or {}).get("symbol", (portfolio or {}).get("ticker", ""))),
@@ -938,7 +1190,7 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
         "portfolioId": _safe_int(portfolio_id, portfolio_id),
         "commission": _safe_float((trade or {}).get("commission"), 0),
         "source": INFINITYSTOCK_SOURCE,
-        "sourceTradeId": str((trade or {}).get("id", "")),
+        "sourceTradeId": source_trade_id,
         "sourceCycleId": str((trade or {}).get("cycle_id", "")),
         "orderType": str((trade or {}).get("order_type", "")),
         "strategyType": str((trade or {}).get("strategy_type", "")),
@@ -948,6 +1200,14 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
     elif tx["type"] == "buy" and portfolio:
         tx["tDelta"] = calculate_v4_t_delta(portfolio, tx)
     return tx
+
+
+def transaction_document_id(tx):
+    """Use a stable Firestore document id for local trades so retries stay idempotent."""
+    source_trade_id = str((tx or {}).get("sourceTradeId", "") or "").strip()
+    if source_trade_id and "/" not in source_trade_id:
+        return source_trade_id[:140]
+    return None
 
 
 def calculate_v4_t_delta(portfolio, tx):
@@ -1058,7 +1318,8 @@ class FireGateBridge:
     def _request(self, method, url, body=None, params=None):
         params = _with_api_key(params)
         if params:
-            url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urllib.parse.urlencode(params, doseq=True)}"
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -1073,9 +1334,21 @@ class FireGateBridge:
                 raise FireGateAuthError(f"FireGate auth failed: {e.code} {detail}")
             raise FireGateBridgeError(f"FireGate request failed: {e.code} {detail}")
 
+    def _list_collection(self, collection, page_size=300):
+        rows = []
+        page_token = ""
+        while True:
+            params = {"pageSize": max(_safe_int(page_size, 300), 1)}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._request("GET", self._path(collection), params=params)
+            rows.extend(decode_firestore_document(doc) for doc in data.get("documents", []) or [])
+            page_token = str(data.get("nextPageToken", "") or "")
+            if not page_token:
+                return rows
+
     def list_portfolios(self):
-        data = self._request("GET", self._path("portfolios"))
-        return [decode_firestore_document(doc) for doc in data.get("documents", []) or []]
+        return self._list_collection("portfolios")
 
     def get_portfolio(self, portfolio_id):
         data = self._request("GET", self._path("portfolios", portfolio_id))
@@ -1102,8 +1375,7 @@ class FireGateBridge:
         return decode_firestore_document(data)
 
     def list_transactions(self, portfolio_id):
-        data = self._request("GET", self._path("transactions"))
-        rows = [decode_firestore_document(doc) for doc in data.get("documents", []) or []]
+        rows = self._list_collection("transactions")
         return [row for row in rows if str(row.get("portfolioId", "")) == str(portfolio_id)]
 
     def create_transaction(self, tx, doc_id=None):
@@ -1139,7 +1411,7 @@ class FireGateBridge:
         division_count=20,
         target_profit=15,
         nickname="",
-        commission_rate=0,
+        commission_rate=KIS_US_ONLINE_COMMISSION_RATE,
         cycle=None,
         include_state=False,
         source="",
@@ -1194,7 +1466,7 @@ class FireGateBridge:
         tx = {**(tx or {}), "portfolioId": _safe_int(portfolio_id, portfolio_id)}
         if tx.get("type") == "buy" and "tDelta" not in tx:
             tx["tDelta"] = calculate_v4_t_delta(portfolio, tx)
-        saved_tx = self.create_transaction(tx)
+        saved_tx = self.create_transaction(tx, doc_id=transaction_document_id(tx))
         updated_payload = apply_v4_transaction(portfolio, tx)
         updated = self.update_portfolio(portfolio_id, updated_payload)
         return saved_tx, {**updated_payload, **updated}
@@ -1208,6 +1480,8 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
     status = str((trade or {}).get("status", "") or "").upper()
     if action not in ("BUY", "SELL") or status != "FILLED":
         return {"synced": False, "reason": "unsupported_trade"}
+    if _is_synthetic_trade_row(trade):
+        return {"synced": False, "reason": "synthetic_trade"}
     symbol = _normalize_symbol((trade or {}).get("symbol") or (cycle or {}).get("symbol"))
     if not symbol:
         return {"synced": False, "reason": "missing_symbol"}
@@ -1239,7 +1513,10 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
                 portfolio_group=INFINITYSTOCK_PORTFOLIO_GROUP,
                 portfolio_category=INFINITYSTOCK_PORTFOLIO_CATEGORY,
             )
-        source_trade_id = str((trade or {}).get("id", ""))
+        source_trade_id = (
+            str((trade or {}).get("id", "") or "").strip()
+            or str((trade or {}).get("broker_order_no", "") or "").strip()
+        )
         if source_trade_id:
             for tx in bridge.list_transactions(portfolio.get("id")):
                 if str(tx.get("source", "")) == INFINITYSTOCK_SOURCE and str(tx.get("sourceTradeId", "")) == source_trade_id:
@@ -1271,8 +1548,10 @@ class _FireGateBridgeModel:
     load_bridge_config = staticmethod(load_bridge_config)
     save_bridge_config = staticmethod(save_bridge_config)
     bridge_from_config = staticmethod(bridge_from_config)
+    authoritative_portfolio_states = staticmethod(authoritative_portfolio_states)
     sync_portfolios_to_local = staticmethod(sync_portfolios_to_local)
     sync_local_to_firegate = staticmethod(sync_local_to_firegate)
+    sync_firegate_authoritative = staticmethod(sync_firegate_authoritative)
     sync_portfolios_bidirectional = staticmethod(sync_portfolios_bidirectional)
     build_v4_portfolio = staticmethod(build_v4_portfolio)
     default_target_profit = staticmethod(default_target_profit)
@@ -1281,6 +1560,7 @@ class _FireGateBridgeModel:
     calculate_v4_t_delta = staticmethod(calculate_v4_t_delta)
     apply_v4_transaction = staticmethod(apply_v4_transaction)
     transaction_from_cycle_trade = staticmethod(transaction_from_cycle_trade)
+    transaction_document_id = staticmethod(transaction_document_id)
     sync_cycle_trade = staticmethod(sync_cycle_trade)
 
 

@@ -14,7 +14,8 @@ class Model(base):
         db_table = "account_snapshot"
 
     id = pw.CharField(max_length=32, primary_key=True)
-    snapshot_date = pw.CharField(max_length=10, unique=True, index=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
+    snapshot_date = pw.CharField(max_length=10, index=True)
     cash_balance = pw.FloatField(default=0.0)
     eval_amount = pw.FloatField(default=0.0)
     total_asset = pw.FloatField(default=0.0)

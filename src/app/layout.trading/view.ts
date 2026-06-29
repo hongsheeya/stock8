@@ -2,7 +2,7 @@ import { OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
 
 export class Component implements OnInit {
-    public themeMode: 'dark' | 'light' = 'dark';
+    public themeMode: 'dark' | 'light' = 'light';
     private themeListener: any = null;
 
     constructor(public service: Service) { }
@@ -39,9 +39,9 @@ export class Component implements OnInit {
     private loadThemePreference() {
         try {
             const saved = window.localStorage.getItem('dashboard-theme-mode');
-            this.themeMode = saved === 'light' ? 'light' : 'dark';
+            this.themeMode = saved === 'dark' ? 'dark' : 'light';
         } catch (e) {
-            this.themeMode = 'dark';
+            this.themeMode = 'light';
         }
     }
 }

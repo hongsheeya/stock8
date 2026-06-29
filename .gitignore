@@ -7,6 +7,13 @@ node_modules/
 /test/
 package-lock.json
 
+# Runtime/private recovery data. Keep real credentials and database dumps out of
+# the public repository; store them in a private backup channel instead.
+data/*.db
+data/db/*.db
+*.sqlite
+*.sqlite3
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

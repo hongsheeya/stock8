@@ -3,12 +3,19 @@ import datetime
 import random
 import re
 import copy
+import os
 import threading
 import traceback
 import time
 import sys as _sys
+import urllib.parse
+import urllib.request
 
 _TIME = wiz.model("portal/trading/kst")
+try:
+    _SESSION_MODEL = wiz.model("portal/season/session")
+except Exception:
+    _SESSION_MODEL = None
 
 _ERR_LOG = "/tmp/wiz_dashboard_api_errors.log"
 
@@ -31,6 +38,9 @@ except Exception as e:
     _dump_error("logger_init", e)
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
+_LOC_RESERVATION_START_HHMM = 1000
+_LOC_RESERVATION_END_STANDARD_HHMM = 2320
+_LOC_RESERVATION_END_SUMMER_HHMM = 2220
 _STRUCT_CACHE = {"obj": None, "error": None, "error_at": 0.0}
 _STRUCT_ERROR_TTL_SEC = 5.0
 _KIS_STATUS_CACHE = {"checked_at": 0.0, "result": None, "last_success_at": 0.0}
@@ -39,14 +49,70 @@ _KIS_STATUS_FAILURE_TTL_SEC = 3.0
 _KIS_STICKY_SUCCESS_GRACE_SEC = 180.0
 _OVERVIEW_CACHE = {}
 _TRADE_PREVIEW_CACHE = {}
+_PROFIT_SUMMARY_CACHE = {}
+_US_LIVE_PRICE_CACHE = {}
+_DUE_AUTOMATION_LAST_BUCKET = ""
 _CACHE_LOCK = threading.Lock()
 _SINGLEFLIGHT_EVENTS = {}
-_OVERVIEW_TTL_SEC = 10.0
+_OVERVIEW_TTL_SEC = 30.0
 _TRADE_PREVIEW_TTL_SEC = 12.0
+_PROFIT_SUMMARY_TTL_SEC = 30.0
+_EXTERNAL_CYCLE_SYNC_TTL_SEC = 300.0
+_US_LIVE_PRICE_TTL_SEC = 10.0
 
 _FIREGATE_INFINITY_SOURCE = "infinitystock"
 _FIREGATE_INFINITY_GROUP = "InfinityStock Auto"
 _FIREGATE_INFINITY_CATEGORY = "infinite_buy"
+
+
+def _loc_hhmm_text(hhmm):
+    return f"{int(hhmm) // 100:02d}:{int(hhmm) % 100:02d}"
+
+
+def _nth_weekday(year, month, weekday, nth):
+    day = datetime.date(year, month, 1)
+    offset = (weekday - day.weekday()) % 7
+    return day + datetime.timedelta(days=offset + (nth - 1) * 7)
+
+
+def _us_summer_time_for_kst(now):
+    try:
+        from zoneinfo import ZoneInfo
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        return bool(now.astimezone(ZoneInfo("America/New_York")).dst())
+    except Exception:
+        today = now.date()
+        start = _nth_weekday(today.year, 3, 6, 2)
+        end = _nth_weekday(today.year, 11, 6, 1)
+        return start <= today < end
+
+
+def _loc_reservation_cutoff_hhmm(now):
+    return _LOC_RESERVATION_END_SUMMER_HHMM if _us_summer_time_for_kst(now) else _LOC_RESERVATION_END_STANDARD_HHMM
+
+
+def _loc_reservation_window_label(now=None):
+    now = now or _TIME.now()
+    return f"{_loc_hhmm_text(_LOC_RESERVATION_START_HHMM)}-{_loc_hhmm_text(_loc_reservation_cutoff_hhmm(now))} KST"
+
+
+def _loc_reservation_next_start_label():
+    return f"{_loc_hhmm_text(_LOC_RESERVATION_START_HHMM)} KST"
+
+
+def _loc_reservation_window_state(now):
+    hhmm = now.hour * 100 + now.minute
+    cutoff = _loc_reservation_cutoff_hhmm(now)
+    if hhmm < _LOC_RESERVATION_START_HHMM:
+        return "before"
+    if hhmm > cutoff:
+        return "after"
+    return "open"
+
+
+def _loc_reservation_window_open(now):
+    return _loc_reservation_window_state(now) == "open"
 
 
 def _cache_get(store, key, ttl_sec):
@@ -87,6 +153,109 @@ def _singleflight(key, builder, timeout_sec=60.0):
     return None, False
 
 
+def _session_user_id():
+    global _SESSION_MODEL
+    try:
+        if _SESSION_MODEL is None:
+            _SESSION_MODEL = wiz.model("portal/season/session")
+        session = _SESSION_MODEL.use()
+        return str(session.get("id", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _dashboard_cache_scope():
+    user_id = _session_user_id()
+    return f"user:{user_id}" if user_id else "anon"
+
+
+def _broker_setup_state(trading, require_connection=False):
+    user_id = _session_user_id()
+    if not user_id:
+        return {
+            "allowed": False,
+            "user_id": "",
+            "broker_provider": "",
+            "configured": False,
+            "connected": False,
+            "message": "로그인 세션을 확인하지 못했습니다. 다시 로그인한 뒤 이용해주세요.",
+        }
+
+    try:
+        provider = str(trading.get_config("broker_provider", "kis") or "kis").strip().lower()
+    except Exception:
+        provider = "kis"
+    if provider not in ("kis", "toss"):
+        provider = "kis"
+
+    missing = []
+    if provider == "toss":
+        if str(trading.get_config("toss_client_id", "") or "").strip() == "":
+            missing.append("토스증권 클라이언트 ID")
+        if str(trading.get_config("toss_client_secret", "") or "").strip() == "":
+            missing.append("토스증권 클라이언트 비밀키")
+    else:
+        if str(trading.get_config("kis_app_key", "") or "").strip() == "":
+            missing.append("한국투자증권 App Key")
+        if str(trading.get_config("kis_app_secret", "") or "").strip() == "":
+            missing.append("한국투자증권 App Secret")
+        if str(trading.get_config("kis_account_no", "") or "").strip() == "":
+            missing.append("한국투자증권 계좌번호")
+
+    if missing:
+        return {
+            "allowed": False,
+            "user_id": user_id,
+            "broker_provider": provider,
+            "configured": False,
+            "connected": False,
+            "message": "증권사 API 연결 전에는 개인정보 보호를 위해 대시보드 자산/수익/보유내역을 표시하지 않습니다. 설정에서 " + ", ".join(missing) + "을 입력해주세요.",
+        }
+
+    if require_connection:
+        status = _kis_connection_status(trading, ttl_sec=0)
+        sticky_only = status.get("sticky") is True and status.get("raw_success") is False
+        if status.get("success") is not True or sticky_only:
+            return {
+                "allowed": False,
+                "user_id": user_id,
+                "broker_provider": provider,
+                "configured": True,
+                "connected": False,
+                "message": "증권사 API 연결이 확인되지 않아 개인정보 보호를 위해 대시보드 자산/수익/보유내역을 표시하지 않습니다. 설정에서 연결 테스트를 완료해주세요.",
+                "connection_message": str(status.get("message", "") or ""),
+            }
+
+    return {
+        "allowed": True,
+        "user_id": user_id,
+        "broker_provider": provider,
+        "configured": True,
+        "connected": bool(require_connection),
+        "message": "",
+    }
+
+
+def _require_dashboard_access(require_connection=True):
+    trading = _require_trading()
+    setup_state = _broker_setup_state(trading, require_connection=require_connection)
+    if setup_state.get("allowed") is not True:
+        message = setup_state.get("message", "")
+        detail = str(setup_state.get("connection_message", "") or "").strip()
+        if detail:
+            message = f"{message} ({detail})"
+        wiz.response.status(
+            403,
+            message=message,
+            setup_required=True,
+            privacy_locked=True,
+            broker_provider=setup_state.get("broker_provider", ""),
+            broker_configured=setup_state.get("configured", False),
+            broker_connected=setup_state.get("connected", False),
+        )
+    return trading
+
+
 def _log(level, message):
     try:
         if logger is None:
@@ -104,6 +273,77 @@ def _log(level, message):
 
 def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "y", "yes", "on")
+
+
+def _loc_schedule_mark_done(result):
+    if not isinstance(result, dict) or len(result) == 0:
+        return False
+    result = result or {}
+    status = str(result.get("status", "") or "").lower()
+    try:
+        error_count = int(float(result.get("error_count", 0) or 0))
+    except Exception:
+        error_count = 0
+    try:
+        scheduled_count = int(float(result.get("scheduled_count", 0) or 0))
+    except Exception:
+        scheduled_count = 0
+    try:
+        already_scheduled_count = int(float(result.get("already_scheduled_count", 0) or 0))
+    except Exception:
+        already_scheduled_count = 0
+    try:
+        skipped_count = int(float(result.get("skipped_count", 0) or 0))
+    except Exception:
+        skipped_count = 0
+    try:
+        missing_count = int(float(result.get("missing_count", 0) or 0))
+    except Exception:
+        missing_count = 0
+    expected_raw = result.get("expected_count", None)
+    expected_count = None
+    if expected_raw is not None:
+        try:
+            expected_count = int(float(expected_raw or 0))
+        except Exception:
+            expected_count = None
+    try:
+        satisfied_count = int(float(result.get("satisfied_count", scheduled_count + already_scheduled_count) or 0))
+    except Exception:
+        satisfied_count = scheduled_count + already_scheduled_count
+    if status in ("error", "partial_error", "partial_pending") or error_count > 0 or skipped_count > 0 or missing_count > 0:
+        return False
+    if expected_count is not None:
+        return satisfied_count >= expected_count
+    if scheduled_count > 0 or already_scheduled_count > 0:
+        return True
+    return status not in ("error", "partial_error") and error_count <= 0
+
+
+def _external_cycle_sync_verified(result):
+    result = result or {}
+    if result.get("verified") is True:
+        return True
+    status = str(result.get("status", "") or "").lower()
+    if status != "completed":
+        return False
+    for key in ("error_count", "unresolved_count", "unverified_count"):
+        try:
+            if int(float(result.get(key, 0) or 0)) > 0:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _safe_float(value, default=0.0):
+    try:
+        text = str(value if value is not None else "").strip()
+        if text == "":
+            return float(default)
+        return float(text)
+    except Exception:
+        return float(default)
 
 
 def _normalize_symbol(value):
@@ -144,6 +384,46 @@ def _filter_rows_by_symbols(rows, symbols):
         if _normalize_symbol((row or {}).get("symbol")) in symbol_set:
             filtered.append(row)
     return filtered
+
+
+def _sync_external_cycle_trades_if_due(trading, force=False, symbol_filter=""):
+    key = f"_dashboard_external_cycle_sync_ts:{str(symbol_filter or '').upper()}"
+    bucket_key = f"_dashboard_external_cycle_sync_bucket:{str(symbol_filter or '').upper()}"
+    now_ts = time.monotonic()
+    now = _TIME.now()
+    last_ts = float(getattr(_sys, key, 0.0) or 0.0)
+    bucket = f"{now.strftime('%Y-%m-%d')}-{now.hour:02d}-{now.minute // 10}"
+    last_bucket = str(getattr(_sys, bucket_key, "") or "")
+    if force is False:
+        if not (8 <= int(now.hour) < 10):
+            return {"status": "deferred", "synced_count": 0, "message": "outside_morning_sync_window", "scheduled_window": "08:00-10:00 KST"}
+        if last_bucket == bucket or (now_ts - last_ts) < 60:
+            return {"status": "cached", "synced_count": 0, "bucket": bucket, "scheduled_window": "08:00-10:00 KST"}
+    try:
+        result = trading.engine.sync_external_cycle_trades(lookback_days=7, symbol_filter=symbol_filter) or {}
+        if _external_cycle_sync_verified(result):
+            setattr(_sys, key, now_ts)
+            setattr(_sys, bucket_key, bucket)
+        result["bucket"] = bucket
+        result["scheduled_window"] = "08:00-10:00 KST"
+        return result
+    except Exception as e:
+        _dump_error("external_cycle_sync", e)
+        return {"status": "error", "message": str(e), "synced_count": 0}
+
+
+def _loc_reservation_bucket(now):
+    schedule_key = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d") if now.hour < 7 else now.strftime("%Y-%m-%d")
+    return f"{schedule_key}-{now.hour:02d}-{now.minute // 5}"
+
+
+def _sync_firegate_portfolios_before_loc(trading, symbol_filter=""):
+    try:
+        fg = wiz.model("portal/trading/struct/firegate_bridge")
+        return fg.sync_portfolios_to_local(trading, symbol_filter=symbol_filter) or {}
+    except Exception as e:
+        _dump_error("firegate_before_loc", e)
+        return {"executed": False, "status": "error", "message": str(e)}
 
 
 def _scoped_engine_status(engine_status, cycles):
@@ -194,6 +474,8 @@ def _firegate_overview_scope(trading, force_refresh=False):
                         sync_fn(trading)
                 except Exception as e:
                     _log("warning", f"firegate overview pull failed: {e}")
+            else:
+                return fire_gate_bridge, authoritative_symbols
             try:
                 bridge = fg.bridge_from_config(cfg)
                 source = getattr(fg, "INFINITYSTOCK_SOURCE", _FIREGATE_INFINITY_SOURCE)
@@ -226,9 +508,360 @@ def _combine_profit_components(cycle_realized_profit=0.0, cycle_unrealized_profi
     }
 
 
-def _include_completed_cycle_in_realized(cycle):
+def _holding_eval_sum(holdings):
+    by_symbol = {}
+    for row in holdings or []:
+        symbol = _normalize_symbol((row or {}).get("symbol", ""))
+        qty = _safe_float((row or {}).get("qty", (row or {}).get("quantity", (row or {}).get("holding_qty", 0))), 0)
+        if not symbol or qty <= 0:
+            continue
+        eval_amount = _safe_float((row or {}).get("eval_amount", (row or {}).get("value", 0)), 0)
+        if eval_amount <= 0:
+            eval_amount = qty * _safe_float((row or {}).get("current_price", (row or {}).get("price", 0)), 0)
+        if eval_amount <= 0:
+            continue
+        previous = by_symbol.get(symbol)
+        if previous is None or eval_amount >= previous:
+            by_symbol[symbol] = eval_amount
+    total = sum(by_symbol.values())
+    count = len(by_symbol)
+    return round(total, 2), count
+
+
+def _yahoo_chart_extended_price(symbol, refresh=False):
+    symbol = _normalize_symbol(symbol)
+    if not symbol:
+        return None
+    cache_key = f"yahoo-chart:{symbol}"
+    if refresh is False:
+        cached, cache_age = _cache_get(_US_LIVE_PRICE_CACHE, cache_key, _US_LIVE_PRICE_TTL_SEC)
+    else:
+        cached, cache_age = None, None
+    if isinstance(cached, dict):
+        cached["cache_age_sec"] = cache_age
+        ts_epoch = _safe_float(cached.get("timestamp_epoch"), 0)
+        if ts_epoch > 0:
+            cached["age_sec"] = round(max(0.0, time.time() - ts_epoch), 1)
+        return cached
+    try:
+        query = urllib.parse.urlencode({
+            "range": "1d",
+            "interval": "1m",
+            "includePrePost": "true",
+        })
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?{query}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 InfinityStockDashboard/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=4) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+
+        chart = (payload or {}).get("chart", {}) or {}
+        results = chart.get("result", []) or []
+        if len(results) == 0:
+            return None
+        result = results[0] or {}
+        timestamps = result.get("timestamp", []) or []
+        quote = (((result.get("indicators", {}) or {}).get("quote", []) or [{}])[0]) or {}
+        closes = quote.get("close", []) or []
+        meta = result.get("meta", {}) or {}
+
+        price = 0.0
+        ts_epoch = 0
+        for ts, close in reversed(list(zip(timestamps, closes))):
+            close_price = _safe_float(close, 0)
+            if close_price > 0:
+                price = close_price
+                ts_epoch = int(ts or 0)
+                break
+
+        if price <= 0:
+            price = _safe_float(meta.get("regularMarketPrice"), 0)
+            ts_epoch = int(_safe_float(meta.get("regularMarketTime"), 0))
+        if price <= 0:
+            return None
+
+        timestamp = ""
+        timestamp_kst = ""
+        if ts_epoch > 0:
+            ts_utc = datetime.datetime.fromtimestamp(ts_epoch, datetime.timezone.utc)
+            timestamp = ts_utc.isoformat()
+            timestamp_kst = ts_utc.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+
+        result = {
+            "symbol": symbol,
+            "price": round(price, 4),
+            "source": "yahoo_chart:1m_prepost",
+            "timestamp": timestamp,
+            "timestamp_kst": timestamp_kst,
+            "timestamp_epoch": ts_epoch,
+            "age_sec": round(max(0.0, time.time() - ts_epoch), 1) if ts_epoch > 0 else 0,
+            "market_state": str(meta.get("marketState", "") or ""),
+        }
+        _cache_set(_US_LIVE_PRICE_CACHE, cache_key, result)
+        return result
+    except Exception as e:
+        _log("warning", f"Yahoo chart extended price failed [{symbol}]: {e}")
+        return None
+
+
+def _config_or_env(trading, key, env_names, default=""):
+    value = ""
+    try:
+        getter = getattr(trading, "get_config", None)
+        if callable(getter):
+            value = getter(key, "")
+    except Exception:
+        value = ""
+    value = str(value or "").strip()
+    if value:
+        return value
+    for env_name in env_names or []:
+        env_value = str(os.environ.get(env_name, "") or "").strip()
+        if env_value:
+            return env_value
+    return default
+
+
+def _parse_feed_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return "", "", 0
+    normalized = text.replace("Z", "+00:00")
+    if "." in normalized:
+        head, tail = normalized.split(".", 1)
+        tz = ""
+        for idx in range(1, len(tail)):
+            if tail[idx] in ("+", "-"):
+                tz = tail[idx:]
+                tail = tail[:idx]
+                break
+        normalized = f"{head}.{tail[:6].ljust(6, '0')}{tz}"
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        parsed_utc = parsed.astimezone(datetime.timezone.utc)
+        return parsed_utc.isoformat(), parsed_utc.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST"), int(parsed_utc.timestamp())
+    except Exception:
+        return text, "", 0
+
+
+def _alpaca_overnight_price(trading, symbol, refresh=False):
+    symbol = _normalize_symbol(symbol)
+    if not symbol:
+        return None
+    api_key = str(os.environ.get("ALPACA_API_KEY", "") or os.environ.get("APCA_API_KEY_ID", "") or "").strip()
+    api_secret = str(os.environ.get("ALPACA_API_SECRET", "") or os.environ.get("ALPACA_SECRET_KEY", "") or os.environ.get("APCA_API_SECRET_KEY", "") or "").strip()
+    if not api_key or not api_secret:
+        return None
+
+    feed = str(os.environ.get("ALPACA_DATA_FEED", "overnight") or "overnight").strip().lower()
+    if feed not in ("overnight", "boats"):
+        feed = "overnight"
+    max_age_sec = _safe_float(os.environ.get("ALPACA_OVERNIGHT_MAX_AGE_SEC", "7200"), 7200)
+    cache_key = f"alpaca:{feed}:{symbol}"
+    if refresh is False:
+        cached, cache_age = _cache_get(_US_LIVE_PRICE_CACHE, cache_key, _US_LIVE_PRICE_TTL_SEC)
+    else:
+        cached, cache_age = None, None
+    if isinstance(cached, dict):
+        cached["cache_age_sec"] = cache_age
+        ts_epoch = _safe_float(cached.get("timestamp_epoch"), 0)
+        if ts_epoch > 0:
+            cached["age_sec"] = round(max(0.0, time.time() - ts_epoch), 1)
+        if ts_epoch <= 0 or cached.get("age_sec", 0) <= max_age_sec:
+            return cached
+        return None
+
+    try:
+        query = urllib.parse.urlencode({"symbols": symbol, "feed": feed})
+        url = f"https://data.alpaca.markets/v2/stocks/quotes/latest?{query}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
+                "User-Agent": "InfinityStockDashboard/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=4) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+        quotes = (payload or {}).get("quotes", {}) or {}
+        quote = quotes.get(symbol) or quotes.get(symbol.upper()) or {}
+        bid_price = _safe_float(quote.get("bp"), 0)
+        ask_price = _safe_float(quote.get("ap"), 0)
+        if bid_price > 0 and ask_price > 0:
+            price = (bid_price + ask_price) / 2
+        else:
+            price = ask_price or bid_price
+        if price <= 0:
+            return None
+        timestamp, timestamp_kst, ts_epoch = _parse_feed_timestamp(quote.get("t"))
+        age_sec = round(max(0.0, time.time() - ts_epoch), 1) if ts_epoch > 0 else 0
+        if ts_epoch > 0 and age_sec > max_age_sec:
+            _log("warning", f"Alpaca overnight price stale [{symbol}:{feed}]: age={age_sec}s")
+            return None
+        result = {
+            "symbol": symbol,
+            "price": round(price, 4),
+            "source": f"alpaca:{feed}_quote",
+            "timestamp": timestamp,
+            "timestamp_kst": timestamp_kst,
+            "timestamp_epoch": ts_epoch,
+            "age_sec": age_sec,
+            "market_state": "overnight",
+            "bid_price": round(bid_price, 4) if bid_price > 0 else 0,
+            "ask_price": round(ask_price, 4) if ask_price > 0 else 0,
+        }
+        _cache_set(_US_LIVE_PRICE_CACHE, cache_key, result)
+        return result
+    except Exception as e:
+        _log("warning", f"Alpaca overnight price failed [{symbol}:{feed}]: {e}")
+        return None
+
+
+def _display_us_price(trading, symbol, exchange="NAS", refresh=False):
+    symbol = _normalize_symbol(symbol)
+    overnight_result = _alpaca_overnight_price(trading, symbol, refresh=refresh)
+    overnight_price = _safe_float((overnight_result or {}).get("price"), 0)
+    if overnight_price > 0:
+        return overnight_result
+
+    kis_price = 0.0
+    kis_result = None
+    try:
+        broker = getattr(trading, "broker_api", None) or trading.kis_api
+        kis_result = broker.get_current_price(symbol, exchange=exchange)
+        kis_price = _safe_float((kis_result or {}).get("price"), 0)
+    except Exception as e:
+        _log("warning", f"broker display price failed [{symbol}:{exchange}]: {e}")
+    live_result = _yahoo_chart_extended_price(symbol, refresh=refresh)
+    live_price = _safe_float((live_result or {}).get("price"), 0)
+    if live_price > 0 and (kis_price <= 0 or abs(live_price - kis_price) >= 0.01):
+        return live_result
+    if kis_price > 0:
+        return {
+            "symbol": symbol,
+            "price": round(kis_price, 4),
+            "source": f"{str((kis_result or {}).get('source') or 'BROKER')}:{(kis_result or {}).get('exchange', exchange)}",
+            "timestamp": "",
+            "timestamp_kst": "",
+            "timestamp_epoch": 0,
+            "age_sec": 0,
+            "market_state": "",
+        }
+    return None
+
+
+def _refresh_cycle_prices_for_display(trading, cycles, refresh=False):
+    refreshed = []
+    for cycle in cycles or []:
+        row = dict(cycle or {})
+        symbol = _normalize_symbol(row.get("symbol", ""))
+        qty = _safe_float(row.get("total_qty", 0), 0)
+        if not symbol or qty <= 0:
+            refreshed.append(row)
+            continue
+        price_data = _display_us_price(trading, symbol, exchange="AMS" if symbol == "SOXL" else "NAS", refresh=refresh)
+        price = _safe_float((price_data or {}).get("price"), 0)
+        if price > 0:
+            try:
+                trading.engine.update_cycle_price(row.get("id"), price)
+            except Exception:
+                pass
+            total_spent = _safe_float(row.get("total_spent", 0), 0)
+            current_eval = qty * price
+            row["current_price"] = round(price, 4)
+            row["current_eval"] = round(current_eval, 2)
+            row["price_source"] = (price_data or {}).get("source", "")
+            row["price_timestamp"] = (price_data or {}).get("timestamp", "")
+            row["price_timestamp_kst"] = (price_data or {}).get("timestamp_kst", "")
+            row["price_age_sec"] = (price_data or {}).get("age_sec", 0)
+            row["price_market_state"] = (price_data or {}).get("market_state", "")
+            row["profit_rate"] = round(((current_eval - total_spent) / total_spent * 100) if total_spent > 0 else 0, 2)
+        refreshed.append(row)
+    return refreshed
+
+
+def _apply_live_us_prices_to_holdings(trading, holdings, refresh=False):
+    updated = []
+    seen = set()
+    for holding in holdings or []:
+        row = dict(holding or {})
+        symbol = _normalize_symbol(row.get("symbol", ""))
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        qty = _safe_float(row.get("qty", row.get("holding_qty", 0)), 0)
+        if qty > 0:
+            price_data = _display_us_price(trading, symbol, exchange="AMS" if symbol == "SOXL" else str(row.get("exchange", "NAS") or "NAS"), refresh=refresh)
+            price = _safe_float((price_data or {}).get("price"), 0)
+            if price > 0:
+                row["current_price"] = price
+                row["eval_amount"] = round(qty * price, 2)
+                row["price_source"] = (price_data or {}).get("source", "")
+                row["price_timestamp"] = (price_data or {}).get("timestamp", "")
+                row["price_timestamp_kst"] = (price_data or {}).get("timestamp_kst", "")
+                row["price_age_sec"] = (price_data or {}).get("age_sec", 0)
+                avg = _safe_float(row.get("avg_price", 0), 0)
+                if avg > 0:
+                    row["profit_loss"] = round((price - avg) * qty, 2)
+                    row["profit_rate"] = round(((price - avg) / avg) * 100, 2)
+        updated.append(row)
+    return updated
+
+
+def _select_total_asset_krw(summary_total_asset_krw=0, present_total_asset_krw=0, direct_total_asset_krw=0, fallback_total_asset_krw=0):
+    summary = _safe_float(summary_total_asset_krw, 0)
+    if summary > 0:
+        return summary, "summary_total_asset"
+    present = _safe_float(present_total_asset_krw, 0)
+    if present > 0:
+        return present, "present_total_asset"
+    direct = _safe_float(direct_total_asset_krw, 0)
+    if direct > 0:
+        return direct, "direct(cash+portfolio)"
+    return _safe_float(fallback_total_asset_krw, 0), "fallback"
+
+
+def _cycle_has_local_trade(cycle, trade_db=None, action=""):
+    if trade_db is None:
+        return True
+    cycle_id = str((cycle or {}).get("id", "") or "")
+    if not cycle_id:
+        return True
+    try:
+        rows = trade_db.rows(cycle_id=cycle_id, orderby="created", order="DESC", dump=200) or []
+    except TypeError:
+        rows = trade_db.rows(cycle_id=cycle_id) or []
+    except Exception:
+        return True
+    action = str(action or "").upper()
+    for row in rows:
+        row_action = str((row or {}).get("action", "") or "").upper()
+        row_status = str((row or {}).get("status", "") or "").upper()
+        qty = _safe_float((row or {}).get("filled_qty", (row or {}).get("qty", 0)), 0)
+        amount = _safe_float((row or {}).get("filled_amount", (row or {}).get("amount", 0)), 0)
+        if row_status and row_status != "FILLED":
+            continue
+        if action and row_action != action:
+            continue
+        if qty > 0 or amount > 0:
+            return True
+    return False
+
+
+def _include_completed_cycle_in_realized(cycle, trade_db=None):
     cycle = cycle if isinstance(cycle, dict) else {}
     if str(cycle.get("status", "") or "").upper() != "COMPLETED":
+        return False
+    if _cycle_has_local_trade(cycle, trade_db=trade_db, action="SELL") is False:
         return False
     total_qty = int(float(cycle.get("total_qty", 0) or 0))
     current_eval = float(cycle.get("current_eval", 0) or 0)
@@ -237,18 +870,43 @@ def _include_completed_cycle_in_realized(cycle):
     return True
 
 
+def _include_active_cycle_in_unrealized(cycle, trade_db=None):
+    cycle = cycle if isinstance(cycle, dict) else {}
+    if str(cycle.get("status", "") or "").upper() not in ("ACTIVE", "HOLDING", "PAUSED", "PENDING_EXTENSION"):
+        return False
+    if int(float(cycle.get("total_qty", 0) or 0)) <= 0:
+        return False
+    if float(cycle.get("total_spent", 0) or 0) <= 0:
+        return False
+    if _cycle_has_local_trade(cycle, trade_db=trade_db, action="BUY") is False:
+        return False
+    return True
+
+
 def _daytrade_state_realized_total(trading, session_date=None):
     try:
-        state_map = trading.daytrade_engine._load_state_map() or {}
+        engine = trading.daytrade_engine
+        state_map = engine._load_state_map() or {}
     except Exception:
         return 0.0
     total = 0.0
+    session_method = getattr(engine, "_session_realized_value", None)
+    used_session_method = False
     for state in state_map.values():
         if isinstance(state, dict) is False:
             continue
         if session_date:
             if str(state.get("session_date", "") or "") != str(session_date):
                 continue
+            if callable(session_method):
+                try:
+                    total += float(session_method(state, session_date) or 0)
+                    used_session_method = True
+                    continue
+                except Exception:
+                    pass
+        if used_session_method:
+            continue
         total += float(state.get("realized_profit", 0) or 0)
     return round(total, 2)
 
@@ -290,9 +948,15 @@ def _require_trading():
 
 def _kis_connection_status(trading, ttl_sec=None):
     now = time.monotonic()
-    cached = _KIS_STATUS_CACHE.get("result")
-    checked_at = float(_KIS_STATUS_CACHE.get("checked_at", 0.0) or 0.0)
-    if isinstance(cached, dict):
+    scope = _dashboard_cache_scope()
+    status_cache = _KIS_STATUS_CACHE.setdefault(scope, {"checked_at": 0.0, "result": None, "last_success_at": 0.0})
+    try:
+        provider = str(trading.get_config("broker_provider", "kis") or "kis").lower()
+    except Exception:
+        provider = "kis"
+    cached = status_cache.get("result")
+    checked_at = float(status_cache.get("checked_at", 0.0) or 0.0)
+    if isinstance(cached, dict) and str(cached.get("broker_provider", "kis") or "kis").lower() == provider:
         cached_success = cached.get("success") is True
         effective_ttl = _KIS_STATUS_SUCCESS_TTL_SEC if cached_success else _KIS_STATUS_FAILURE_TTL_SEC
         if ttl_sec is not None:
@@ -300,10 +964,12 @@ def _kis_connection_status(trading, ttl_sec=None):
         if (now - checked_at) < effective_ttl:
             return dict(cached)
     try:
-        result = trading.kis_api.test_connection() or {"success": False, "message": "empty response"}
+        broker = getattr(trading, "broker_api", None) or trading.kis_api
+        result = broker.test_connection() or {"success": False, "message": "empty response"}
     except Exception as e:
         result = {"success": False, "message": str(e)}
-    last_success_at = float(_KIS_STATUS_CACHE.get("last_success_at", 0.0) or 0.0)
+    result["broker_provider"] = provider
+    last_success_at = float(status_cache.get("last_success_at", 0.0) or 0.0)
     recent_success = last_success_at > 0 and (now - last_success_at) < _KIS_STICKY_SUCCESS_GRACE_SEC
     if result.get("success") is not True and recent_success:
         result = {
@@ -313,16 +979,16 @@ def _kis_connection_status(trading, ttl_sec=None):
             "raw_success": False,
             "message": str(result.get("message", "") or "최근 성공한 KIS 연결 상태를 유지합니다."),
         }
-    _KIS_STATUS_CACHE["checked_at"] = now
-    _KIS_STATUS_CACHE["result"] = dict(result)
+    status_cache["checked_at"] = now
+    status_cache["result"] = dict(result)
     if result.get("success"):
-        _KIS_STATUS_CACHE["last_success_at"] = now
+        status_cache["last_success_at"] = now
     return dict(result)
 
 
 def _safe_engine_status(trading):
     try:
-        return trading.engine.get_status() or {
+        status = trading.engine.get_status() or {
             "active_cycles": 0,
             "holding_cycles": 0,
             "paused_cycles": 0,
@@ -330,6 +996,10 @@ def _safe_engine_status(trading):
             "completed_cycles": 0,
             "auto_trade": False,
         }
+        loc_enabled = str(trading.get_config("loc_auto_schedule_enabled", "true") or "true").lower() == "true"
+        status["loc_auto_schedule_enabled"] = loc_enabled
+        status["auto_trade"] = bool(status.get("auto_trade", False)) and loc_enabled
+        return status
     except Exception as e:
         _log("warning", f"engine.get_status failed: {e}")
         return {
@@ -348,6 +1018,245 @@ def _safe_active_cycles(trading):
     except Exception as e:
         _log("warning", f"get_active_cycles failed: {e}")
         return []
+
+
+def _attach_loc_buy_status(trading, cycles, with_summary=False):
+    cycles = [dict(cycle or {}) for cycle in (cycles or [])]
+    summary = {
+        "total": len(cycles),
+        "active": 0,
+        "holding": 0,
+        "paused": 0,
+        "pending_extension": 0,
+        "loc_required": 0,
+        "loc_scheduled": 0,
+        "loc_waiting": 0,
+        "loc_attention": 0,
+        "loc_not_required": 0,
+        "loc_auto_enabled": False,
+        "loc_buy_last_date": "",
+    }
+    try:
+        summary["loc_auto_enabled"] = _truthy(trading.get_config("loc_auto_schedule_enabled", "true"))
+        summary["loc_buy_last_date"] = str(trading.get_config("loc_buy_auto_schedule_last_date", "") or "")
+    except Exception:
+        pass
+    now_kst = _TIME.now()
+    schedule_key = (now_kst - datetime.timedelta(days=1)).strftime("%Y-%m-%d") if now_kst.hour < 7 else now_kst.strftime("%Y-%m-%d")
+    loc_window_state = _loc_reservation_window_state(now_kst)
+    before_auto_schedule = loc_window_state == "before"
+    loc_schedule_window = _loc_reservation_window_label(now_kst)
+    engine = getattr(trading, "engine", None)
+    firegate_required = False
+    firegate_states = {}
+    firegate_error = ""
+    try:
+        if engine and hasattr(engine, "_firegate_reservation_authority_required"):
+            firegate_required = bool(engine._firegate_reservation_authority_required())
+        if firegate_required and engine and hasattr(engine, "_load_firegate_authoritative_states"):
+            fg_context = engine._load_firegate_authoritative_states() or {}
+            firegate_states = fg_context.get("states", {}) or {}
+            firegate_error = fg_context.get("error", "") or ""
+    except Exception as e:
+        firegate_error = str(e)
+
+    reservation_map = {}
+    reservation_line_map = {}
+    try:
+        broker = getattr(trading, "broker_api", None) or trading.kis_api
+        start_date = engine._reservation_query_start_date() if engine and hasattr(engine, "_reservation_query_start_date") else _TIME.now().strftime("%Y%m%d")
+        reservations = broker.get_overseas_reservation_orders(start_date=start_date) or []
+        for order in reservations:
+            if str((order or {}).get("side", "") or "").upper() != "BUY":
+                continue
+            if engine and hasattr(engine, "_reservation_order_is_active"):
+                if engine._reservation_order_is_active(order) is False:
+                    continue
+            else:
+                status_text = str(order.get("status_name", order.get("status", "")) or "")
+                cancel_yn = str(order.get("cancel_yn", order.get("cancel_yn_name", "")) or "").upper()
+                if cancel_yn in ("Y", "CANCEL", "CANCELLED") or "취소" in status_text:
+                    continue
+            if engine and hasattr(engine, "_reservation_order_symbol_key"):
+                key = engine._reservation_order_symbol_key(order.get("symbol", ""), order.get("exchange", "NASD"))
+                line_key = engine._reservation_order_line_key(order.get("symbol", ""), order.get("exchange", "NASD"), order.get("price", 0))
+            else:
+                key = f"{_normalize_symbol(order.get('symbol', ''))}:{str(order.get('exchange', 'NASD') or 'NASD').upper()}"
+                line_key = f"{key}:{float(order.get('price', 0) or 0):.4f}"
+            reservation_map.setdefault(key, []).append(order)
+            reservation_line_map.setdefault(line_key, []).append(order)
+    except Exception as e:
+        _log("warning", f"LOC reservation status load failed: {e}")
+
+    try:
+        watchlist_db = trading.db("etf_watchlist")
+    except Exception:
+        watchlist_db = None
+
+    for cycle in cycles:
+        status = str(cycle.get("status", "") or "").upper()
+        if status == "ACTIVE":
+            summary["active"] += 1
+        elif status == "HOLDING":
+            summary["holding"] += 1
+        elif status == "PAUSED":
+            summary["paused"] += 1
+        elif status == "PENDING_EXTENSION":
+            summary["pending_extension"] += 1
+
+        symbol = _normalize_symbol(cycle.get("symbol", ""))
+        planning_cycle = cycle
+        firegate_authority_error = ""
+        if firegate_required and engine and hasattr(engine, "_cycle_with_firegate_authority"):
+            try:
+                planning_cycle, firegate_authority_error = engine._cycle_with_firegate_authority(
+                    cycle,
+                    firegate_states,
+                    required=True,
+                    load_error=firegate_error,
+                )
+            except Exception as e:
+                planning_cycle = None
+                firegate_authority_error = str(e)
+        current_round = int(float(cycle.get("current_round", 0) or 0))
+        division_count = int(float(cycle.get("division_count", 0) or 0))
+        if division_count <= 0:
+            division_count = current_round + 1
+        cycle["loc_buy_status"] = "not_required"
+        cycle["loc_buy_status_label"] = "대상 아님"
+        cycle["loc_buy_message"] = ""
+        cycle["loc_buy_order_no"] = ""
+        cycle["loc_buy_qty"] = 0
+        cycle["loc_buy_price"] = 0
+        cycle["loc_buy_round"] = current_round + 1
+
+        if summary["loc_auto_enabled"] is False:
+            cycle["loc_buy_status"] = "disabled"
+            cycle["loc_buy_status_label"] = "자동예약 OFF"
+            cycle["loc_buy_message"] = "LOC 자동 예약 설정이 꺼져 있습니다."
+            summary["loc_not_required"] += 1
+            continue
+        if status != "ACTIVE" or current_round >= division_count:
+            summary["loc_not_required"] += 1
+            continue
+        if planning_cycle is None:
+            cycle["loc_buy_status"] = "attention"
+            cycle["loc_buy_status_label"] = "확인 필요"
+            cycle["loc_buy_message"] = firegate_authority_error or "FireGate 원본 상태를 읽지 못해 예약 상태를 계산하지 못했습니다."
+            summary["loc_attention"] += 1
+            continue
+
+        exchange = "NASD"
+        try:
+            item = watchlist_db.get(symbol=symbol) if watchlist_db else None
+            exchange = (item or {}).get("exchange", "NASD") or "NASD"
+        except Exception:
+            exchange = "NASD"
+        engine = getattr(trading, "engine", None)
+        if engine and hasattr(engine, "_resolve_order_exchange"):
+            try:
+                exchange = engine._resolve_order_exchange(symbol, exchange)
+            except Exception:
+                pass
+        if engine and hasattr(engine, "_reservation_order_symbol_key"):
+            key = engine._reservation_order_symbol_key(symbol, exchange)
+        else:
+            key = f"{symbol}:{str(exchange or 'NASD').upper()}"
+        reservations = reservation_map.get(key, [])
+        expected_orders = []
+        expected_error = ""
+        try:
+            broker = getattr(trading, "broker_api", None) or trading.kis_api
+            price_exchange = engine._price_exchange(exchange) if engine and hasattr(engine, "_price_exchange") else exchange
+            price_data = broker.get_current_price(symbol, exchange=price_exchange) or {}
+            prev_close = _safe_float(price_data.get("prev_close", 0), 0)
+            if prev_close > 0 and engine and hasattr(engine, "calculate_buy_decision"):
+                decision = engine.calculate_buy_decision(planning_cycle, prev_close) or {}
+                if decision.get("should_buy") and str(decision.get("order_type", "") or "").upper() == "LOC":
+                    raw_orders = decision.get("buy_orders") or [{
+                        "label": "LOC",
+                        "loc_price": decision.get("loc_price", 0),
+                        "order_qty": decision.get("order_qty", 0),
+                    }]
+                    for order_plan in raw_orders:
+                        order_qty = int(float(order_plan.get("order_qty", 0) or 0))
+                        loc_price = _safe_float(order_plan.get("loc_price", 0), 0)
+                        if order_qty <= 0 or loc_price <= 0:
+                            continue
+                        if engine and hasattr(engine, "_reservation_order_line_key"):
+                            line_key = engine._reservation_order_line_key(symbol, exchange, loc_price)
+                        else:
+                            line_key = f"{key}:{loc_price:.4f}"
+                        expected_orders.append({
+                            "label": str(order_plan.get("label", "LOC") or "LOC"),
+                            "qty": order_qty,
+                            "price": loc_price,
+                            "line_key": line_key,
+                        })
+        except Exception as e:
+            expected_error = str(e)
+
+        if not expected_orders:
+            if expected_error:
+                cycle["loc_buy_status"] = "attention"
+                cycle["loc_buy_status_label"] = "확인 필요"
+                cycle["loc_buy_message"] = f"LOC 예약 필요 라인을 계산하지 못했습니다: {expected_error}"
+                summary["loc_attention"] += 1
+            else:
+                summary["loc_not_required"] += 1
+            continue
+
+        summary["loc_required"] += 1
+        scheduled_lines = []
+        missing_lines = []
+        for expected in expected_orders:
+            line_orders = reservation_line_map.get(expected["line_key"], [])
+            reserved_qty = 0
+            for order in line_orders:
+                if engine and hasattr(engine, "_reservation_order_remaining_qty"):
+                    reserved_qty += engine._reservation_order_remaining_qty(order)
+                else:
+                    reserved_qty += max(0, int(float(order.get("qty", 0) or 0)) - int(float(order.get("filled_qty", 0) or 0)))
+            if reserved_qty >= expected["qty"]:
+                scheduled_lines.append({**expected, "reserved_qty": reserved_qty, "orders": line_orders})
+            else:
+                missing_lines.append({**expected, "reserved_qty": reserved_qty})
+
+        cycle["loc_buy_expected_count"] = len(expected_orders)
+        cycle["loc_buy_scheduled_count"] = len(scheduled_lines)
+        cycle["loc_buy_missing_count"] = len(missing_lines)
+        if len(scheduled_lines) == len(expected_orders):
+            order = (scheduled_lines[0].get("orders") or [{}])[0]
+            cycle["loc_buy_status"] = "scheduled"
+            cycle["loc_buy_status_label"] = "예약 접수"
+            cycle["loc_buy_order_no"] = order.get("order_no", order.get("reserve_order_no", "")) or ""
+            cycle["loc_buy_qty"] = int(float(order.get("qty", 0) or 0))
+            cycle["loc_buy_price"] = float(order.get("price", 0) or 0)
+            summary["loc_scheduled"] += 1
+        elif scheduled_lines:
+            cycle["loc_buy_status"] = "attention"
+            cycle["loc_buy_status_label"] = "일부 누락"
+            cycle["loc_buy_message"] = f"필요 예약 {len(expected_orders)}건 중 {len(scheduled_lines)}건만 확인됐습니다. 누락된 라인은 자동 재검증에서 다시 접수합니다."
+            if reservations:
+                order = reservations[0]
+                cycle["loc_buy_order_no"] = order.get("order_no", order.get("reserve_order_no", "")) or ""
+                cycle["loc_buy_qty"] = int(float(order.get("qty", 0) or 0))
+                cycle["loc_buy_price"] = float(order.get("price", 0) or 0)
+            summary["loc_attention"] += 1
+        elif before_auto_schedule and summary["loc_buy_last_date"] != schedule_key:
+            cycle["loc_buy_status"] = "waiting"
+            cycle["loc_buy_status_label"] = "예약 대기"
+            cycle["loc_buy_message"] = f"{loc_schedule_window} 전입니다. 시간이 되면 서버가 자동 접수합니다."
+        else:
+            cycle["loc_buy_status"] = "attention"
+            cycle["loc_buy_status_label"] = "예약 없음"
+            cycle["loc_buy_message"] = "오늘 필요한 LOC 예약매수가 확인되지 않았습니다. 서버 자동 재검증에서 다시 접수합니다."
+            summary["loc_attention"] += 1
+
+    summary["loc_waiting"] = max(0, summary["loc_required"] - summary["loc_scheduled"] - summary["loc_attention"])
+    if with_summary:
+        return cycles, summary
+    return cycles
 
 
 def _safe_recent_logs(trading, dump=20):
@@ -370,6 +1279,10 @@ def _safe_watchlist_info(trading):
 
 def _empty_overview_payload(message=""):
     return {
+        "setup_required": True,
+        "privacy_locked": True,
+        "setup_message": str(message or ""),
+        "server_time_kst": _TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
         "buying_power": 0,
         "cash_asset_krw": 0,
         "cash_asset_source": "fallback",
@@ -379,6 +1292,10 @@ def _empty_overview_payload(message=""):
         "usd_sync_message": str(message or ""),
         "usd_sync_source": "",
         "krw_balance": 0,
+        "krw_orderable_cash": 0,
+        "krw_orderable_source": "",
+        "krw_orderable_probe": "",
+        "krw_orderable_gap": 0,
         "krw_buying_power_usd": 0,
         "balance_sync_ok": False,
         "balance_sync_message": str(message or ""),
@@ -388,6 +1305,8 @@ def _empty_overview_payload(message=""):
         "total_asset_source": "fallback",
         "portfolio_value_domestic_krw": 0,
         "portfolio_value_overseas_krw": 0,
+        "portfolio_value_overseas_source": "fallback",
+        "balance_diagnostics": [],
         "exchange_rate": 0,
         "currency": "KRW",
         "engine_status": {
@@ -416,6 +1335,58 @@ def _empty_overview_payload(message=""):
         "watchlist_info": [],
         "cached": False,
     }
+
+
+def _empty_profit_summary_payload(period="1D", message=""):
+    today = _TIME.now().strftime("%Y-%m-%d")
+    return dict(
+        period=period,
+        currency="KRW",
+        api_connected=False,
+        setup_required=True,
+        privacy_locked=True,
+        message=str(message or ""),
+        server_time_kst=_TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
+        session_anchor_9am=_session_anchor_9am().strftime("%Y-%m-%d %H:%M:%S"),
+        exchange_rate=0,
+        realized_profit=0,
+        unrealized_profit=0,
+        total_profit=0,
+        total_invested=0,
+        total_return=0,
+        completed_cycles=0,
+        avg_cycle_return=0,
+        best_cycle_return=0,
+        worst_cycle_return=0,
+        cycle_realized_profit=0,
+        cycle_unrealized_profit=0,
+        daytrade_realized_profit=0,
+        daytrade_unrealized_profit=0,
+        daytrade_total_profit=0,
+        ib_realized_profit=0,
+        ib_unrealized_profit=0,
+        ib_realized_cycle_count=0,
+        realized_return=0,
+        unrealized_return=0,
+        base_asset=0,
+        base_asset_source="privacy_locked",
+        first_snapshot_date="",
+        elapsed_days=0,
+        live_asset_source="privacy_locked",
+        live_total_asset=0,
+        snapshots=[{
+            "date": today,
+            "total_asset": 0,
+            "profit": 0,
+            "profit_rate": 0,
+            "daily_return_rate": 0,
+        }],
+        daily_return_avg=0,
+        daily_return_best=0,
+        daily_return_worst=0,
+        latest_daily_return_rate=0,
+        asset_change_prev_day=0,
+    )
 
 
 def _to_kst_string(value):
@@ -584,6 +1555,13 @@ def _generate_mock_cycle_detail(cycle_id):
 
 def _build_overview_payload(force_refresh=False):
     trading = _require_trading()
+    setup_state = _broker_setup_state(trading, require_connection=False)
+    if setup_state.get("allowed") is not True:
+        payload = _empty_overview_payload(setup_state.get("message", ""))
+        payload["broker_provider"] = setup_state.get("broker_provider", "")
+        payload["broker_configured"] = setup_state.get("configured", False)
+        payload["broker_connected"] = False
+        return payload
     fire_gate_bridge, authoritative_symbols = _firegate_overview_scope(trading, force_refresh=force_refresh)
 
     api_connected = False
@@ -595,21 +1573,39 @@ def _build_overview_payload(force_refresh=False):
     krw_buying_power_usd = 0
     exchange_rate = 0
     total_asset_krw = 0
+    present_portfolio_eval_krw = 0
+    unsettled_buy_krw = 0
+    unsettled_sell_krw = 0
     balance_sync_ok = False
     balance_sync_message = ""
     balance_sync_source = ""
+    krw_orderable_cash = 0
+    krw_orderable_source = ""
+    krw_orderable_probe = ""
+    krw_orderable_gap = 0
     holdings_data = []
     domestic_holdings_data = []
     portfolio_value = 0
+    overseas_portfolio_value_source = "none"
     domestic_portfolio_value_krw = 0
     domestic_summary_total_asset_krw = 0
     domestic_summary_eval_krw = 0
     usd_cash_balance = 0
 
     try:
-        kis = trading.kis_api
+        kis = getattr(trading, "broker_api", None) or trading.kis_api
         test_result = _kis_connection_status(trading)
         api_connected = test_result.get("success", False)
+        if api_connected is not True:
+            message = "증권사 API 연결이 확인되지 않아 개인정보 보호를 위해 대시보드 자산/수익/보유내역을 표시하지 않습니다. 설정에서 연결 테스트를 완료해주세요."
+            detail = str(test_result.get("message", "") or "").strip()
+            if detail:
+                message = f"{message} ({detail})"
+            payload = _empty_overview_payload(message)
+            payload["broker_provider"] = setup_state.get("broker_provider", "")
+            payload["broker_configured"] = True
+            payload["broker_connected"] = False
+            return payload
 
         if api_connected:
             balance = None
@@ -620,6 +1616,9 @@ def _build_overview_payload(force_refresh=False):
                 exchange_rate = float(present.get("usd_krw", 0))
                 krw_balance = float(present.get("withdrawable_krw", present.get("krw_balance", 0)))
                 total_asset_krw = float(present.get("total_asset_krw", 0) or 0)
+                present_portfolio_eval_krw = float(present.get("portfolio_eval_krw", 0) or 0)
+                unsettled_buy_krw = float(present.get("unsettled_buy_krw", 0) or 0)
+                unsettled_sell_krw = float(present.get("unsettled_sell_krw", 0) or 0)
                 if meta.get("withdrawable_present") or meta.get("krw_present"):
                     balance_sync_ok = True
                     balance_sync_source = meta.get("withdrawable_key") or meta.get("krw_key") or ""
@@ -648,11 +1647,15 @@ def _build_overview_payload(force_refresh=False):
                 domestic_withdrawable_krw = float(domestic_balance.get("withdrawable_krw", 0) or 0)
                 if domestic_withdrawable_krw > krw_balance:
                     krw_balance = domestic_withdrawable_krw
-                for h in domestic_holdings_data:
-                    qty = int(float(h.get("qty", 0) or 0))
-                    current_price = float(h.get("current_price", 0) or 0)
-                    if qty > 0 and current_price > 0:
-                        domestic_portfolio_value_krw += (qty * current_price)
+                domestic_portfolio_value_krw = float(domestic_balance.get("portfolio_eval_krw", 0) or 0)
+                domestic_summary_eval_krw = domestic_portfolio_value_krw
+                domestic_summary_total_asset_krw = float(domestic_balance.get("total_asset_krw", 0) or 0)
+                if domestic_portfolio_value_krw <= 0:
+                    for h in domestic_holdings_data:
+                        qty = int(float(h.get("qty", 0) or 0))
+                        current_price = float(h.get("current_price", 0) or 0)
+                        if qty > 0 and current_price > 0:
+                            domestic_portfolio_value_krw += (qty * current_price)
 
                 raw_domestic = domestic_balance.get("raw", {}) or {}
                 output2 = raw_domestic.get("output2", {})
@@ -686,8 +1689,27 @@ def _build_overview_payload(force_refresh=False):
             except Exception as e:
                 _log("warning", f"get_domestic_balance failed: {e}")
 
+            try:
+                order_symbol = "005930"
+                if len(domestic_holdings_data) > 0:
+                    order_symbol = str((domestic_holdings_data[0] or {}).get("symbol", order_symbol) or order_symbol)
+                domestic_power = kis.get_domestic_buying_power_info(symbol=order_symbol, order_type="MARKET") or {}
+                if domestic_power.get("ok") is True:
+                    krw_orderable_cash = float(domestic_power.get("amount", domestic_power.get("executable_amount", 0)) or 0)
+                    krw_orderable_source = str(domestic_power.get("source", "") or "")
+                    display_amount = float(domestic_power.get("display_amount", 0) or 0)
+                    display_source = str(domestic_power.get("display_source", "") or "")
+                    if display_amount > 0 and abs(display_amount - krw_orderable_cash) > 1:
+                        krw_orderable_gap = round(display_amount - krw_orderable_cash, 0)
+                        krw_orderable_probe = f"{display_source} {display_amount:.0f}"
+                    balance_sync_ok = True
+                elif domestic_power.get("message"):
+                    krw_orderable_probe = str(domestic_power.get("message", "") or "")
+            except Exception as e:
+                _log("warning", f"get_domestic_buying_power_info failed: {e}")
+
             if balance:
-                holdings_data = balance.get("holdings", [])
+                holdings_data = _apply_live_us_prices_to_holdings(trading, balance.get("holdings", []), refresh=force_refresh)
                 try:
                     usd_cash_balance = float(balance.get("cash_balance", 0) or 0)
                 except Exception:
@@ -698,15 +1720,18 @@ def _build_overview_payload(force_refresh=False):
                 except Exception:
                     balance_total_eval = 0
 
-                if balance_total_eval > 0:
+                holdings_eval_sum, holdings_eval_count = _holding_eval_sum(holdings_data)
+                if holdings_eval_sum > 0:
+                    portfolio_value = holdings_eval_sum
+                    overseas_portfolio_value_source = "broker_holdings_eval_sum"
+                    if balance_total_eval > 0 and abs(balance_total_eval - holdings_eval_sum) > max(1.0, holdings_eval_sum * 0.2):
+                        _log(
+                            "warning",
+                            f"overseas balance total_eval mismatch ignored: total_eval={balance_total_eval}, holdings_sum={holdings_eval_sum}, holdings={holdings_eval_count}",
+                        )
+                elif balance_total_eval > 0:
                     portfolio_value = balance_total_eval
-                else:
-                    for h in holdings_data:
-                        try:
-                            eval_amt = float(h.get("eval_amount", 0) or 0)
-                        except Exception:
-                            eval_amt = 0
-                        portfolio_value += eval_amt
+                    overseas_portfolio_value_source = "broker_total_eval"
 
                 if not balance_sync_ok and usd_cash_balance > 0:
                     balance_sync_message = "원화 잔액 API 동기화 실패: 보유자산 조회만 성공했습니다"
@@ -757,10 +1782,13 @@ def _build_overview_payload(force_refresh=False):
     except Exception:
         pass
 
+    external_cycle_sync = _sync_external_cycle_trades_if_due(trading, force=force_refresh)
     cycles = _safe_active_cycles(trading)
     if len(authoritative_symbols) > 0:
         cycles = _filter_rows_by_symbols(cycles, authoritative_symbols)
         engine_status = _scoped_engine_status(engine_status, cycles)
+    cycles = _refresh_cycle_prices_for_display(trading, cycles, refresh=force_refresh)
+    cycles, infinite_buy_summary = _attach_loc_buy_status(trading, cycles, with_summary=True)
 
     holdings = []
     holdings_source = "broker"
@@ -817,7 +1845,8 @@ def _build_overview_payload(force_refresh=False):
     fx = exchange_rate if exchange_rate > 0 else 0
     if fx <= 0:
         try:
-            rate_data = trading.kis_api._get_usd_krw_rate_fallback()
+            broker = getattr(trading, "broker_api", None) or trading.kis_api
+            rate_data = broker._get_usd_krw_rate_fallback()
             fx = float(rate_data.get("rate", 0) or 0)
             if fx > 0:
                 exchange_rate = fx
@@ -828,36 +1857,52 @@ def _build_overview_payload(force_refresh=False):
     usd_cash_balance_krw = round(usd_cash_balance * fx, 0) if fx > 0 else 0
     buying_power_orderable_krw = round((usd_buying_power * fx) + krw_balance, 0) if fx > 0 else round(krw_balance, 0)
     overseas_portfolio_value_krw = round(portfolio_value * fx, 0) if fx > 0 else 0
+    if overseas_portfolio_value_krw <= 0 and present_portfolio_eval_krw > 0:
+        overseas_portfolio_value_krw = round(present_portfolio_eval_krw, 0)
+        overseas_portfolio_value_source = "present_balance.portfolio_eval_krw"
     portfolio_value_krw = overseas_portfolio_value_krw + round(domestic_portfolio_value_krw, 0)
 
     direct_cash_asset_krw = round(krw_balance + usd_cash_balance_krw, 0)
     direct_total_asset = round(direct_cash_asset_krw + portfolio_value_krw, 0)
+    orderable_plus_portfolio = round((krw_orderable_cash if krw_orderable_cash > 0 else krw_balance) + portfolio_value_krw, 0)
+    present_plus_domestic = round(total_asset_krw + domestic_portfolio_value_krw, 0) if total_asset_krw > 0 and domestic_portfolio_value_krw > 0 else 0
     total_asset = direct_total_asset
     cash_asset_krw = direct_cash_asset_krw
     total_asset_source = "reconciled(direct_cash+portfolio)"
     cash_asset_source = "direct(krw+usd_cash)"
     present_total_asset_rounded = round(total_asset_krw, 0)
-    if present_total_asset_rounded > 0 and portfolio_value_krw <= present_total_asset_rounded:
+    if round(domestic_summary_total_asset_krw, 0) > 0:
+        combined_asset = round(domestic_summary_total_asset_krw + overseas_portfolio_value_krw - unsettled_buy_krw + unsettled_sell_krw, 0)
+        total_asset = combined_asset if overseas_portfolio_value_krw > 0 else round(domestic_summary_total_asset_krw, 0)
+        cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
+        total_asset_source = "domestic_balance.total_asset_krw+live_us_eval-unsettled_us_buy"
+        cash_asset_source = "derived(total_asset-portfolio)"
+    elif present_plus_domestic > 0:
+        total_asset = present_plus_domestic
+        cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
+        total_asset_source = "present_balance.total_asset_krw+domestic_eval"
+        cash_asset_source = "derived(total_asset-portfolio)"
+    elif present_total_asset_rounded > 0 and portfolio_value_krw <= present_total_asset_rounded:
         total_asset = present_total_asset_rounded
         cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
         total_asset_source = "present_balance.total_asset_krw"
         cash_asset_source = "derived(total_asset-portfolio)"
-    elif round(domestic_summary_total_asset_krw, 0) > total_asset:
-        total_asset = round(domestic_summary_total_asset_krw, 0)
+    elif orderable_plus_portfolio > total_asset:
+        total_asset = orderable_plus_portfolio
         cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
-        total_asset_source = "domestic_balance.summary_total_asset_krw"
-        cash_asset_source = "derived(total_asset-portfolio)"
-    try:
-        engine_budget = trading.daytrade_engine.shared_budget_status(requested_seed=0, use_cache_only=True, market="KS") or {}
-        engine_total_asset = round(float(engine_budget.get("total_asset_krw", 0) or 0), 0)
-        if engine_total_asset > 0 and portfolio_value_krw <= engine_total_asset:
-            total_asset = engine_total_asset
-            cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
-            total_asset_source = str(engine_budget.get("total_asset_source", total_asset_source) or total_asset_source)
-            cash_asset_source = "derived(daytrade_engine.total_asset_krw-portfolio)"
-    except Exception:
-        pass
-
+        total_asset_source = "domestic_orderable+portfolio_eval"
+        cash_asset_source = "derived(orderable+portfolio-portfolio)"
+    if total_asset <= 0:
+        try:
+            engine_budget = trading.daytrade_engine.shared_budget_status(requested_seed=0, use_cache_only=True, market="KS") or {}
+            engine_total_asset = round(float(engine_budget.get("total_asset_krw", 0) or 0), 0)
+            if engine_total_asset > 0 and portfolio_value_krw <= engine_total_asset:
+                total_asset = engine_total_asset
+                cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
+                total_asset_source = str(engine_budget.get("total_asset_source", total_asset_source) or total_asset_source)
+                cash_asset_source = "derived(daytrade_engine.total_asset_krw-portfolio)"
+        except Exception:
+            pass
     recent_logs = _safe_recent_logs(trading)
     for log in recent_logs:
         if log.get("created"):
@@ -876,7 +1921,7 @@ def _build_overview_payload(force_refresh=False):
         })
 
     daytrade_positions = []
-    daytrade_position_summary = {"count": 0, "eval_amount_krw": 0.0, "pnl_krw": 0.0}
+    daytrade_position_summary = {"count": 0, "eval_amount_krw": 0.0, "cost_amount_krw": 0.0, "pnl_krw": 0.0}
     try:
         positions = trading.daytrade_engine.active_positions(sync_broker=True) or []
     except Exception:
@@ -887,6 +1932,9 @@ def _build_overview_payload(force_refresh=False):
     fx_rate = exchange_rate if exchange_rate > 0 else fx
     for row in positions:
         market = str(row.get("market", "KS") or "KS").upper()
+        symbol = _normalize_symbol(row.get("symbol", ""))
+        if market == "US" and symbol in ("SOXL", "TQQQ"):
+            continue
         qty = int(float(row.get("position_qty", row.get("qty", 0)) or 0))
         if qty <= 0:
             continue
@@ -894,11 +1942,15 @@ def _build_overview_payload(force_refresh=False):
         current_price = float(row.get("current_price", 0) or 0)
         eval_amount = current_price * qty if current_price > 0 else avg_price * qty
         pnl_amount = float(row.get("pnl", 0) or 0)
+        cost_amount = avg_price * qty
+        if cost_amount <= 0 and eval_amount > 0:
+            cost_amount = max(0.0, eval_amount - pnl_amount)
         multiplier = fx_rate if market == "US" and fx_rate > 0 else 1.0
         eval_amount_krw = round(eval_amount * multiplier, 2)
+        cost_amount_krw = round(cost_amount * multiplier, 2)
         pnl_krw = round(pnl_amount * multiplier, 2)
         daytrade_positions.append({
-            "symbol": row.get("symbol", ""),
+            "symbol": symbol or row.get("symbol", ""),
             "market": market,
             "name": row.get("name", ""),
             "strategy_id": row.get("strategy_id", ""),
@@ -907,6 +1959,7 @@ def _build_overview_payload(force_refresh=False):
             "avg_price": round(avg_price, 4),
             "current_price": round(current_price, 4),
             "eval_amount_krw": eval_amount_krw,
+            "cost_amount_krw": cost_amount_krw,
             "pnl_krw": pnl_krw,
             "pnl_pct": round(float(row.get("pnl_pct", 0) or 0), 2),
             "opened_at": row.get("opened_at", ""),
@@ -915,19 +1968,27 @@ def _build_overview_payload(force_refresh=False):
         })
         daytrade_position_summary["count"] += 1
         daytrade_position_summary["eval_amount_krw"] += eval_amount_krw
+        daytrade_position_summary["cost_amount_krw"] += cost_amount_krw
         daytrade_position_summary["pnl_krw"] += pnl_krw
     daytrade_positions.sort(key=lambda item: (0 if item.get("market") == "KS" else 1, item.get("symbol", "")))
 
     return {
-        "buying_power": round(cash_asset_krw, 0),
+        "setup_required": False,
+        "privacy_locked": False,
+        "server_time_kst": _TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "buying_power": round(krw_orderable_cash if krw_orderable_cash > 0 else cash_asset_krw, 0),
         "cash_asset_krw": round(cash_asset_krw, 0),
         "cash_asset_source": cash_asset_source,
-        "buying_power_orderable": round(buying_power_orderable_krw, 0),
+        "buying_power_orderable": round(krw_orderable_cash if krw_orderable_cash > 0 else buying_power_orderable_krw, 0),
         "usd_buying_power": round(usd_buying_power, 2),
         "usd_sync_ok": usd_sync_ok,
         "usd_sync_message": usd_sync_message,
         "usd_sync_source": usd_sync_source,
         "krw_balance": round(krw_balance, 0),
+        "krw_orderable_cash": round(krw_orderable_cash if krw_orderable_cash > 0 else krw_balance, 0),
+        "krw_orderable_source": krw_orderable_source,
+        "krw_orderable_probe": krw_orderable_probe,
+        "krw_orderable_gap": round(krw_orderable_gap, 0),
         "krw_buying_power_usd": round(krw_buying_power_usd, 2),
         "balance_sync_ok": balance_sync_ok,
         "balance_sync_message": balance_sync_message,
@@ -937,6 +1998,14 @@ def _build_overview_payload(force_refresh=False):
         "total_asset_source": total_asset_source,
         "portfolio_value_domestic_krw": round(domestic_portfolio_value_krw, 0),
         "portfolio_value_overseas_krw": round(overseas_portfolio_value_krw, 0),
+        "portfolio_value_overseas_source": overseas_portfolio_value_source,
+        "balance_diagnostics": [
+            {"label": "국내 주문가능", "amount": round(krw_orderable_cash if krw_orderable_cash > 0 else krw_balance, 0), "source": krw_orderable_source or balance_sync_source, "ok": krw_orderable_cash > 0},
+            {"label": "국내 평가액", "amount": round(domestic_portfolio_value_krw, 0), "source": "domestic_balance.portfolio_eval_krw", "ok": domestic_portfolio_value_krw > 0},
+            {"label": "미장 평가액", "amount": round(overseas_portfolio_value_krw, 0), "source": overseas_portfolio_value_source, "ok": overseas_portfolio_value_krw > 0},
+            {"label": "미장 미결제매수", "amount": round(unsettled_buy_krw, 0), "source": "present_balance.ustl_buy_amt_smtl", "ok": True},
+            {"label": "총자산", "amount": round(total_asset, 0), "source": total_asset_source, "ok": total_asset > 0},
+        ],
         "exchange_rate": round(exchange_rate, 2),
         "currency": "KRW",
         "engine_status": engine_status,
@@ -946,6 +2015,7 @@ def _build_overview_payload(force_refresh=False):
         "holdings_source": holdings_source,
         "cycles": cycles,
         "infinite_buy_cycles": cycles,
+        "infinite_buy_summary": infinite_buy_summary,
         "holdings": holdings,
         "daytrade_positions": daytrade_positions,
         "daytrade_position_summary": {
@@ -956,6 +2026,7 @@ def _build_overview_payload(force_refresh=False):
         "recent_logs": recent_logs,
         "watchlist_info": watchlist_info,
         "fire_gate_bridge": fire_gate_bridge,
+        "external_cycle_sync": external_cycle_sync,
         "cached": False,
     }
 
@@ -963,8 +2034,29 @@ def _build_overview_payload(force_refresh=False):
 def overview():
     """대시보드 종합 데이터"""
     force_refresh = _truthy(wiz.request.query("force_refresh", "false"))
+    cache_key = _dashboard_cache_scope()
+    try:
+        trading_for_access = _require_trading()
+        setup_state = _broker_setup_state(trading_for_access, require_connection=True)
+        if setup_state.get("allowed") is not True:
+            message = setup_state.get("message", "")
+            detail = str(setup_state.get("connection_message", "") or "").strip()
+            if detail:
+                message = f"{message} ({detail})"
+            payload = _empty_overview_payload(message)
+            payload["broker_provider"] = setup_state.get("broker_provider", "")
+            payload["broker_configured"] = setup_state.get("configured", False)
+            payload["broker_connected"] = False
+            _cache_set(_OVERVIEW_CACHE, cache_key, payload)
+            wiz.response.status(200, **payload)
+    except Exception as e:
+        _dump_error("overview_access", e)
+        payload = _empty_overview_payload(str(e))
+        payload["degraded"] = True
+        payload["degraded_message"] = str(e)
+        wiz.response.status(200, **payload)
     if force_refresh is False:
-        cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, "default", _OVERVIEW_TTL_SEC)
+        cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, cache_key, _OVERVIEW_TTL_SEC)
         if isinstance(cached_payload, dict):
             cached_payload["cached"] = True
             cached_payload["cache_age_sec"] = cache_age
@@ -973,11 +2065,11 @@ def overview():
     def _builder():
         try:
             payload = _build_overview_payload(force_refresh=force_refresh)
-            _cache_set(_OVERVIEW_CACHE, "default", payload)
+            _cache_set(_OVERVIEW_CACHE, cache_key, payload)
             return payload
         except Exception as e:
             _dump_error("overview", e)
-            fallback_payload, fallback_age = _cache_get(_OVERVIEW_CACHE, "default", _OVERVIEW_TTL_SEC * 6)
+            fallback_payload, fallback_age = _cache_get(_OVERVIEW_CACHE, cache_key, _OVERVIEW_TTL_SEC * 6)
             if isinstance(fallback_payload, dict):
                 fallback_payload["cached"] = True
                 fallback_payload["cache_age_sec"] = fallback_age
@@ -989,9 +2081,9 @@ def overview():
             payload["degraded_message"] = str(e)
             return payload
 
-    payload, is_leader = _singleflight("dashboard:overview", _builder, timeout_sec=45.0)
+    payload, is_leader = _singleflight(f"dashboard:overview:{cache_key}", _builder, timeout_sec=45.0)
     if is_leader is False:
-        cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, "default", _OVERVIEW_TTL_SEC)
+        cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, cache_key, _OVERVIEW_TTL_SEC)
         if isinstance(cached_payload, dict):
             cached_payload["cached"] = True
             cached_payload["cache_age_sec"] = cache_age
@@ -1001,6 +2093,7 @@ def overview():
 
 def cycle_detail():
     """사이클 상세 정보 (거래 내역 + 이벤트 로그)"""
+    _require_dashboard_access(require_connection=True)
     cycle_id = wiz.request.query("cycle_id", True)
     trading = _get_struct().trading
 
@@ -1168,8 +2261,15 @@ def _generate_mock_profit_summary(period):
     }
 
 
-def _profit_summary_data(period, date_from="", date_to=""):
+def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     trading = _require_trading()
+    setup_state = _broker_setup_state(trading, require_connection=True)
+    if setup_state.get("allowed") is not True:
+        message = setup_state.get("message", "")
+        detail = str(setup_state.get("connection_message", "") or "").strip()
+        if detail:
+            message = f"{message} ({detail})"
+        return _empty_profit_summary_payload(period=period, message=message)
 
     configured_base_asset = 0.0
     base_asset_source = "fallback:1000000"
@@ -1190,7 +2290,7 @@ def _profit_summary_data(period, date_from="", date_to=""):
     # KIS API 연결 확인
     api_connected = False
     try:
-        kis = trading.kis_api
+        kis = getattr(trading, "broker_api", None) or trading.kis_api
         test_result = _kis_connection_status(trading)
         api_connected = test_result.get("success", False)
     except Exception:
@@ -1206,10 +2306,14 @@ def _profit_summary_data(period, date_from="", date_to=""):
     exchange_rate = 0.0
     live_asset_source = "local"
     live_total_asset_ref = 0.0
+    live_unsettled_buy_krw = 0.0
+    live_unsettled_sell_krw = 0.0
     if api_connected:
         try:
             present_balance = kis.get_present_balance()
             exchange_rate = float(present_balance.get("usd_krw", 0) or 0)
+            live_unsettled_buy_krw = float(present_balance.get("unsettled_buy_krw", 0) or 0)
+            live_unsettled_sell_krw = float(present_balance.get("unsettled_sell_krw", 0) or 0)
         except Exception:
             exchange_rate = 0.0
 
@@ -1270,9 +2374,13 @@ def _profit_summary_data(period, date_from="", date_to=""):
     cycle_returns = []
     broker_unrealized_profit = 0.0
     included_completed_cycles = 0
+    try:
+        cycle_trade_db = trading.db("cycle_trade")
+    except Exception:
+        cycle_trade_db = None
 
     for c in completed:
-        if _include_completed_cycle_in_realized(c) is False:
+        if _include_completed_cycle_in_realized(c, trade_db=cycle_trade_db) is False:
             continue
         included_completed_cycles += 1
         c_eval = float(c.get("current_eval", 0) or 0)
@@ -1286,9 +2394,11 @@ def _profit_summary_data(period, date_from="", date_to=""):
         cycle_returns.append(round(c_rate, 2))
 
     # 미실현 수익 (활성 사이클)
-    active_cycles = trading.engine.get_active_cycles()
+    active_cycles = _refresh_cycle_prices_for_display(trading, trading.engine.get_active_cycles(), refresh=force_refresh)
     cycle_unrealized_profit = 0.0
     for c in active_cycles:
+        if _include_active_cycle_in_unrealized(c, trade_db=cycle_trade_db) is False:
+            continue
         qty = int(c.get("total_qty", 0) or 0)
         price = float(c.get("current_price", 0) or 0)
         spent = float(c.get("total_spent", 0) or 0)
@@ -1348,7 +2458,7 @@ def _profit_summary_data(period, date_from="", date_to=""):
     # 무한매수 완료사이클 실현손익 일별 집계
     for c in completed:
         try:
-            if _include_completed_cycle_in_realized(c) is False:
+            if _include_completed_cycle_in_realized(c, trade_db=cycle_trade_db) is False:
                 continue
             completed_date = str(c.get("completed_at", "") or "")[:10]
             if completed_date == "":
@@ -1392,14 +2502,20 @@ def _profit_summary_data(period, date_from="", date_to=""):
                     live_exchange_rate = 0.0
 
             overseas_balance = kis.get_balance() or {}
-            overseas_eval_usd = float(overseas_balance.get("total_eval", 0) or 0)
+            overseas_holdings = _apply_live_us_prices_to_holdings(trading, overseas_balance.get("holdings", []) or [], refresh=force_refresh)
+            overseas_eval_usd, overseas_holding_count = _holding_eval_sum(overseas_holdings)
+            overseas_total_eval_usd = float(overseas_balance.get("total_eval", 0) or 0)
             if overseas_eval_usd <= 0:
-                for h in (overseas_balance.get("holdings", []) or []):
-                    overseas_eval_usd += float(h.get("eval_amount", 0) or 0)
+                overseas_eval_usd = overseas_total_eval_usd
+            elif overseas_total_eval_usd > 0 and abs(overseas_total_eval_usd - overseas_eval_usd) > max(1.0, overseas_eval_usd * 0.2):
+                _log(
+                    "warning",
+                    f"profit summary overseas total_eval mismatch ignored: total_eval={overseas_total_eval_usd}, holdings_sum={overseas_eval_usd}, holdings={overseas_holding_count}",
+                )
             overseas_cash_usd = float(overseas_balance.get("cash_balance", 0) or 0)
 
             # 브로커 기준 미실현 손익 (해외)
-            for h in (overseas_balance.get("holdings", []) or []):
+            for h in overseas_holdings:
                 h_profit = float(h.get("profit_loss", 0) or 0)
                 if h_profit == 0:
                     qty = int(float(h.get("qty", 0) or 0))
@@ -1412,12 +2528,15 @@ def _profit_summary_data(period, date_from="", date_to=""):
 
             domestic_balance = kis.get_domestic_balance() or {}
             domestic_eval_krw = 0.0
+            domestic_total_asset_krw = 0.0
             for h in (domestic_balance.get("holdings", []) or []):
                 qty = int(float(h.get("qty", 0) or 0))
                 current_price = float(h.get("current_price", 0) or 0)
                 if qty > 0 and current_price > 0:
                     domestic_eval_krw += (qty * current_price)
                 broker_unrealized_profit += float(h.get("profit_loss", 0) or 0)
+            domestic_eval_krw = max(domestic_eval_krw, float(domestic_balance.get("portfolio_eval_krw", 0) or 0))
+            domestic_total_asset_krw = float(domestic_balance.get("total_asset_krw", 0) or 0)
 
             if domestic_eval_krw <= 0:
                 raw_domestic = domestic_balance.get("raw", {}) or {}
@@ -1429,27 +2548,44 @@ def _profit_summary_data(period, date_from="", date_to=""):
                         amt = float(str(output2.get(key, 0) or 0).replace(",", ""))
                         if amt > domestic_eval_krw:
                             domestic_eval_krw = amt
+                    for key in ["tot_evlu_amt", "nass_amt", "bfdy_tot_asst_evlu_amt", "tot_asst_amt"]:
+                        amt = float(str(output2.get(key, 0) or 0).replace(",", ""))
+                        if amt > domestic_total_asset_krw:
+                            domestic_total_asset_krw = amt
 
             direct_live_total_asset = live_withdrawable_krw
             if live_exchange_rate > 0:
                 direct_live_total_asset += ((overseas_cash_usd + overseas_eval_usd) * live_exchange_rate)
             direct_live_total_asset += domestic_eval_krw
 
-            # 총자산: KIS API 조회값을 최우선으로 신뢰하고, 조회 실패 시에만 직접 계산
-            if live_total_asset_krw > 0:
+            present_plus_domestic = live_total_asset_krw + domestic_eval_krw if live_total_asset_krw > 0 and domestic_eval_krw > 0 else 0.0
+            combined_live_total_asset = 0.0
+            if domestic_total_asset_krw > 0 and live_exchange_rate > 0 and overseas_eval_usd > 0:
+                combined_live_total_asset = domestic_total_asset_krw + (overseas_eval_usd * live_exchange_rate) - live_unsettled_buy_krw + live_unsettled_sell_krw
+            if combined_live_total_asset > 0:
+                live_total_asset = combined_live_total_asset
+                live_asset_source = "domestic_balance.total_asset_krw+live_us_eval-unsettled_us_buy"
+            elif domestic_total_asset_krw > 0:
+                live_total_asset = domestic_total_asset_krw
+                live_asset_source = "domestic_balance.total_asset_krw"
+            elif present_plus_domestic > 0:
+                live_total_asset = present_plus_domestic
+                live_asset_source = "present_balance.total_asset_krw+domestic_eval"
+            elif live_total_asset_krw > 0:
                 live_total_asset = live_total_asset_krw
                 live_asset_source = "present_balance.total_asset_krw"
             else:
                 live_total_asset = direct_live_total_asset
                 live_asset_source = "direct(krw+domestic_eval+usd_cash+usd_eval)"
-            try:
-                engine_budget = trading.daytrade_engine.shared_budget_status(requested_seed=0, use_cache_only=True, market="KS") or {}
-                engine_total_asset = float(engine_budget.get("total_asset_krw", 0) or 0)
-                if engine_total_asset > 0:
-                    live_total_asset = engine_total_asset
-                    live_asset_source = str(engine_budget.get("total_asset_source", live_asset_source) or live_asset_source)
-            except Exception:
-                pass
+            if live_total_asset <= 0:
+                try:
+                    engine_budget = trading.daytrade_engine.shared_budget_status(requested_seed=0, use_cache_only=True, market="KS") or {}
+                    engine_total_asset = float(engine_budget.get("total_asset_krw", 0) or 0)
+                    if engine_total_asset > 0:
+                        live_total_asset = engine_total_asset
+                        live_asset_source = str(engine_budget.get("total_asset_source", live_asset_source) or live_asset_source)
+                except Exception:
+                    pass
 
             live_total_asset_ref = live_total_asset
             exchange_rate = live_exchange_rate if live_exchange_rate > 0 else exchange_rate
@@ -1510,7 +2646,12 @@ def _profit_summary_data(period, date_from="", date_to=""):
 
     snapshot_rows = sorted(snapshot_rows, key=lambda item: item.get("date", ""))
     if snapshot_rows:
-        base_asset = float(snapshot_rows[0].get("total_asset", 0) or 0)
+        first_snapshot_asset = float(snapshot_rows[0].get("total_asset", 0) or 0)
+        if configured_base_asset > 0 and first_snapshot_asset > 0 and first_snapshot_asset < configured_base_asset:
+            base_asset = configured_base_asset
+            base_asset_source = f"{base_asset_source}+floor_configured_base"
+        else:
+            base_asset = first_snapshot_asset
     elif live_total_asset_ref > 0:
         base_asset = live_total_asset_ref
         snapshot_rows = [{"date": today_str, "total_asset": round(live_total_asset_ref, 2)}]
@@ -1588,6 +2729,9 @@ def _profit_summary_data(period, date_from="", date_to=""):
         period=period,
         currency="KRW",
         api_connected=api_connected,
+        setup_required=False,
+        privacy_locked=False,
+        server_time_kst=_TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
         session_anchor_9am=session_anchor,
         exchange_rate=round(exchange_rate, 4),
         realized_profit=round(realized_profit, 2),
@@ -1631,8 +2775,33 @@ def profit_summary():
     period = wiz.request.query("period", "ALL")
     date_from = wiz.request.query("date_from", "")
     date_to = wiz.request.query("date_to", "")
+    force_refresh = _truthy(wiz.request.query("force_refresh", "false"))
+    cache_key = json.dumps({"scope": _dashboard_cache_scope(), "period": period, "date_from": date_from, "date_to": date_to}, sort_keys=True)
     try:
-        result = _profit_summary_data(period, date_from=date_from, date_to=date_to)
+        trading_for_access = _require_trading()
+        setup_state = _broker_setup_state(trading_for_access, require_connection=True)
+        if setup_state.get("allowed") is not True:
+            message = setup_state.get("message", "")
+            detail = str(setup_state.get("connection_message", "") or "").strip()
+            if detail:
+                message = f"{message} ({detail})"
+            result = _empty_profit_summary_payload(period=period, message=message)
+            _cache_set(_PROFIT_SUMMARY_CACHE, cache_key, result)
+            wiz.response.status(200, **result)
+    except Exception as e:
+        _dump_error("profit_summary_access", e)
+        result = _empty_profit_summary_payload(period=period, message=str(e))
+        result["fallback"] = True
+        wiz.response.status(200, **result)
+    if force_refresh is False:
+        cached_payload, cache_age = _cache_get(_PROFIT_SUMMARY_CACHE, cache_key, _PROFIT_SUMMARY_TTL_SEC)
+        if isinstance(cached_payload, dict):
+            cached_payload["cached"] = True
+            cached_payload["cache_age_sec"] = cache_age
+            wiz.response.status(200, **cached_payload)
+    try:
+        result = _profit_summary_data(period, date_from=date_from, date_to=date_to, force_refresh=force_refresh)
+        _cache_set(_PROFIT_SUMMARY_CACHE, cache_key, result)
     except Exception as e:
         _dump_error("profit_summary", e)
         result = dict(
@@ -1682,82 +2851,48 @@ def profit_summary():
 
 def toggle_auto_trade():
     """자동매매 토글"""
-    trading = _require_trading()
-    current = str(trading.get_config("auto_trade_enabled", "false") or "false").lower()
-    new_val = "false" if current == "true" else "true"
+    trading = _require_dashboard_access(require_connection=True)
+    current_auto = str(trading.get_config("auto_trade_enabled", "false") or "false").lower() == "true"
+    current_loc = str(trading.get_config("loc_auto_schedule_enabled", "true") or "true").lower() == "true"
+    new_enabled = not (current_auto and current_loc)
+    new_val = "true" if new_enabled else "false"
     trading.set_config("auto_trade_enabled", new_val, description="자동매매 활성화")
-    wiz.response.status(200, auto_trade=new_val == "true")
+    trading.set_config("loc_auto_schedule_enabled", new_val, description="무한매수 LOC 자동 예약 활성화")
+    wiz.response.status(200, auto_trade=new_enabled, loc_auto_schedule_enabled=new_enabled)
 
 def run_due_automation():
-    """대시보드 폴링 시점에 17:40 이후 LOC 자동예약(매수/매도)을 한 번만 접수"""
-    trading = _require_trading()
-    now = _TIME.now()
-    today = now.strftime("%Y-%m-%d")
-    enabled = str(trading.get_config("loc_auto_schedule_enabled", "true") or "true").lower() == "true"
-
-    if enabled is False:
-        wiz.response.status(200, enabled=False, executed=False, message="LOC 자동 예약 비활성")
-
-    if (now.hour, now.minute) < (17, 40):
-        wiz.response.status(200,
+    """대시보드 폴링 시점에 서버 자동화와 같은 LOC 예약 검증 경로를 호출."""
+    try:
+        global _DUE_AUTOMATION_LAST_BUCKET
+        trading = _require_dashboard_access(require_connection=True)
+        now = _TIME.now()
+        bucket = _loc_reservation_bucket(now)
+        in_loc_verify_window = _loc_reservation_window_open(now)
+        force_verify = bool(in_loc_verify_window and _DUE_AUTOMATION_LAST_BUCKET != bucket)
+        result = trading.run_due_loc_automation(
+            verify=force_verify,
+            reason="dashboard_5min_reservation_verify" if force_verify else "dashboard_poll",
+        )
+        if force_verify:
+            _DUE_AUTOMATION_LAST_BUCKET = bucket
+        return wiz.response.status(200, **(result or {}))
+    except Exception as e:
+        if e.__class__.__name__ == "ResponseException":
+            raise
+        _dump_error("run_due_automation", e)
+        return wiz.response.status(200,
             enabled=True,
             executed=False,
-            waiting=True,
-            scheduled_at="17:40 KST",
-            message="17:40 KST 이전이라 LOC 자동 예약 대기 중입니다.")
-
-    engine = trading.engine
-    sell_method = str(trading.get_config("sell_method", "market") or "market").lower()
-    buy_last_date = str(trading.get_config("loc_buy_auto_schedule_last_date", "") or "")
-    sell_last_date = str(trading.get_config("loc_auto_schedule_last_date", "") or "")
-
-    buy_result = {
-        "enabled": True,
-        "scheduled": False,
-        "message": "오늘 LOC 자동 예약매수는 이미 접수했습니다." if buy_last_date == today else "LOC 자동 예약매수 대상 없음",
-        "scheduled_at": "17:40 KST",
-    }
-    sell_result = {
-        "enabled": True,
-        "scheduled": False,
-        "message": "매도 방식이 LOC가 아니라 자동 예약매도를 건너뜁니다." if sell_method != "loc" else ("오늘 LOC 자동 예약매도는 이미 접수했습니다." if sell_last_date == today else "LOC 자동 예약매도 대상 없음"),
-        "scheduled_at": "17:40 KST",
-    }
-
-    if buy_last_date != today:
-        raw_buy_result = engine.schedule_loc_buys()
-        buy_result = {
-            "enabled": True,
-            "scheduled": True,
-            "scheduled_at": "17:40 KST",
-            **(raw_buy_result or {}),
-        }
-        trading.set_config("loc_buy_auto_schedule_last_date", today, description="Last auto LOC buy schedule date")
-
-    if sell_method == "loc" and sell_last_date != today:
-        raw_sell_result = engine.schedule_loc_sells()
-        sell_result = {
-            "enabled": True,
-            "scheduled": True,
-            "scheduled_at": "17:40 KST",
-            **(raw_sell_result or {}),
-        }
-        trading.set_config("loc_auto_schedule_last_date", today, description="Last auto LOC sell schedule date")
-
-    executed = bool(
-        int((buy_result or {}).get("scheduled_count", 0) or 0) > 0
-        or int((sell_result or {}).get("scheduled_count", 0) or 0) > 0
-    )
-    wiz.response.status(200,
-        enabled=True,
-        executed=executed,
-        scheduled_at="17:40 KST",
-        buy=buy_result,
-        sell=sell_result)
+            scheduled_at=_loc_reservation_next_start_label(),
+            schedule_window=_loc_reservation_window_label(),
+            status="error",
+            message=str(e),
+            error_count=1,
+            errors=[{"reason": str(e)}])
 
 def run_engine():
     """엔진 수동 실행 (자동매매 비활성이어도 수동 실행은 허용)"""
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         results = engine.run_all()
@@ -1771,7 +2906,7 @@ def start_cycle():
     total_investment = wiz.request.query("total_investment", "")
     division_count = wiz.request.query("division_count", "")
     target_profit = wiz.request.query("target_profit", "")
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
 
     kwargs = {}
@@ -1791,7 +2926,7 @@ def start_cycle():
 def force_close_cycle():
     """사이클 강제 종료"""
     cycle_id = wiz.request.query("cycle_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         cycle = engine.force_close_cycle(cycle_id)
@@ -1802,7 +2937,7 @@ def force_close_cycle():
 def pause_cycle():
     """사이클 일시 정지"""
     cycle_id = wiz.request.query("cycle_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         cycle = engine.pause_cycle(cycle_id)
@@ -1813,7 +2948,7 @@ def pause_cycle():
 def resume_cycle():
     """사이클 재개"""
     cycle_id = wiz.request.query("cycle_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         cycle = engine.resume_cycle(cycle_id)
@@ -1824,7 +2959,7 @@ def resume_cycle():
 def delete_cycle():
     """사이클 삭제 (PAUSED/COMPLETED 상태)"""
     cycle_id = wiz.request.query("cycle_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         result = engine.delete_cycle(cycle_id)
@@ -1835,7 +2970,7 @@ def delete_cycle():
 def delete_trade():
     """개별 거래 삭제"""
     trade_id = wiz.request.query("trade_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         result = engine.delete_trade(trade_id)
@@ -1850,7 +2985,7 @@ def update_cycle():
     division_count = wiz.request.query("division_count", "")
     total_investment = wiz.request.query("total_investment", "")
 
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
 
     tp = float(target_profit) if target_profit else None
@@ -1868,7 +3003,7 @@ def extend_cycle():
     cycle_id = wiz.request.query("cycle_id", True)
     extra_rounds = wiz.request.query("extra_rounds", True)
     extra_investment = wiz.request.query("extra_investment", "0")
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         extra_rounds = int(extra_rounds)
@@ -1881,7 +3016,7 @@ def extend_cycle():
 def keep_holding():
     """홀딩 유지 (추가 매수 안 함)"""
     cycle_id = wiz.request.query("cycle_id", True)
-    trading = _get_struct().trading
+    trading = _require_dashboard_access(require_connection=True)
     engine = trading.engine
     try:
         cycle = engine.keep_holding(cycle_id)
@@ -1891,16 +3026,18 @@ def keep_holding():
 
 def trade_preview():
     """오늘 매매 예정 종목 프리뷰 (매수 + 매도)"""
-    cached_payload, cache_age = _cache_get(_TRADE_PREVIEW_CACHE, "default", _TRADE_PREVIEW_TTL_SEC)
+    trading_for_access = _require_dashboard_access(require_connection=True)
+    cache_key = _dashboard_cache_scope()
+    cached_payload, cache_age = _cache_get(_TRADE_PREVIEW_CACHE, cache_key, _TRADE_PREVIEW_TTL_SEC)
     if isinstance(cached_payload, dict):
         cached_payload["cached"] = True
         cached_payload["cache_age_sec"] = cache_age
         wiz.response.status(200, **cached_payload)
 
     def _builder():
-        trading = _require_trading()
+        trading = trading_for_access
         engine = trading.engine
-        kis = trading.kis_api
+        kis = getattr(trading, "broker_api", None) or trading.kis_api
 
         api_connected = False
         try:
@@ -1994,18 +3131,57 @@ def trade_preview():
             "previews": previews,
             "cached": False,
         }
-        _cache_set(_TRADE_PREVIEW_CACHE, "default", payload)
+        _cache_set(_TRADE_PREVIEW_CACHE, cache_key, payload)
         return payload
 
-    payload, is_leader = _singleflight("dashboard:trade_preview", _builder, timeout_sec=90.0)
+    payload, is_leader = _singleflight(f"dashboard:trade_preview:{cache_key}", _builder, timeout_sec=90.0)
     if is_leader is False:
-        cached_payload, cache_age = _cache_get(_TRADE_PREVIEW_CACHE, "default", _TRADE_PREVIEW_TTL_SEC)
+        cached_payload, cache_age = _cache_get(_TRADE_PREVIEW_CACHE, cache_key, _TRADE_PREVIEW_TTL_SEC)
         if isinstance(cached_payload, dict):
             cached_payload["cached"] = True
             cached_payload["cache_age_sec"] = cache_age
             wiz.response.status(200, **cached_payload)
         payload = _builder()
     wiz.response.status(200, **payload)
+
+
+def retry_loc_buy_reservation():
+    """무한매수 예약을 해당 종목 기준으로 전체 취소 후 FireGate 표대로 다시 접수."""
+    symbol = _normalize_symbol(wiz.request.query("symbol", ""))
+    if not symbol:
+        wiz.response.status(400, message="symbol is required")
+    trading = _require_trading()
+    external_sync = {}
+    firegate_sync = {}
+    try:
+        lock_fn = getattr(trading, "_loc_reservation_lock", None)
+        if callable(lock_fn):
+            with lock_fn(timeout_sec=1) as acquired:
+                if acquired is False:
+                    result = trading._loc_reservation_locked_result(reason=f"manual_retry_{symbol}")
+                else:
+                    external_sync = _sync_external_cycle_trades_if_due(trading, force=True, symbol_filter=symbol)
+                    firegate_sync = _sync_firegate_portfolios_before_loc(trading, symbol_filter=symbol)
+                    result = trading.engine.rebuild_loc_reservations([symbol]) or {}
+        else:
+            external_sync = _sync_external_cycle_trades_if_due(trading, force=True, symbol_filter=symbol)
+            firegate_sync = _sync_firegate_portfolios_before_loc(trading, symbol_filter=symbol)
+            result = trading.engine.rebuild_loc_reservations([symbol]) or {}
+    except Exception as e:
+        _dump_error("retry_loc_buy_reservation", e)
+        wiz.response.status(500, message=str(e), external_cycle_sync=external_sync, firegate_sync=firegate_sync)
+
+    cycles = _safe_active_cycles(trading)
+    cycles = [cycle for cycle in cycles if _normalize_symbol((cycle or {}).get("symbol")) == symbol]
+    cycles, summary = _attach_loc_buy_status(trading, cycles, with_summary=True)
+    wiz.response.status(200,
+        symbol=symbol,
+        result=result,
+        external_cycle_sync=external_sync,
+        firegate_sync=firegate_sync,
+        cycles=cycles,
+        infinite_buy_summary=summary,
+    )
 
 
 def get_watchlist_defaults():

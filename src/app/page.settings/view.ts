@@ -1,4 +1,4 @@
-import { Input, OnInit } from '@angular/core';
+import { HostListener, Input, OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
 import { i18n } from '@wiz/libs/portal/trading/i18n';
 
@@ -8,9 +8,15 @@ export class Component implements OnInit {
     public t = (key: string) => i18n.t(key);
 
     // API Settings
+    public brokerProvider: string = 'kis';
+    public brokerOptions: any[] = [];
+    public brokerDropdownOpen: boolean = false;
     public appKey: string = '';
     public appSecret: string = '';
     public accountNo: string = '';
+    public tossClientId: string = '';
+    public tossClientSecret: string = '';
+    public tossAccountSeq: string = '';
     public isMock: boolean = true;
 
     // Account Profile
@@ -46,8 +52,10 @@ export class Component implements OnInit {
     public taxRate: number = 0;
 
     // Strategy
-    public sellStrategy: string = 'full';
-    public sellMethod: string = 'market';
+    public sellStrategy: string = 'firegate';
+    public buyMethod: string = 'firegate';
+    public sellMethod: string = 'firegate';
+    public advancedOrderSettingsOpen: boolean = false;
     public partialSellStages: any[] = [];
     public crashBuyEnabled: boolean = false;
     public crashBuyDropPct: number = 5;
@@ -56,7 +64,7 @@ export class Component implements OnInit {
     public crashBuyMaxPerCycle: number = 3;
     public daytradeDefaultSeedKrw: number = 5000000;
     public daytradeUsDefaultSeedKrw: number = 5000000;
-    public daytradeAutoEnabled: boolean = true;
+    public daytradeAutoEnabled: boolean = false;
     public daytradeUsAutoEnabled: boolean = false;
     public daytradeDailyLossLimitKrw: number = 50000;
     public daytradeAutoMaxSymbols: number = 5;
@@ -68,11 +76,23 @@ export class Component implements OnInit {
     public daytradeUsJackpotTakeProfitPct: number = 3.0;
     public daytradeUsJackpot2TakeProfitPct: number = 5.0;
     public locAutoScheduleEnabled: boolean = true;
+    public isAdmin: boolean = false;
+    public daytradeFeatureEnabled: boolean = false;
+    public daytradeAuthorizedUserIds: string = '';
+    public daytradeAuthorizedUserEmails: string = '';
+    public daytradeUserAuthorized: boolean = false;
+    public daytradeUserConfirmed: boolean = false;
+    public daytradeHardLocked: boolean = true;
+    public daytradeLockMessage: string = '단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다.';
+    public daytradeConfirmationPhrase: string = '확인했습니다';
+    public daytradeConfirmationInput: string = '';
+    public adminPreviewUserMode: boolean = false;
 
     // UI
     public loading: boolean = false;
     public testResult: string = '';
     public testOk: boolean = false;
+    public apiDiagnostics: string[] = [];
     public showSecret: boolean = false;
     public loadError: string = '';
 
@@ -98,6 +118,7 @@ export class Component implements OnInit {
     public async ngOnInit() {
         await this.service.init(this);
         await this.service.auth.allow("/access");
+        this.refreshAdminPreviewMode();
         this.tab = this.isInfiniteBuyMode() ? 'watchlist' : 'api';
         await this.loadSettings();
     }
@@ -109,6 +130,41 @@ export class Component implements OnInit {
     public async switchTab(t: string) {
         this.tab = t;
         await this.service.render();
+    }
+
+    public showDaytradeSettingsTab(): boolean {
+        if (this.daytradeHardLocked) return false;
+        return this.effectiveAdminMode() || (this.daytradeFeatureEnabled && this.daytradeUserAuthorized);
+    }
+
+    public effectiveAdminMode(): boolean {
+        return this.isAdmin && !this.adminPreviewUserMode;
+    }
+
+    private refreshAdminPreviewMode() {
+        try {
+            this.adminPreviewUserMode = window.localStorage.getItem('admin_preview_user_mode') === 'true';
+        } catch (e) {
+            this.adminPreviewUserMode = false;
+        }
+    }
+
+    private fallbackTab(): string {
+        return this.isInfiniteBuyMode() ? 'watchlist' : 'api';
+    }
+
+    private ensureVisibleTab() {
+        if (this.tab === 'params') {
+            this.tab = this.fallbackTab();
+        }
+        if (this.tab === 'risk' && !this.showDaytradeSettingsTab()) {
+            this.tab = this.fallbackTab();
+        }
+    }
+
+    private canUseDaytrade(): boolean {
+        if (this.daytradeHardLocked) return false;
+        return this.daytradeFeatureEnabled && this.daytradeUserAuthorized && this.daytradeUserConfirmed;
     }
 
     public tabClass(t: string): string {
@@ -129,9 +185,14 @@ export class Component implements OnInit {
             if (code !== 200) {
                 this.loadError = data?.message || '설정 정보를 불러오지 못했습니다.';
             } else {
+                this.brokerProvider = data.broker_provider || 'kis';
+                this.brokerOptions = data.broker_options || this.defaultBrokerOptions();
                 this.appKey = data.app_key || '';
                 this.appSecret = data.app_secret || '';
                 this.accountNo = data.account_no || '';
+                this.tossClientId = data.toss_client_id || '';
+                this.tossClientSecret = data.toss_client_secret || '';
+                this.tossAccountSeq = data.toss_account_seq || '';
                 this.isMock = data.is_mock !== false;
                 this.accountUserId = data.account_user_id || '';
                 this.accountLoginId = data.account_login_id || '';
@@ -144,8 +205,9 @@ export class Component implements OnInit {
                 this.sellCommissionRate = data.sell_commission_rate ?? 0.25;
                 this.taxRate = data.tax_rate ?? 0;
 
-                this.sellStrategy = data.sell_strategy || 'full';
-                this.sellMethod = data.sell_method || 'market';
+                this.sellStrategy = data.sell_strategy || 'firegate';
+                this.buyMethod = this.normalizeOrderMethod(data.buy_method, true);
+                this.sellMethod = this.normalizeOrderMethod(data.sell_method, false);
                 this.partialSellStages = this.normalizePartialSellStages(data.partial_sell_stages);
                 this.crashBuyEnabled = data.crash_buy_enabled === true;
                 this.crashBuyDropPct = data.crash_buy_drop_pct ?? 5;
@@ -166,6 +228,20 @@ export class Component implements OnInit {
                 this.daytradeUsJackpotTakeProfitPct = Number(data.daytrade_us_jackpot_take_profit_pct ?? 3.0);
                 this.daytradeUsJackpot2TakeProfitPct = Number(data.daytrade_us_jackpot2_take_profit_pct ?? 5.0);
                 this.locAutoScheduleEnabled = data.loc_auto_schedule_enabled !== false;
+                this.isAdmin = data.is_admin === true;
+                this.daytradeFeatureEnabled = data.daytrade_feature_enabled === true;
+                this.daytradeHardLocked = data.daytrade_hard_locked !== false;
+                this.daytradeLockMessage = data.daytrade_lock_message || this.daytradeLockMessage;
+                this.daytradeAuthorizedUserIds = data.daytrade_authorized_user_ids || '';
+                this.daytradeAuthorizedUserEmails = data.daytrade_authorized_user_emails || '';
+                this.daytradeUserAuthorized = data.daytrade_user_authorized === true;
+                this.daytradeUserConfirmed = data.daytrade_user_confirmed === true;
+                this.daytradeConfirmationPhrase = data.daytrade_confirmation_phrase || '확인했습니다';
+                if (this.daytradeHardLocked || !this.daytradeFeatureEnabled || !this.daytradeUserAuthorized || !this.daytradeUserConfirmed) {
+                    this.daytradeAutoEnabled = false;
+                    this.daytradeUsAutoEnabled = false;
+                }
+                this.ensureVisibleTab();
             }
         } catch (e: any) {
             this.loadError = e?.responseJSON?.message || e?.statusText || '설정 요청 중 오류가 발생했습니다.';
@@ -175,39 +251,162 @@ export class Component implements OnInit {
         await this.service.render();
     }
 
+    private defaultBrokerOptions(): any[] {
+        return [
+            { id: 'kis', name: '한국투자증권', logo: 'KIS', status: '지원', enabled: true, summary: '현재 운영 중인 기본 브로커입니다.' },
+            { id: 'toss', name: '토스증권', logo: 'TOSS', status: '지원', enabled: true, summary: '토스증권 API로 무한매수 주문을 처리합니다.' },
+        ];
+    }
+
+    public selectedBrokerOption(): any {
+        const options = this.brokerOptions?.length ? this.brokerOptions : this.defaultBrokerOptions();
+        return options.find((item: any) => item.id === this.brokerProvider) || options[0];
+    }
+
+    public brokerLogoClass(item: any): string {
+        const id = String(item?.id || '').toLowerCase();
+        const base = 'broker-logo';
+        if (id === 'kis') return `${base} broker-logo-kis`;
+        if (id === 'toss') return `${base} broker-logo-toss`;
+        return base;
+    }
+
+    public brokerOptionClass(item: any): string {
+        const active = item?.id === this.brokerProvider;
+        const disabled = item?.enabled !== true;
+        let cls = 'broker-option';
+        if (disabled) cls += ' is-disabled';
+        if (active) cls += ' is-active';
+        return cls;
+    }
+
+    public async toggleBrokerDropdown() {
+        this.brokerDropdownOpen = !this.brokerDropdownOpen;
+        await this.service.render();
+    }
+
+    public async selectBrokerOption(item: any) {
+        if (!item || item.enabled !== true) {
+            await this.service.modal.show({
+                title: '지원 준비중',
+                message: item?.summary || '아직 무한매수 실주문 지원이 검증되지 않은 증권사입니다.',
+                action: '확인',
+            });
+            this.brokerDropdownOpen = false;
+            await this.service.render();
+            return;
+        }
+        this.brokerProvider = item.id;
+        this.brokerDropdownOpen = false;
+        await this.service.render();
+    }
+
+    @HostListener('document:click')
+    public async onDocumentClick() {
+        if (!this.brokerDropdownOpen) return;
+        this.brokerDropdownOpen = false;
+        await this.service.render();
+    }
+
+    private apiSettingsPayload() {
+        return {
+            broker_provider: this.brokerProvider,
+            app_key: this.appKey,
+            app_secret: this.appSecret,
+            account_no: this.accountNo,
+            toss_client_id: this.tossClientId,
+            toss_client_secret: this.tossClientSecret,
+            toss_account_seq: this.tossAccountSeq,
+            is_mock: this.isMock,
+        };
+    }
+
+    private apiSettingsValidationError(): string {
+        if (this.brokerProvider !== 'toss') return '';
+        const clientId = String(this.tossClientId || '').trim();
+        const clientSecret = String(this.tossClientSecret || '').trim();
+        const accountSeq = String(this.tossAccountSeq || '').trim();
+        if (!clientId) return '토스증권 클라이언트 ID를 입력해주세요.';
+        if (!clientSecret) return '토스증권 클라이언트 비밀키를 입력해주세요.';
+        if (clientId.startsWith('tssk_') || clientSecret.startsWith('tsck_')) {
+            return '토스증권 키 입력 위치가 반대로 보입니다. api key(tsck_...)는 첫 번째 칸, secret key(tssk_...)는 두 번째 칸에 입력해주세요.';
+        }
+        if (!clientId.startsWith('tsck_')) {
+            return '토스증권 API key 칸에는 api key(tsck_...) 값을 입력해야 합니다.';
+        }
+        if (!clientSecret.startsWith('tssk_')) {
+            return '토스증권 Secret key 칸에는 secret key(tssk_...) 값을 입력해야 합니다.';
+        }
+        if (accountSeq && !/^\d+$/.test(accountSeq)) {
+            return '토스증권 accountSeq는 숫자만 입력할 수 있습니다. 일반 계좌번호는 입력하지 말고 비워두세요.';
+        }
+        if (accountSeq && /^0\d{1,5}$/.test(accountSeq)) {
+            return '토스증권 accountSeq는 계좌 뒷번호가 아닙니다. 이 칸은 비워둔 뒤 연결 테스트를 누르세요.';
+        }
+        return '';
+    }
+
+    private async showApiValidationError(message: string) {
+        this.loading = false;
+        this.testOk = false;
+        this.testResult = message;
+        this.apiDiagnostics = [];
+        await this.service.modal.show({
+            title: '입력 확인',
+            message,
+            action: '확인',
+        });
+        await this.service.render();
+    }
+
+    private applyApiSettingsResponse(data: any) {
+        if (!data) return;
+        const provider = data?.broker_provider || this.brokerProvider;
+        this.brokerProvider = provider;
+        if (provider === 'kis') {
+            this.accountNo = data?.account_no || this.accountNo;
+        }
+        this.tossAccountSeq = data?.toss_account_seq || this.tossAccountSeq;
+        this.apiDiagnostics = Array.isArray(data?.diagnostics) ? data.diagnostics : [];
+        if (typeof data?.is_mock === 'boolean') {
+            this.isMock = data.is_mock;
+        }
+    }
+
     // ─── Save API Settings ───
     public async saveApiSettings() {
         this.loading = true;
         this.testResult = '';
+        this.apiDiagnostics = [];
         await this.service.render();
 
+        const validationError = this.apiSettingsValidationError();
+        if (validationError) {
+            await this.showApiValidationError(validationError);
+            return;
+        }
+
         try {
-            const { code, data } = await wiz.call("save_api_settings", {
-                app_key: this.appKey,
-                app_secret: this.appSecret,
-                account_no: this.accountNo,
-                is_mock: this.isMock,
-            });
+            const { code, data } = await wiz.call("save_api_settings", this.apiSettingsPayload());
 
             this.loading = false;
             if (code === 200) {
-                this.accountNo = data?.account_no || this.accountNo;
-                this.isMock = data?.is_mock !== false;
+                this.applyApiSettingsResponse(data);
                 this.testOk = data?.success === true;
                 this.testResult = data?.message || (this.testOk ? this.t('set.conn_ok') : this.t('set.conn_fail'));
 
                 await this.service.modal.show({
-                    title: this.testOk ? 'Success' : 'Error',
+                    title: this.testOk ? '완료' : '오류',
                     message: this.testResult,
-                    action: 'OK',
+                    action: '확인',
                 });
             } else {
                 this.testOk = false;
                 this.testResult = data?.message || '설정 저장에 실패했습니다.';
                 await this.service.modal.show({
-                    title: 'Error',
+                    title: '오류',
                     message: this.testResult,
-                    action: 'OK',
+                    action: '확인',
                 });
             }
         } catch (e: any) {
@@ -215,9 +414,9 @@ export class Component implements OnInit {
             this.testOk = false;
             this.testResult = e?.responseJSON?.message || e?.statusText || '설정 저장 중 오류가 발생했습니다.';
             await this.service.modal.show({
-                title: 'Error',
+                title: '오류',
                 message: this.testResult,
-                action: 'OK',
+                action: '확인',
             });
         }
 
@@ -239,15 +438,15 @@ export class Component implements OnInit {
             this.accountLoginId = data.login_id || this.accountLoginId;
             this.accountEmail = data.email || this.accountEmail;
             await this.service.modal.show({
-                title: 'Success',
+                title: '완료',
                 message: '계정 정보가 저장되었습니다.',
-                action: 'OK',
+                action: '확인',
             });
         } else {
             await this.service.modal.show({
-                title: 'Error',
+                title: '오류',
                 message: data?.message || '계정 정보 저장에 실패했습니다.',
-                action: 'OK',
+                action: '확인',
             });
         }
         await this.service.render();
@@ -255,19 +454,19 @@ export class Component implements OnInit {
 
     public async changeAccountPassword() {
         if (!this.currentPassword) {
-            await this.service.modal.show({ title: 'Error', message: '현재 비밀번호를 입력해주세요.', action: 'OK' });
+            await this.service.modal.show({ title: '오류', message: '현재 비밀번호를 입력해주세요.', action: '확인' });
             return;
         }
         if (!this.newPassword) {
-            await this.service.modal.show({ title: 'Error', message: '새 비밀번호를 입력해주세요.', action: 'OK' });
+            await this.service.modal.show({ title: '오류', message: '새 비밀번호를 입력해주세요.', action: '확인' });
             return;
         }
         if (this.newPassword.length < 8) {
-            await this.service.modal.show({ title: 'Error', message: '새 비밀번호는 8자 이상이어야 합니다.', action: 'OK' });
+            await this.service.modal.show({ title: '오류', message: '새 비밀번호는 8자 이상이어야 합니다.', action: '확인' });
             return;
         }
         if (this.newPassword !== this.confirmPassword) {
-            await this.service.modal.show({ title: 'Error', message: '새 비밀번호가 일치하지 않습니다.', action: 'OK' });
+            await this.service.modal.show({ title: '오류', message: '새 비밀번호가 일치하지 않습니다.', action: '확인' });
             return;
         }
 
@@ -285,15 +484,15 @@ export class Component implements OnInit {
             this.newPassword = '';
             this.confirmPassword = '';
             await this.service.modal.show({
-                title: 'Success',
+                title: '완료',
                 message: '비밀번호가 변경되었습니다.',
-                action: 'OK',
+                action: '확인',
             });
         } else {
             await this.service.modal.show({
-                title: 'Error',
+                title: '오류',
                 message: data?.message || '비밀번호 변경에 실패했습니다.',
-                action: 'OK',
+                action: '확인',
             });
         }
         await this.service.render();
@@ -302,11 +501,19 @@ export class Component implements OnInit {
     // ─── Test Connection ───
     public async testApiConnection() {
         this.testResult = '';
+        this.apiDiagnostics = [];
         this.loading = true;
         await this.service.render();
 
+        const validationError = this.apiSettingsValidationError();
+        if (validationError) {
+            await this.showApiValidationError(validationError);
+            return;
+        }
+
         try {
-            const { code, data } = await wiz.call("test_connection");
+            const { code, data } = await wiz.call("test_connection", this.apiSettingsPayload());
+            this.applyApiSettingsResponse(data);
             this.testOk = code === 200 && data?.success === true;
             this.testResult = this.testOk
                 ? (data?.message || this.t('set.conn_ok'))
@@ -445,6 +652,25 @@ export class Component implements OnInit {
     }
 
     public async toggleDaytradeAutoEnabled() {
+        if (this.daytradeHardLocked) {
+            await this.service.modal.show({
+                title: '단타 기능 봉인',
+                message: this.daytradeLockMessage,
+                action: '확인',
+                status: 'warning',
+            });
+            this.daytradeAutoEnabled = false;
+            return;
+        }
+        if (!this.canUseDaytrade()) {
+            await this.service.modal.show({
+                title: '단타 기능 비활성',
+                message: '관리자 전역 활성화, 사용자 인증, 위험 확인 문구 입력이 모두 완료되어야 단타 자동매매를 켤 수 있습니다.',
+                action: '확인',
+                status: 'warning',
+            });
+            return;
+        }
         if (this.daytradeAutoEnabled !== true) {
             const confirmed = await this.confirmDaytradeAutoEnable('국장 단타');
             if (!confirmed) {
@@ -456,6 +682,25 @@ export class Component implements OnInit {
     }
 
     public async toggleDaytradeUsAutoEnabled() {
+        if (this.daytradeHardLocked) {
+            await this.service.modal.show({
+                title: '단타 기능 봉인',
+                message: this.daytradeLockMessage,
+                action: '확인',
+                status: 'warning',
+            });
+            this.daytradeUsAutoEnabled = false;
+            return;
+        }
+        if (!this.canUseDaytrade()) {
+            await this.service.modal.show({
+                title: '단타 기능 비활성',
+                message: '관리자 전역 활성화, 사용자 인증, 위험 확인 문구 입력이 모두 완료되어야 단타 자동매매를 켤 수 있습니다.',
+                action: '확인',
+                status: 'warning',
+            });
+            return;
+        }
         if (this.daytradeUsAutoEnabled !== true) {
             const confirmed = await this.confirmDaytradeAutoEnable('미장 단타');
             if (!confirmed) {
@@ -468,6 +713,12 @@ export class Component implements OnInit {
 
     // ─── Parameters ───
     public async saveParams() {
+        if (this.daytradeHardLocked || !this.canUseDaytrade()) {
+            this.daytradeAutoEnabled = false;
+            this.daytradeUsAutoEnabled = false;
+        }
+        this.buyMethod = this.normalizeOrderMethod(this.buyMethod, true);
+        this.sellMethod = this.normalizeOrderMethod(this.sellMethod, false);
         this.daytradeDefaultSeedKrw = Math.max(100000, Math.round(Number(this.daytradeDefaultSeedKrw) || 5000000));
         this.daytradeUsDefaultSeedKrw = Math.max(100000, Math.round(Number(this.daytradeUsDefaultSeedKrw) || this.daytradeDefaultSeedKrw || 5000000));
         this.daytradeDailyLossLimitKrw = Math.max(0, Math.round(Number(this.daytradeDailyLossLimitKrw) || 0));
@@ -488,6 +739,7 @@ export class Component implements OnInit {
             sell_commission_rate: this.sellCommissionRate,
             tax_rate: this.taxRate,
             sell_strategy: this.sellStrategy,
+            buy_method: this.buyMethod,
             sell_method: this.sellMethod,
             crash_buy_enabled: this.crashBuyEnabled,
             crash_buy_drop_pct: this.crashBuyDropPct,
@@ -513,11 +765,126 @@ export class Component implements OnInit {
         this.loading = false;
         if (code === 200) {
             await this.service.modal.show({
-                title: 'Success',
+                title: '완료',
                 message: this.t('set.save_params'),
-                action: 'OK',
+                action: '확인',
             });
         }
+        await this.service.render();
+    }
+
+    public async saveDaytradeAdminSettings() {
+        if (this.daytradeHardLocked) {
+            this.daytradeFeatureEnabled = false;
+        }
+        if (!this.effectiveAdminMode()) {
+            await this.service.modal.show({
+                title: '오류',
+                message: '관리자만 단타 기능 노출과 인증 대상을 변경할 수 있습니다.',
+                action: '확인',
+            });
+            return;
+        }
+
+        this.loading = true;
+        await this.service.render();
+
+        try {
+            const { code, data } = await wiz.call("save_daytrade_admin_settings", {
+                daytrade_feature_enabled: this.daytradeFeatureEnabled,
+                daytrade_authorized_user_ids: this.daytradeAuthorizedUserIds,
+                daytrade_authorized_user_emails: this.daytradeAuthorizedUserEmails,
+            });
+            this.loading = false;
+            if (code === 200) {
+                this.daytradeFeatureEnabled = data?.daytrade_feature_enabled === true;
+                this.daytradeHardLocked = data?.daytrade_hard_locked !== false;
+                this.daytradeLockMessage = data?.message || this.daytradeLockMessage;
+                this.daytradeAuthorizedUserIds = data?.daytrade_authorized_user_ids || this.daytradeAuthorizedUserIds;
+                this.daytradeAuthorizedUserEmails = data?.daytrade_authorized_user_emails || this.daytradeAuthorizedUserEmails;
+                if (!this.daytradeFeatureEnabled) {
+                    this.daytradeAutoEnabled = false;
+                    this.daytradeUsAutoEnabled = false;
+                }
+                window.dispatchEvent(new CustomEvent('daytrade-access-changed'));
+                await this.service.modal.show({
+                    title: '완료',
+                    message: data?.message || '단타 관리자 설정이 저장되었습니다.',
+                    action: '확인',
+                });
+                await this.loadSettings();
+                return;
+            }
+            await this.service.modal.show({
+                title: '오류',
+                message: data?.message || '단타 관리자 설정 저장에 실패했습니다.',
+                action: '확인',
+            });
+        } catch (e: any) {
+            this.loading = false;
+            await this.service.modal.show({
+                title: '오류',
+                message: e?.responseJSON?.message || e?.statusText || '단타 관리자 설정 저장 중 오류가 발생했습니다.',
+                action: '확인',
+            });
+        }
+
+        await this.service.render();
+    }
+
+    public async confirmDaytradeWarning() {
+        if (this.daytradeHardLocked) {
+            await this.service.modal.show({
+                title: '단타 기능 봉인',
+                message: this.daytradeLockMessage,
+                action: '확인',
+                status: 'warning',
+            });
+            return;
+        }
+        const phrase = String(this.daytradeConfirmationInput || '').trim();
+        if (phrase !== this.daytradeConfirmationPhrase) {
+            await this.service.modal.show({
+                title: '확인 문구 불일치',
+                message: `'${this.daytradeConfirmationPhrase}' 문구를 정확히 입력해주세요.`,
+                action: '확인',
+                status: 'warning',
+            });
+            return;
+        }
+
+        this.loading = true;
+        await this.service.render();
+
+        try {
+            const { code, data } = await wiz.call("confirm_daytrade_warning", { phrase });
+            this.loading = false;
+            if (code === 200) {
+                this.daytradeUserConfirmed = true;
+                this.daytradeConfirmationInput = '';
+                window.dispatchEvent(new CustomEvent('daytrade-access-changed'));
+                await this.service.modal.show({
+                    title: '확인 완료',
+                    message: data?.message || '단타 위험 확인 문구가 저장되었습니다.',
+                    action: '확인',
+                });
+                await this.loadSettings();
+                return;
+            }
+            await this.service.modal.show({
+                title: '오류',
+                message: data?.message || '단타 위험 확인 저장에 실패했습니다.',
+                action: '확인',
+            });
+        } catch (e: any) {
+            this.loading = false;
+            await this.service.modal.show({
+                title: '오류',
+                message: e?.responseJSON?.message || e?.statusText || '단타 위험 확인 저장 중 오류가 발생했습니다.',
+                action: '확인',
+            });
+        }
+
         await this.service.render();
     }
 
@@ -542,7 +909,27 @@ export class Component implements OnInit {
     }
 
     public async setStrategy(strategy: string) {
+        if (!['firegate', 'full', 'partial'].includes(strategy)) {
+            strategy = 'firegate';
+        }
         this.sellStrategy = strategy;
+        await this.service.render();
+    }
+
+    public normalizeOrderMethod(method: string, allowMarket: boolean = false): string {
+        const normalized = String(method || '').toLowerCase();
+        if (normalized === 'loc') return 'loc';
+        if (allowMarket && normalized === 'market') return 'market';
+        return 'firegate';
+    }
+
+    public async setBuyMethod(method: string) {
+        this.buyMethod = this.normalizeOrderMethod(method, true);
+        await this.service.render();
+    }
+
+    public async setSellMethod(method: string) {
+        this.sellMethod = this.normalizeOrderMethod(method, false);
         await this.service.render();
     }
 
@@ -561,5 +948,12 @@ export class Component implements OnInit {
             this.taxRate = 0;
         }
         this.service.render();
+    }
+
+    @HostListener('window:admin-preview-changed')
+    public async onAdminPreviewChanged() {
+        this.refreshAdminPreviewMode();
+        this.ensureVisibleTab();
+        await this.service.render();
     }
 }

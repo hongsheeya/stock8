@@ -12,6 +12,7 @@ export class Component implements OnInit {
     public fireGateUrl: string = 'https://fire-gate.app/';
     public loginWindow: Window | null = null;
     public showBridgeTools: boolean = false;
+    public showFireGateFrame: boolean = true;
 
     private destroyed: boolean = false;
     private bridgeAutoLogin: boolean = false;
@@ -183,7 +184,7 @@ export class Component implements OnInit {
             if (sync?.code !== 200) throw new Error(sync?.data?.message || 'FireGate 초기 동기화 실패');
             const synced = sync?.data?.result || {};
             this.bridge = sync?.data?.fire_gate_bridge || this.bridge;
-            this.bridgeMessage = `${prefix} · FireGate ${synced.firegate_portfolios || 0}, 푸시 ${synced.pushed_portfolios || 0}, 사이클 ${synced.cycles_created || 0}/${synced.cycles_updated || 0}`;
+            this.bridgeMessage = `${prefix} · FireGate ${synced.firegate_portfolios || 0}, 사이클 ${synced.cycles_created || 0}/${synced.cycles_updated || 0}`;
             await this.loadBridgeStatus(true);
         } catch (e: any) {
             this.error = e?.message || 'FireGate 초기 자동동기화 실패';
@@ -260,7 +261,7 @@ export class Component implements OnInit {
             if (code !== 200) throw new Error(data?.message || 'FireGate 동기화 실패');
             const result = data?.result || {};
             this.bridge = data?.fire_gate_bridge || this.bridge;
-            this.bridgeMessage = `동기화 완료 · FireGate ${result.firegate_portfolios || 0}, 푸시 ${result.pushed_portfolios || 0}, 사이클 ${result.cycles_created || 0}/${result.cycles_updated || 0}`;
+            this.bridgeMessage = `동기화 완료 · FireGate ${result.firegate_portfolios || 0}, 사이클 ${result.cycles_created || 0}/${result.cycles_updated || 0}`;
             await this.loadBridgeStatus(true);
         } catch (e: any) {
             this.error = e?.message || 'FireGate 동기화 실패';
@@ -277,7 +278,11 @@ export class Component implements OnInit {
         await this.syncFireGate();
     }
 
-    public reloadFireGate() {
+    public async reloadFireGate() {
+        if (!this.showFireGateFrame) {
+            this.showFireGateFrame = true;
+            await this.renderIfAlive();
+        }
         const frame = document.getElementById('fireGateIframe') as HTMLIFrameElement | null;
         if (!frame) return;
         frame.src = 'about:blank';

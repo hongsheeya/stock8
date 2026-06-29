@@ -14,7 +14,8 @@ class Model(base):
         db_table = "etf_watchlist"
 
     id = pw.CharField(max_length=32, primary_key=True)
-    symbol = pw.CharField(max_length=16, unique=True, index=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
+    symbol = pw.CharField(max_length=16, index=True)
     name = pw.CharField(max_length=128, default="")
     exchange = pw.CharField(max_length=16, default="NASD")
     total_investment = pw.FloatField(default=0.0)

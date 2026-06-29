@@ -6,7 +6,7 @@
     "category": "daytrade.us",
     "viewuri": "/daytrade/us",
     "preview": "",
-    "controller": "admin",
+    "controller": "user",
     "layout": "layout.trading",
     "template": "wiz-page-daytrade-us([title]=\"\")"
 }

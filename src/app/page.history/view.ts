@@ -24,6 +24,10 @@ export class Component implements OnInit {
     public daytradeSummary: any = {};
     public daytradePage: number = 1;
     public daytradeTotalPages: number = 1;
+    public daytradeTotal: number = 0;
+    public daytradeHasMore: boolean = false;
+    public daytradeLoadingMore: boolean = false;
+    public daytradeOlderSummary: any = {};
     public daytradeMarketFilter: string = '';
     public daytradeActionFilter: string = '';
     public daytradeSymbolFilter: string = '';
@@ -33,6 +37,10 @@ export class Component implements OnInit {
     public logs: any[] = [];
     public logPage: number = 1;
     public logTotalPages: number = 1;
+    public logTotal: number = 0;
+    public logHasMore: boolean = false;
+    public logLoadingMore: boolean = false;
+    public logOlderSummary: any = {};
     public logSymbolFilter: string = '';
     public logActionFilter: string = '';  // BUY, SELL
     public logSearchText: string = '';
@@ -84,6 +92,7 @@ export class Component implements OnInit {
             page: this.cyclePage,
             status: this.cycleFilter,
             symbol: this.cycleSymbolFilter,
+            sync: this.cyclePage === 1 ? 'true' : 'false',
         });
         if (res.code === 200) {
             this.cycles = res.data.rows || [];
@@ -115,7 +124,7 @@ export class Component implements OnInit {
     public async viewCycleDetail(cycle: any) {
         this.loading = true;
         await this.service.render();
-        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id });
+        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id, sync: 'true' });
         if (res.code === 200) {
             this.selectedCycle = res.data.cycle;
             this.cycleTrades = res.data.trades || [];
@@ -130,8 +139,9 @@ export class Component implements OnInit {
     }
 
     // ─── Daytrade ───
-    public async loadDaytradeTrades() {
-        this.loading = true;
+    public async loadDaytradeTrades(append: boolean = false) {
+        if (append) this.daytradeLoadingMore = true;
+        else this.loading = true;
         await this.service.render();
         const res = await wiz.call("daytrade_trades", {
             page: this.daytradePage,
@@ -139,13 +149,20 @@ export class Component implements OnInit {
             action: this.daytradeActionFilter,
             symbol: this.daytradeSymbolFilter,
             search: this.daytradeSearchText,
+            sync_broker: this.daytradePage === 1 && !append ? 'true' : 'false',
+            include_old: this.daytradePage > 3 ? 'true' : 'false',
         });
         if (res.code === 200) {
-            this.daytradeTrades = res.data.rows || [];
+            const rows = res.data.rows || [];
+            this.daytradeTrades = append ? this.daytradeTrades.concat(rows) : rows;
             this.daytradeSummary = res.data.summary || {};
             this.daytradeTotalPages = res.data.total_pages || 1;
+            this.daytradeTotal = res.data.total || this.daytradeTrades.length;
+            this.daytradeHasMore = res.data.has_more === true;
+            this.daytradeOlderSummary = res.data.older_summary || {};
         }
-        this.loading = false;
+        if (append) this.daytradeLoadingMore = false;
+        else this.loading = false;
         await this.service.render();
     }
 
@@ -178,6 +195,12 @@ export class Component implements OnInit {
         await this.loadDaytradeTrades();
     }
 
+    public async loadMoreDaytradeTrades() {
+        if (!this.daytradeHasMore || this.daytradeLoadingMore) return;
+        this.daytradePage += 1;
+        await this.loadDaytradeTrades(true);
+    }
+
     // ─── Delete Cycle ───
     public async deleteCycle(cycle: any) {
         const res = await this.service.modal.show({
@@ -197,28 +220,36 @@ export class Component implements OnInit {
             await this.service.modal.show({
                 title: 'Error',
                 message: data?.message || 'Failed to delete cycle',
-                action: 'OK',
+                action: '확인',
             });
             await this.service.render();
         }
     }
 
     // ─── Trade Logs ───
-    public async loadLogs() {
-        this.loading = true;
+    public async loadLogs(append: boolean = false) {
+        if (append) this.logLoadingMore = true;
+        else this.loading = true;
         await this.service.render();
         const res = await wiz.call("trade_logs", {
             page: this.logPage,
             symbol: this.logSymbolFilter,
             action: this.logActionFilter,
             search: this.logSearchText,
+            sync_broker: this.logPage === 1 && !append ? 'true' : 'false',
+            include_old: this.logPage > 3 ? 'true' : 'false',
         });
         if (res.code === 200) {
-            this.logs = res.data.rows || [];
+            const rows = res.data.rows || [];
+            this.logs = append ? this.logs.concat(rows) : rows;
             this.logTotalPages = res.data.total_pages || 1;
+            this.logTotal = res.data.total || this.logs.length;
+            this.logHasMore = res.data.has_more === true;
+            this.logOlderSummary = res.data.older_summary || {};
         }
         this.expandedLogIdx.clear();
-        this.loading = false;
+        if (append) this.logLoadingMore = false;
+        else this.loading = false;
         await this.service.render();
     }
 
@@ -243,6 +274,12 @@ export class Component implements OnInit {
         if (p < 1 || p > this.logTotalPages) return;
         this.logPage = p;
         await this.loadLogs();
+    }
+
+    public async loadMoreLogs() {
+        if (!this.logHasMore || this.logLoadingMore) return;
+        this.logPage += 1;
+        await this.loadLogs(true);
     }
 
     public async toggleLogExpand(i: number) {
@@ -308,9 +345,9 @@ export class Component implements OnInit {
         if (d === 'BUY1') return '1차 매수';
         if (d === 'BUY2') return '2차 매수';
         if (d.includes('RESERVED')) return '예약매수';
-        if (d.startsWith('BUY')) return '매수';
         if (d.includes('PARTIAL')) return '부분매도';
-        if (d.startsWith('SELL')) return '매도';
+        if (d.includes('BUY')) return '매수';
+        if (d.includes('SELL')) return '매도';
         return d || '-';
     }
 

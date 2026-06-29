@@ -14,6 +14,7 @@ class Model(base):
         db_table = "cycle_trade"
 
     id = pw.CharField(max_length=32, primary_key=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
     cycle_id = pw.CharField(max_length=32, index=True)
     symbol = pw.CharField(max_length=16, index=True)
     round = pw.IntegerField(default=0)
@@ -36,4 +37,6 @@ class Model(base):
     strategy_type = pw.CharField(max_length=16, default="NORMAL")
     status = pw.CharField(max_length=16, default="PENDING", index=True)
     memo = pw.TextField(default="")
+    broker_order_no = pw.CharField(max_length=64, default="", index=True)
+    source = pw.CharField(max_length=32, default="")
     created = pw.DateTimeField(default=_kst_now)

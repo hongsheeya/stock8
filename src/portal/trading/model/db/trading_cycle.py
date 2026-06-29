@@ -14,6 +14,7 @@ class Model(base):
         db_table = "trading_cycle"
 
     id = pw.CharField(max_length=32, primary_key=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
     symbol = pw.CharField(max_length=16, index=True)
     cycle_number = pw.IntegerField(default=1)
     status = pw.CharField(max_length=16, default="IDLE", index=True)

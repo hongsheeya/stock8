@@ -1,0 +1,101 @@
+{
+    "interval_sec": 15,
+    "last_run_at": "2026-06-29 16:04:41",
+    "daytrade_feature_enabled": false,
+    "daytrade_hard_locked": true,
+    "enabled": false,
+    "exit_watch_enabled": false,
+    "us_enabled": false,
+    "us_exit_watch_enabled": false,
+    "loc_schedule_enabled": true,
+    "firegate_sync_enabled": true,
+    "firegate_sync_interval_sec": 600,
+    "firegate_last_sync_at": "2026-06-29 15:58:48",
+    "background_maintenance_enabled": true,
+    "background_maintenance_interval_sec": 21600,
+    "background_maintenance_last_at": "2026-06-29 13:08:08",
+    "external_cycle_sync_last_at": "2026-06-29 09:50:01",
+    "loc_reservation_check_last_at": "2026-06-29 16:00:05",
+    "loc_reservation_verified_streak": 0,
+    "loc_reservation_verified_target": 3,
+    "loc_reservation_verified_complete": false,
+    "loc_reservation_verified_version": "firegate-authoritative-v3",
+    "loc_reservation_verified_last_at": "2026-06-29 16:03:23",
+    "loc_reservation_verified_failure_reason": "buy status=partial_pending, buy skipped_count=18, buy missing_count=18, buy force_rebuild_count=18, buy satisfied=0/18, buy broker_echo_missing; sell status=partial_pending, sell skipped_count=4, sell missing_count=4, sell force_rebuild_count=4, sell satisfied=0/4, sell broker_echo_missing",
+    "result": {
+        "auto_cycle": {
+            "executed": false,
+            "message": "\uad6d\uc7a5 \ub2e8\ud0c0 \uc790\ub3d9\ub9e4\ub9e4 \ube44\ud65c\uc131"
+        },
+        "exit_watch": {
+            "executed": false,
+            "message": "\uad6d\uc7a5 \ub2e8\ud0c0 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ube44\ud65c\uc131"
+        },
+        "us_auto_cycle": {
+            "executed": false,
+            "message": "\ubbf8\uc7a5 \ub2e8\ud0c0 \uc790\ub3d9\ub9e4\ub9e4 \ube44\ud65c\uc131"
+        },
+        "us_exit_watch": {
+            "executed": false,
+            "message": "\ubbf8\uc7a5 \ub2e8\ud0c0 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ube44\ud65c\uc131"
+        },
+        "loc_automation": {
+            "enabled": true,
+            "executed": false,
+            "scheduled_at": "10:00 KST",
+            "schedule_window": "10:00-22:20 KST",
+            "schedule_key": "2026-06-29",
+            "forced": false,
+            "verified": false,
+            "verification_complete": false,
+            "verification": {
+                "passed": false,
+                "complete": false,
+                "streak": 0,
+                "target": 3,
+                "message": "\uc608\uc57d \uac80\uc99d \uc804"
+            },
+            "buy": {
+                "enabled": true,
+                "scheduled": false,
+                "message": "\uc624\ub298 LOC \uc790\ub3d9 \uc608\uc57d\ub9e4\uc218\ub294 \uc774\ubbf8 \uc811\uc218\ud588\uc2b5\ub2c8\ub2e4.",
+                "scheduled_at": "10:00 KST",
+                "schedule_window": "10:00-22:20 KST",
+                "schedule_key": "2026-06-29"
+            },
+            "sell": {
+                "enabled": true,
+                "scheduled": false,
+                "message": "\uc624\ub298 LOC \uc790\ub3d9 \uc608\uc57d\ub9e4\ub3c4\ub294 \uc774\ubbf8 \uc811\uc218\ud588\uc2b5\ub2c8\ub2e4.",
+                "scheduled_at": "10:00 KST",
+                "schedule_window": "10:00-22:20 KST",
+                "schedule_key": "2026-06-29"
+            },
+            "rebuild": {
+                "executed": false,
+                "message": "\uc7ac\uc608\uc57d \uc870\uac74 \ubbf8\ucda9\uc871",
+                "attempt_count": 0,
+                "threshold": 1,
+                "symbols": []
+            }
+        },
+        "firegate_sync": {
+            "executed": false,
+            "waiting": true,
+            "message": "FireGate \uc790\ub3d9 \ub3d9\uae30\ud654 \ub300\uae30 \uc911",
+            "interval_sec": 600
+        },
+        "external_cycle_sync": {
+            "executed": false,
+            "waiting": true,
+            "message": "\uc678\ubd80 \uccb4\uacb0 \uc790\ub3d9 \ub3d9\uae30\ud654 \ub300\uae30 \uc911",
+            "scheduled_window": "08:00-10:00 KST"
+        },
+        "maintenance": {
+            "executed": false,
+            "waiting": true,
+            "message": "\ubc31\uadf8\ub77c\uc6b4\ub4dc DB \ucd5c\uc801\ud654 \ub300\uae30 \uc911",
+            "interval_sec": 21600
+        }
+    }
+}

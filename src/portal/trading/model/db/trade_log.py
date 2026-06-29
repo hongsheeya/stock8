@@ -14,6 +14,7 @@ class Model(base):
         db_table = "trade_log"
 
     id = pw.CharField(max_length=32, primary_key=True)
+    user_id = pw.CharField(max_length=64, default="", index=True)
     cycle_id = pw.CharField(max_length=32, default="", index=True)
     symbol = pw.CharField(max_length=16, index=True)
     event_type = pw.CharField(max_length=32, index=True)

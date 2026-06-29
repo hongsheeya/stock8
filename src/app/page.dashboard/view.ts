@@ -45,6 +45,9 @@ export class Component implements OnInit {
     // Engine status
     public engineStatus: any = { active_cycles: 0, holding_cycles: 0, paused_cycles: 0, pending_extension_cycles: 0, completed_cycles: 0, auto_trade: false };
     public apiConnected: boolean = false;
+    public setupRequired: boolean = false;
+    public privacyLocked: boolean = false;
+    public setupMessage: string = '';
 
     // Active cycles
     public cycles: any[] = [];
@@ -68,7 +71,7 @@ export class Component implements OnInit {
     // Holdings
     public holdings: any[] = [];
     public daytradePositions: any[] = [];
-    public daytradePositionSummary: any = { count: 0, eval_amount_krw: 0, pnl_krw: 0 };
+    public daytradePositionSummary: any = { count: 0, eval_amount_krw: 0, cost_amount_krw: 0, pnl_krw: 0 };
 
     // Trade logs
     public recentLogs: any[] = [];
@@ -179,6 +182,8 @@ export class Component implements OnInit {
     public toasts: Toast[] = [];
     public autoRefresh: boolean = true;
     public lastRefresh: Date = new Date();
+    public lastRefreshKst: string = '';
+    public profitLastRefreshKst: string = '';
     public pollSeconds: number = 10;
     private countdownTimer: any = null;
     public countdown: number = 10;
@@ -222,6 +227,62 @@ export class Component implements OnInit {
         await this.service.render();
     }
 
+    private hasVisibleDashboardData(): boolean {
+        return Number(this.totalAsset) > 0
+            || Number(this.buyingPower) > 0
+            || Number(this.portfolioValue) > 0
+            || (Array.isArray(this.infiniteBuyCycles) && this.infiniteBuyCycles.length > 0)
+            || (Array.isArray(this.holdings) && this.holdings.length > 0);
+    }
+
+    private shouldIgnoreEmptyOverview(data: any): boolean {
+        if (!this.hasVisibleDashboardData() || !data) return false;
+        if (data.setup_required === true || data.privacy_locked === true) return false;
+        const incomingTotal = Number(data.total_asset) || 0;
+        const incomingBuyingPower = Number(data.buying_power) || 0;
+        const incomingPortfolio = Number(data.portfolio_value) || 0;
+        const incomingCycles = Array.isArray(data.infinite_buy_cycles || data.cycles) ? (data.infinite_buy_cycles || data.cycles) : [];
+        const incomingHoldings = Array.isArray(data.holdings) ? data.holdings : [];
+        const emptyNumbers = incomingTotal <= 0 && incomingBuyingPower <= 0 && incomingPortfolio <= 0;
+        const emptyLists = incomingCycles.length === 0 && incomingHoldings.length === 0;
+        const disconnected = data.api_connected !== true || data.degraded === true || data.balance_sync_ok !== true;
+        return emptyNumbers && emptyLists && disconnected;
+    }
+
+    private dashboardSessionKey(): string {
+        const session: any = this.service?.auth?.session || {};
+        return String(session.id || session.user?.id || session.profile?.id || session.data?.id || session.email || session.user?.email || '').trim();
+    }
+
+    private dashboardCacheKey(): string {
+        const sessionKey = this.dashboardSessionKey();
+        return sessionKey ? `${DASHBOARD_CACHE_KEY}:${sessionKey}` : '';
+    }
+
+    private emptyProfitSummary(message: string = ''): any {
+        const today = this.lastRefreshKst ? this.lastRefreshKst.slice(0, 10) : '';
+        return {
+            realized_profit: 0, unrealized_profit: 0, total_profit: 0,
+            total_invested: 0, total_return: 0,
+            completed_cycles: 0, avg_cycle_return: 0,
+            best_cycle_return: 0, worst_cycle_return: 0,
+            cycle_realized_profit: 0, cycle_unrealized_profit: 0,
+            daytrade_realized_profit: 0, daytrade_unrealized_profit: 0,
+            daytrade_total_profit: 0,
+            ib_realized_profit: 0, ib_unrealized_profit: 0,
+            ib_realized_cycle_count: 0,
+            realized_return: 0, unrealized_return: 0,
+            base_asset: 0, first_snapshot_date: '', elapsed_days: 0,
+            daytrade_trade_count: 0, daytrade_position_count: 0,
+            daily_return_avg: 0, daily_return_best: 0, daily_return_worst: 0,
+            latest_daily_return_rate: 0, asset_change_prev_day: 0,
+            setup_required: true,
+            privacy_locked: true,
+            message,
+            snapshots: today ? [{ date: today, total_asset: 0, profit: 0, profit_rate: 0, daily_return_rate: 0 }] : [],
+        };
+    }
+
     public get isRealAdmin(): boolean {
         const session: any = this.service?.auth?.session || {};
         const role = String(session.role || session.user?.role || session.profile?.role || session.data?.role || '').toLowerCase();
@@ -231,6 +292,10 @@ export class Component implements OnInit {
 
     public get showAdminControls(): boolean {
         return this.isRealAdmin && !this.adminPreviewUserMode;
+    }
+
+    public get showDaytradeQuickLink(): boolean {
+        return this.showAdminControls && this.daytradeRuntime?.daytrade_feature_enabled === true;
     }
 
     private refreshAdminPreviewMode() {
@@ -297,17 +362,36 @@ export class Component implements OnInit {
         this.dueAutomationPromise = null;
     }
 
-    private kickDueAutomation(force: boolean = false) {
-        if (this.destroyed || this.legacyMode === true) return;
+    private async kickDueAutomation(force: boolean = false): Promise<any> {
+        if (this.destroyed || this.legacyMode === true) return null;
         const now = Date.now();
-        if (!force && now - this.lastDueAutomationAtMs < 60000) return;
-        if (this.dueAutomationPromise) return;
+        if (!force && now - this.lastDueAutomationAtMs < 60000) return null;
+        if (this.dueAutomationPromise) return this.dueAutomationPromise;
         this.lastDueAutomationAtMs = now;
         this.dueAutomationPromise = wiz.call("run_due_automation")
-            .catch((e: any) => console.error("Due automation tick error:", e))
+            .then((res: any) => res?.data || null)
+            .catch((e: any) => {
+                console.error("Due automation tick error:", e);
+                return null;
+            })
             .finally(() => {
                 this.dueAutomationPromise = null;
             });
+        return this.dueAutomationPromise;
+    }
+
+    private shouldForceOverviewAfterAutomation(result: any): boolean {
+        if (!result || typeof result !== 'object') return false;
+        const status = String(result.status || '').toLowerCase();
+        const count = (value: any) => Number(value || 0) || 0;
+        if (result.executed === true || result.verified === true || result.verification_complete === true) return true;
+        if (result.forced === true || result.scheduled === true) return true;
+        if (status === 'completed' || status === 'cooldown_wait') return true;
+        if (result.rebuild?.executed === true) return true;
+        if (count(result.buy?.scheduled_count) > 0 || count(result.sell?.scheduled_count) > 0) return true;
+        if (count(result.buy?.already_scheduled_count) > 0 || count(result.sell?.already_scheduled_count) > 0) return true;
+        if (count(result.buy?.expected_count) > 0 || count(result.sell?.expected_count) > 0) return true;
+        return false;
     }
 
     // ─── Data Load ───
@@ -338,13 +422,23 @@ export class Component implements OnInit {
         }
 
         try {
-            this.kickDueAutomation(forceRefresh);
+            const automationResult = await this.kickDueAutomation(forceRefresh);
+            if (this.destroyed || seq !== this.dashboardLoadSeq) return;
+            const refreshOverview = forceRefresh || this.shouldForceOverviewAfterAutomation(automationResult);
             const { code, data } = await wiz.call("overview", {
-                force_refresh: forceRefresh ? 'true' : 'false',
+                force_refresh: refreshOverview ? 'true' : 'false',
                 _ts: Date.now(),
             });
             if (this.destroyed || seq !== this.dashboardLoadSeq) return;
             if (code === 200) {
+                if (this.shouldIgnoreEmptyOverview(data)) {
+                    this.lastRefresh = new Date();
+                    this.lastRefreshKst = data?.server_time_kst || this.lastRefreshKst;
+                    this.loading = false;
+                    this.countdown = this.pollSeconds;
+                    await this.renderIfAlive();
+                    return;
+                }
                 this.usdBuyingPower = data.usd_buying_power || 0;
                 this.usdSyncOk = data.usd_sync_ok === true;
                 this.usdSyncMessage = data.usd_sync_message || '';
@@ -363,6 +457,10 @@ export class Component implements OnInit {
                 this.balanceSyncOk = data.balance_sync_ok === true;
                 this.balanceSyncMessage = data.balance_sync_message || '';
                 this.balanceSyncSource = data.balance_sync_source || '';
+                this.setupRequired = data.setup_required === true;
+                this.privacyLocked = data.privacy_locked === true;
+                this.setupMessage = data.setup_message || data.message || '';
+                this.lastRefreshKst = data.server_time_kst || this.lastRefreshKst;
                 this.engineStatus = data.engine_status || this.engineStatus;
                 this.daytradeRuntime = data.daytrade_runtime || this.daytradeRuntime;
                 this.automationControls = data.automation_controls || [];
@@ -376,10 +474,20 @@ export class Component implements OnInit {
                 this.fireGateBridge = data.fire_gate_bridge || this.fireGateBridge;
                 this.holdings = data.holdings || [];
                 this.daytradePositions = data.daytrade_positions || [];
-                this.daytradePositionSummary = data.daytrade_position_summary || { count: 0, eval_amount_krw: 0, pnl_krw: 0 };
+                this.daytradePositionSummary = data.daytrade_position_summary || { count: 0, eval_amount_krw: 0, cost_amount_krw: 0, pnl_krw: 0 };
                 this.watchlistInfo = data.watchlist_info || [];
-                this.applyLiveUnrealizedFromOverview();
-                this.queueProfitSummaryRefresh(false);
+                if (this.setupRequired || this.privacyLocked) {
+                    this.tradePreviews = [];
+                    this.tradePreviewApiConnected = false;
+                    this.profitData = this.emptyProfitSummary(this.setupMessage);
+                    this.profitChartData = this.emptyProfitSummary(this.setupMessage);
+                    this.profitSyncMessage = this.setupMessage;
+                    this.profitLastRefresh = new Date();
+                    this.profitLastRefreshKst = data.server_time_kst || this.profitLastRefreshKst;
+                } else {
+                    this.applyLiveUnrealizedFromOverview();
+                    this.queueProfitSummaryRefresh(false);
+                }
 
                 // 새 로그 감지
                 const newLogs = data.recent_logs || [];
@@ -409,7 +517,7 @@ export class Component implements OnInit {
         this.lastRefresh = new Date();
         this.loading = false;
         this.countdown = this.pollSeconds;
-        if (this.legacyMode !== true && !silent) {
+        if (this.legacyMode !== true && !silent && !this.setupRequired && !this.privacyLocked) {
             void this.loadTradePreview();
         }
         await this.renderIfAlive();
@@ -435,25 +543,35 @@ export class Component implements OnInit {
 
     // ─── Profit Summary ───
     private applyLiveUnrealizedFromOverview() {
+        if (this.setupRequired || this.privacyLocked) {
+            this.profitData = this.emptyProfitSummary(this.setupMessage);
+            this.profitChartData = this.emptyProfitSummary(this.setupMessage);
+            return;
+        }
         const round2 = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
         const fx = Number(this.exchangeRate) || 0;
         const previous = this.profitData || {};
         let ibUnrealized = Number(previous.ib_unrealized_profit) || 0;
+        let ibInvested = 0;
 
         if (fx > 0 && Array.isArray(this.infiniteBuyCycles)) {
             ibUnrealized = this.infiniteBuyCycles.reduce((sum: number, cycle: any) => {
                 const qty = Number(cycle?.total_qty) || 0;
                 const currentPrice = Number(cycle?.current_price) || 0;
                 const spent = Number(cycle?.total_spent) || 0;
+                if (spent > 0) ibInvested += spent * fx;
                 if (qty <= 0 || currentPrice <= 0 || spent <= 0) return sum;
                 return sum + ((qty * currentPrice - spent) * fx);
             }, 0);
         }
 
         const daytradeUnrealized = Number(this.daytradePositionSummary?.pnl_krw) || 0;
+        const daytradeEval = Number(this.daytradePositionSummary?.eval_amount_krw) || 0;
+        const daytradeCost = Number(this.daytradePositionSummary?.cost_amount_krw) || Math.max(0, daytradeEval - daytradeUnrealized);
+        const liveInvested = round2(Math.max(0, ibInvested) + Math.max(0, daytradeCost));
         const unrealized = round2(ibUnrealized + daytradeUnrealized);
         const realized = Number(previous.realized_profit) || 0;
-        const invested = Number(previous.total_invested) || 0;
+        const invested = Math.max(Number(previous.total_invested) || 0, liveInvested);
         const totalProfit = round2(realized + unrealized);
 
         this.profitData = {
@@ -462,6 +580,8 @@ export class Component implements OnInit {
             ib_unrealized_profit: round2(ibUnrealized),
             daytrade_unrealized_profit: round2(daytradeUnrealized),
             total_profit: totalProfit,
+            total_invested: invested,
+            realized_return: invested > 0 ? round2((realized / invested) * 100) : previous.realized_return,
             unrealized_return: invested > 0 ? round2((unrealized / invested) * 100) : previous.unrealized_return,
             total_return: invested > 0 ? round2((totalProfit / invested) * 100) : previous.total_return,
             daytrade_position_count: this.daytradePositionSummary?.count || previous.daytrade_position_count || 0,
@@ -471,6 +591,14 @@ export class Component implements OnInit {
 
     public async loadProfitSummary(forceRefresh: boolean = false) {
         if (this.destroyed) return;
+        if (this.setupRequired || this.privacyLocked) {
+            this.profitData = this.emptyProfitSummary(this.setupMessage);
+            this.profitChartData = this.emptyProfitSummary(this.setupMessage);
+            this.profitSyncMessage = this.setupMessage;
+            this.profitLoading = false;
+            await this.renderIfAlive();
+            return;
+        }
         if (this.profitLoadPromise && !forceRefresh) {
             await this.profitLoadPromise;
             return;
@@ -486,6 +614,7 @@ export class Component implements OnInit {
 
     private queueProfitSummaryRefresh(forceRefresh: boolean = false) {
         if (this.destroyed) return;
+        if (this.setupRequired || this.privacyLocked) return;
         const now = Date.now();
         const intervalMs = forceRefresh ? 0 : 30000;
         if (!forceRefresh && this.profitLoading) return;
@@ -509,8 +638,23 @@ export class Component implements OnInit {
             if (this.destroyed || seq !== this.profitSeq) return;
             if (todayRes?.code === 200) {
                 this.profitData = todayRes.data || this.profitData;
+                if ((todayRes.data || {}).setup_required === true || (todayRes.data || {}).privacy_locked === true) {
+                    this.setupRequired = true;
+                    this.privacyLocked = true;
+                    this.setupMessage = todayRes.data?.message || this.setupMessage;
+                    this.profitChartData = todayRes.data || this.emptyProfitSummary(this.setupMessage);
+                    this.profitSyncMessage = this.setupMessage;
+                    this.profitLastRefresh = new Date();
+                    this.profitLastRefreshKst = todayRes.data?.server_time_kst || this.profitLastRefreshKst;
+                    this.profitLastServerRefreshMs = Date.now();
+                    this.persistCachedState();
+                    this.profitLoading = false;
+                    await this.renderIfAlive();
+                    return;
+                }
                 if ((todayRes.data || {}).message) this.profitSyncMessage = todayRes.data.message;
                 this.profitLastRefresh = new Date();
+                this.profitLastRefreshKst = todayRes.data?.server_time_kst || this.profitLastRefreshKst;
                 this.profitLastServerRefreshMs = Date.now();
                 this.applyLiveUnrealizedFromOverview();
                 this.persistCachedState();
@@ -535,6 +679,7 @@ export class Component implements OnInit {
                         this.profitChartData = chartRes.data || this.profitChartData;
                         if ((chartRes.data || {}).message) this.profitSyncMessage = chartRes.data.message;
                         this.profitLastRefresh = new Date();
+                        this.profitLastRefreshKst = chartRes.data?.server_time_kst || this.profitLastRefreshKst;
                         this.profitLastServerRefreshMs = Date.now();
                         this.persistCachedState();
                     }
@@ -913,6 +1058,41 @@ export class Component implements OnInit {
         return cycle?.loc_buy_status_label || '-';
     }
 
+    public cyclePriceMeta(cycle: any): string {
+        const rawSource = String(cycle?.price_source || '').trim();
+        const source = rawSource.toLowerCase().includes('alpaca')
+            ? '24시간 시세'
+            : rawSource.toLowerCase().includes('yahoo')
+            ? 'Yahoo'
+            : rawSource.startsWith('KIS:')
+                ? rawSource.replace('KIS:', 'KIS ')
+                : rawSource;
+        const rawKst = String(cycle?.price_timestamp_kst || '').trim();
+        const rawIso = String(cycle?.price_timestamp || '').trim();
+        let timeLabel = '';
+        if (rawKst) {
+            timeLabel = rawKst.replace(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}).*$/, '$2.$3 $4:$5');
+        } else if (rawIso) {
+            const parsed = new Date(rawIso);
+            if (!Number.isNaN(parsed.getTime())) {
+                timeLabel = parsed.toLocaleString('ko-KR', {
+                    timeZone: 'Asia/Seoul',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                }).replace(/\.\s?/g, '.').replace(/,$/, '');
+            }
+        }
+        const age = Number(cycle?.price_age_sec) || 0;
+        let ageLabel = '';
+        if (age >= 3600) ageLabel = `${Math.floor(age / 3600)}시간 전`;
+        else if (age >= 60) ageLabel = `${Math.floor(age / 60)}분 전`;
+        const parts = [source, timeLabel, ageLabel].filter(Boolean);
+        return parts.join(' · ');
+    }
+
     public cycleStatusLabel(status: string): string {
         const s = String(status || '').toUpperCase();
         if (s === 'ACTIVE') return '진행중';
@@ -951,9 +1131,11 @@ export class Component implements OnInit {
             const { code, data } = await wiz.call("toggle_auto_trade");
             if (code === 200) {
                 this.engineStatus.auto_trade = data?.auto_trade === true;
+                this.engineStatus.loc_auto_schedule_enabled = data?.loc_auto_schedule_enabled === true;
+                this.infiniteBuySummary.loc_auto_enabled = data?.loc_auto_schedule_enabled === true;
                 const state = this.engineStatus.auto_trade ? 'ON' : 'OFF';
                 this.addToast(this.engineStatus.auto_trade ? 'success' : 'warning',
-                    this.t('engine.auto_trading'), `${this.t('engine.auto_trading')} ${state}`);
+                    '무한매수 매매', `무한매수 매매 ${state}`);
             } else {
                 this.addToast('error', this.t('engine.auto_trading'), data?.message || '자동매매 설정 변경 실패');
             }
@@ -1042,16 +1224,16 @@ export class Component implements OnInit {
             this.addToast('warning', this.t('dash.demo_mode'), this.t('dash.demo_desc'));
             return;
         }
-        this.addToast('info', 'Engine', this.t('engine.run_now') + '...');
+        this.addToast('info', '엔진', this.t('engine.run_now') + '...');
         this.loading = true;
         await this.renderIfAlive();
         const { code, data } = await wiz.call("run_engine");
         if (code === 200) {
             const results = data.results || [];
-            this.addToast('success', 'Engine Complete', `${results.length} symbols processed`);
+            this.addToast('success', '엔진 실행 완료', `${results.length}개 종목을 처리했습니다.`);
             await this.load();
         } else {
-            this.addToast('error', 'Engine Error', data?.message || 'Unknown error');
+            this.addToast('error', '엔진 오류', data?.message || '알 수 없는 오류가 발생했습니다.');
         }
         this.loading = false;
         await this.renderIfAlive();
@@ -1113,10 +1295,10 @@ export class Component implements OnInit {
         this.showStartModal = false;
         this.startModalLoading = false;
         if (code === 200) {
-            this.addToast('success', 'Cycle Started', `${this.startModalSymbol} — $${this.startModalInvestment}, ${this.startModalDivision} splits, ${this.startModalTarget}% target`);
+            this.addToast('success', '사이클 시작', `${this.startModalSymbol} - $${this.startModalInvestment}, ${this.startModalDivision}분할, 목표 ${this.startModalTarget}%`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to start cycle');
+            this.addToast('error', '오류', data?.message || '사이클 시작에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1167,10 +1349,18 @@ export class Component implements OnInit {
         try {
             const globalWindow: any = typeof window !== 'undefined' ? window : null;
             if (!globalWindow) return false;
-            const raw = globalWindow[DASHBOARD_CACHE_KEY];
+            const cacheKey = this.dashboardCacheKey();
+            if (!cacheKey) return false;
+            let raw = globalWindow[cacheKey];
+            if (!raw || typeof raw !== 'object') {
+                const stored = globalWindow.localStorage?.getItem(cacheKey);
+                raw = stored ? JSON.parse(stored) : null;
+            }
             if (!raw || typeof raw !== 'object') return false;
+            const sessionKey = this.dashboardSessionKey();
+            if (!sessionKey || raw.sessionKey !== sessionKey) return false;
             const ageMs = Date.now() - Number(raw.ts || 0);
-            if (!isFinite(ageMs) || ageMs > 120000) return false;
+            if (!isFinite(ageMs) || ageMs > 1800000) return false;
             const state = raw.state || {};
             this.buyingPower = Number(state.buyingPower) || 0;
             this.orderableCash = Number(state.orderableCash) || 0;
@@ -1190,11 +1380,15 @@ export class Component implements OnInit {
             this.balanceSyncOk = state.balanceSyncOk === true;
             this.balanceSyncMessage = String(state.balanceSyncMessage || '');
             this.balanceSyncSource = String(state.balanceSyncSource || '');
+            this.setupRequired = state.setupRequired === true;
+            this.privacyLocked = state.privacyLocked === true;
+            this.setupMessage = String(state.setupMessage || '');
             this.engineStatus = state.engineStatus || this.engineStatus;
             this.apiConnected = state.apiConnected === true;
             this.cycles = Array.isArray(state.cycles) ? state.cycles : [];
             this.infiniteBuyCycles = Array.isArray(state.infiniteBuyCycles) ? state.infiniteBuyCycles : this.cycles;
             this.infiniteBuySummary = state.infiniteBuySummary || this.infiniteBuySummary;
+            this.fireGateBridge = state.fireGateBridge || this.fireGateBridge;
             this.holdings = Array.isArray(state.holdings) ? state.holdings : [];
             this.daytradePositions = Array.isArray(state.daytradePositions) ? state.daytradePositions : [];
             this.daytradePositionSummary = state.daytradePositionSummary || this.daytradePositionSummary;
@@ -1205,10 +1399,19 @@ export class Component implements OnInit {
             this.profitData = state.profitData || this.profitData;
             this.profitChartData = state.profitChartData || this.profitChartData;
             this.daytradeRuntime = state.daytradeRuntime || this.daytradeRuntime;
+            this.automationControls = Array.isArray(state.automationControls) ? state.automationControls : this.automationControls;
+            this.balanceDiagnostics = Array.isArray(state.balanceDiagnostics) ? state.balanceDiagnostics : this.balanceDiagnostics;
             this.lastRefresh = raw.ts ? new Date(raw.ts) : new Date();
+            this.lastRefreshKst = String(state.lastRefreshKst || '');
             this.profitLastRefresh = state.profitLastRefresh ? new Date(state.profitLastRefresh) : this.profitLastRefresh;
+            this.profitLastRefreshKst = String(state.profitLastRefreshKst || '');
             this.syncSeedDrafts();
-            this.applyLiveUnrealizedFromOverview();
+            if (this.setupRequired || this.privacyLocked) {
+                this.profitData = this.emptyProfitSummary(this.setupMessage);
+                this.profitChartData = this.emptyProfitSummary(this.setupMessage);
+            } else {
+                this.applyLiveUnrealizedFromOverview();
+            }
             return true;
         } catch (e) {
             return false;
@@ -1219,8 +1422,12 @@ export class Component implements OnInit {
         try {
             const globalWindow: any = typeof window !== 'undefined' ? window : null;
             if (!globalWindow) return;
-            globalWindow[DASHBOARD_CACHE_KEY] = {
+            const cacheKey = this.dashboardCacheKey();
+            const sessionKey = this.dashboardSessionKey();
+            if (!cacheKey || !sessionKey) return;
+            const payload = {
                 ts: Date.now(),
+                sessionKey,
                 state: {
                     buyingPower: this.buyingPower,
                     orderableCash: this.orderableCash,
@@ -1240,11 +1447,15 @@ export class Component implements OnInit {
                     balanceSyncOk: this.balanceSyncOk,
                     balanceSyncMessage: this.balanceSyncMessage,
                     balanceSyncSource: this.balanceSyncSource,
+                    setupRequired: this.setupRequired,
+                    privacyLocked: this.privacyLocked,
+                    setupMessage: this.setupMessage,
                     engineStatus: this.engineStatus,
                     apiConnected: this.apiConnected,
                     cycles: this.cycles,
                     infiniteBuyCycles: this.infiniteBuyCycles,
                     infiniteBuySummary: this.infiniteBuySummary,
+                    fireGateBridge: this.fireGateBridge,
                     holdings: this.holdings,
                     daytradePositions: this.daytradePositions,
                     daytradePositionSummary: this.daytradePositionSummary,
@@ -1255,9 +1466,19 @@ export class Component implements OnInit {
                     profitData: this.profitData,
                     profitChartData: this.profitChartData,
                     profitLastRefresh: this.profitLastRefresh ? this.profitLastRefresh.toISOString() : '',
+                    profitLastRefreshKst: this.profitLastRefreshKst,
                     daytradeRuntime: this.daytradeRuntime,
+                    automationControls: this.automationControls,
+                    balanceDiagnostics: this.balanceDiagnostics,
+                    lastRefreshKst: this.lastRefreshKst,
                 },
             };
+            globalWindow[cacheKey] = payload;
+            try {
+                globalWindow.localStorage?.removeItem(DASHBOARD_CACHE_KEY);
+                globalWindow.localStorage?.setItem(cacheKey, JSON.stringify(payload));
+            } catch (e) {
+            }
         } catch (e) {
         }
     }
@@ -1293,20 +1514,20 @@ export class Component implements OnInit {
             return;
         }
         const confirmed = await this.service.modal.show({
-            title: 'Force Close',
-            message: `${cycle.symbol} #${cycle.cycle_number || '?'} — Force close? All shares will be sold at market price.`,
-            action: 'Close Cycle',
-            cancel: 'Cancel',
+            title: '사이클 강제 종료',
+            message: `${cycle.symbol} #${cycle.cycle_number || '?'} - 강제로 종료할까요? 보유 수량은 시장가 기준으로 매도됩니다.`,
+            action: '종료',
+            cancel: '취소',
         });
         if (!confirmed) return;
 
-        this.addToast('info', 'Cycle', `${cycle.symbol} closing...`);
+        this.addToast('info', '사이클', `${cycle.symbol} 종료 중...`);
         const { code, data } = await wiz.call("force_close_cycle", { cycle_id: cycle.id });
         if (code === 200) {
-            this.addToast('success', 'Cycle Closed', `${cycle.symbol} force closed`);
+            this.addToast('success', '사이클 종료', `${cycle.symbol} 강제 종료 완료`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to close cycle');
+            this.addToast('error', '오류', data?.message || '사이클 종료에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1319,10 +1540,10 @@ export class Component implements OnInit {
         }
         const { code, data } = await wiz.call("pause_cycle", { cycle_id: cycle.id });
         if (code === 200) {
-            this.addToast('info', 'Cycle Paused', `${cycle.symbol} paused`);
+            this.addToast('info', '사이클 일시정지', `${cycle.symbol} 일시정지 완료`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to pause cycle');
+            this.addToast('error', '오류', data?.message || '사이클 일시정지에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1335,10 +1556,10 @@ export class Component implements OnInit {
         }
         const { code, data } = await wiz.call("resume_cycle", { cycle_id: cycle.id });
         if (code === 200) {
-            this.addToast('success', 'Cycle Resumed', `${cycle.symbol} resumed`);
+            this.addToast('success', '사이클 재개', `${cycle.symbol} 재개 완료`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to resume cycle');
+            this.addToast('error', '오류', data?.message || '사이클 재개에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1351,6 +1572,49 @@ export class Component implements OnInit {
             await this.resumeCycle(cycle, event);
         } else {
             await this.pauseCycle(cycle, event);
+        }
+    }
+
+    public async retryLocBuyReservation(cycle: any, event?: Event) {
+        if (event) event.stopPropagation();
+        if (!cycle?.symbol) return;
+        if (this.isMock) {
+            this.addToast('warning', this.t('dash.demo_mode'), this.t('dash.demo_desc'));
+            return;
+        }
+        const key = `loc_retry_${cycle.id || cycle.symbol}`;
+        if (this.automationSaving[key]) return;
+        this.automationSaving[key] = true;
+        await this.renderIfAlive();
+        try {
+            const { code, data } = await wiz.call("retry_loc_buy_reservation", {
+                symbol: cycle.symbol,
+                cycle_id: cycle.id,
+            });
+            if (code === 200) {
+                const result = data?.result || {};
+                const scheduled = Number(result.scheduled_count || 0);
+                const already = Number(result.already_scheduled_count || 0);
+                const errors = Number(result.error_count || 0);
+                if (scheduled > 0) {
+                    this.addToast('success', 'LOC 예약 재시도', `${cycle.symbol} 예약매수 ${scheduled}건을 다시 접수했습니다.`);
+                } else if (already > 0) {
+                    this.addToast('success', 'LOC 예약 확인', `${cycle.symbol} 예약매수가 이미 접수되어 있습니다.`);
+                } else if (errors > 0) {
+                    const reason = result.errors?.[0]?.reason || data?.message || '예약 재시도 실패';
+                    this.addToast('error', 'LOC 예약 재시도', reason);
+                } else {
+                    this.addToast('info', 'LOC 예약 재시도', result.message || result.reason || `${cycle.symbol} 예약 대상이 없습니다.`);
+                }
+                await this.load(true, true);
+            } else {
+                this.addToast('error', 'LOC 예약 재시도', data?.message || '예약 재시도 실패');
+            }
+        } catch (e: any) {
+            this.addToast('error', 'LOC 예약 재시도', e?.message || '예약 재시도 실패');
+        } finally {
+            this.automationSaving[key] = false;
+            await this.renderIfAlive();
         }
     }
 
@@ -1408,7 +1672,7 @@ export class Component implements OnInit {
             this.addToast('success', this.t('cycle.delete_title'), `${cycle.symbol} ${this.t('cycle.deleted')}`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to delete cycle');
+            this.addToast('error', '오류', data?.message || '사이클 삭제에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1453,7 +1717,7 @@ export class Component implements OnInit {
             this.showEditModal = false;
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to update cycle');
+            this.addToast('error', '오류', data?.message || '사이클 수정에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1488,10 +1752,10 @@ export class Component implements OnInit {
         });
         this.showExtensionModal = false;
         if (code === 200) {
-            this.addToast('success', 'Cycle Extended', `${this.extensionSymbol} +${this.extensionExtraRounds} rounds`);
+            this.addToast('success', '사이클 연장', `${this.extensionSymbol} ${this.extensionExtraRounds}회차 추가`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to extend cycle');
+            this.addToast('error', '오류', data?.message || '사이클 연장에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1503,19 +1767,19 @@ export class Component implements OnInit {
             return;
         }
         const confirmed = await this.service.modal.show({
-            title: 'Keep Holding',
-            message: `${cycle.symbol} #${cycle.cycle_number || '?'} — Keep holding without additional buying? Will only sell when target is reached.`,
-            action: 'Keep Holding',
-            cancel: 'Cancel',
+            title: '보유 유지',
+            message: `${cycle.symbol} #${cycle.cycle_number || '?'} - 추가 매수 없이 보유만 유지할까요? 목표 수익에 도달하면 매도만 진행합니다.`,
+            action: '보유 유지',
+            cancel: '취소',
         });
         if (!confirmed) return;
 
         const { code, data } = await wiz.call("keep_holding", { cycle_id: cycle.id });
         if (code === 200) {
-            this.addToast('info', 'Keep Holding', `${cycle.symbol} holding`);
+            this.addToast('info', '보유 유지', `${cycle.symbol} 보유 유지로 변경했습니다.`);
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || 'Failed to keep holding');
+            this.addToast('error', '오류', data?.message || '보유 유지 처리에 실패했습니다.');
         }
         await this.renderIfAlive();
     }
@@ -1586,7 +1850,7 @@ export class Component implements OnInit {
             }
             await this.load();
         } else {
-            this.addToast('error', 'Error', data?.message || '거래 삭제 실패');
+            this.addToast('error', '오류', data?.message || '거래 삭제 실패');
         }
         await this.renderIfAlive();
     }
@@ -1643,7 +1907,7 @@ export class Component implements OnInit {
     }
 
     public quickNavGridClass(): string {
-        if (this.showAdminControls) {
+        if (this.showDaytradeQuickLink) {
             return 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-6';
         }
         return 'grid grid-cols-1 md:grid-cols-3 gap-3 mb-6';

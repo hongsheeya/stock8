@@ -262,7 +262,7 @@ def _price_snapshot(trading, symbol, exchange, refresh=False):
         return {}, exchange
 
     try:
-        kis = trading.kis_api
+        kis = getattr(trading, "broker_api", None) or trading.kis_api
         price_exchange = _PRICE_EXCHANGE_MAP.get(exchange, "NAS")
         data = kis.get_current_price(symbol, exchange=price_exchange) or {}
         resolved = data.get("order_exchange") or exchange
@@ -432,7 +432,13 @@ def _portfolio_payload(refresh=False):
             }
 
         buy_orders = [_normalize_order(order) for order in buy_decision.get("buy_orders", []) or []]
-        sell_orders = _sell_plan(cycle, buy_decision)
+        try:
+            raw_sell_orders = engine._firegate_v4_sell_orders(cycle) if hasattr(engine, "_firegate_v4_sell_orders") else []
+        except Exception:
+            raw_sell_orders = []
+        if not raw_sell_orders:
+            raw_sell_orders = _sell_plan(cycle, buy_decision)
+        sell_orders = [_normalize_order(order) for order in raw_sell_orders]
 
         seed = _safe_float(cycle.get("total_investment"), _safe_float(item.get("total_investment"), 0))
         spent = _safe_float(cycle.get("total_spent"), 0)
@@ -527,6 +533,49 @@ def _latest_cycle(cycle_db, symbol):
     except Exception:
         pass
     return None
+
+
+def _local_filled_trade_state(trading, cycle_id):
+    state = {"buy_rounds": 0, "qty": 0, "spent": 0.0}
+    if not cycle_id:
+        return state
+    try:
+        trade_db = trading.db("cycle_trade")
+        rows = trade_db.rows(cycle_id=cycle_id, orderby="created", order="ASC", dump=1000) or []
+    except Exception:
+        return state
+    qty = 0
+    spent = 0.0
+    buy_rounds = 0
+    for row in rows:
+        if str(row.get("status", "") or "").upper() != "FILLED":
+            continue
+        action = str(row.get("action", "") or "").upper()
+        filled_qty = max(_safe_int(row.get("filled_qty"), 0), 0)
+        filled_amount = max(_safe_float(row.get("filled_amount"), 0), 0.0)
+        commission = max(_safe_float(row.get("commission"), 0), 0.0)
+        if action == "BUY":
+            qty += filled_qty
+            spent += filled_amount + commission
+            buy_rounds += 1
+        elif action == "SELL":
+            qty = max(0, qty - filled_qty)
+            if qty == 0:
+                spent = 0.0
+    return {"buy_rounds": buy_rounds, "qty": qty, "spent": round(spent, 2)}
+
+
+def _local_state_newer_than_firegate(trading, cycle, remote_round, remote_qty, remote_spent):
+    if not cycle:
+        return False
+    trade_state = _local_filled_trade_state(trading, cycle.get("id"))
+    if trade_state["buy_rounds"] > _safe_int(remote_round, 0):
+        return True
+    if trade_state["qty"] > _safe_int(remote_qty, 0):
+        return True
+    if trade_state["spent"] > _safe_float(remote_spent, 0) + 0.01:
+        return True
+    return False
 
 
 def _next_cycle_number(cycle_db, symbol):
@@ -879,7 +928,7 @@ def sync_fire_gate():
         trading = _trading()
         symbol = _normalize_symbol(wiz.request.query("symbol", ""))
         fg = _firegate_bridge_mod()
-        sync_fn = getattr(fg, "sync_portfolios_bidirectional", None) or fg.sync_portfolios_to_local
+        sync_fn = getattr(fg, "sync_firegate_authoritative", None) or fg.sync_portfolios_to_local
         result = sync_fn(trading, symbol_filter=symbol)
         payload = _portfolio_payload(refresh=False)
         wiz.response.status(200, synced=True, result=result, **payload)

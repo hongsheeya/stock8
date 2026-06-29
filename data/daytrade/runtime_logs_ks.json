@@ -1,0 +1,4561 @@
+[
+    {
+        "timestamp": "2026-06-17 01:05:06",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:09:59",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:10:19",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 13312798.0,
+            "kis_domestic_orderable_krw": 13312798.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 25938951.0,
+            "infinite_buy_reserve_krw": 1884563.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:10:22",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:10:22",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:10:22",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:15:21",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:15:40",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:15:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:15:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:15:43",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:20:43",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:21:03",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:21:06",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:21:06",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:21:06",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:25:53",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:26:13",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:26:16",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:26:16",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:26:16",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:31:17",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:31:36",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:31:39",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:31:39",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:31:39",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:36:27",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:36:46",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:36:49",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:36:49",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:36:49",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:41:48",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:42:08",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:42:11",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:42:11",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:42:11",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:46:56",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:47:15",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:47:20",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:47:20",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:47:20",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:52:10",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:52:28",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:52:32",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:52:32",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:52:32",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:57:30",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:57:49",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:57:52",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 01:57:52",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 01:57:52",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:02:39",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:02:59",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:03:02",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:03:02",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:03:02",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:08:01",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:08:20",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:08:23",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:08:23",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:08:23",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:13:10",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:13:30",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:13:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:13:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:13:33",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:18:32",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:18:51",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:18:54",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:18:54",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:18:54",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:23:41",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:24:01",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:24:04",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:24:04",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:24:04",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:28:43",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:29:02",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:29:05",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:29:05",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:29:05",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:33:50",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:34:10",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:34:13",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:34:13",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:34:13",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:39:11",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:39:30",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:39:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:39:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:39:33",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:44:22",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:46:32",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:46:36",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:46:36",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:46:36",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:49:37",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:51:52",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:51:55",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:51:55",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:51:55",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:54:54",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:57:10",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:57:13",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 02:57:13",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 02:57:13",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:00:13",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:02:29",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:02:32",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:02:32",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:02:32",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:05:25",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:07:40",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:07:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:07:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:07:44",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:10:45",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:12:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:12:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:13:12",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:13:18",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:15:55",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:18:08",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:18:08",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:18:49",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:18:55",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:21:18",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:23:24",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:23:24",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:23:49",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:24:22",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:26:26",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:28:45",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:28:45",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:29:11",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:29:43",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:31:45",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:33:55",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:33:55",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:34:31",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:35:03",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:37:08",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:38:57",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:38:57",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:39:53",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:40:25",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:42:27",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:44:05",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:44:05",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:45:00",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:45:32",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:47:36",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:49:25",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:49:25",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:50:19",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:50:51",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:52:54",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:54:37",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:54:37",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:55:33",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:56:04",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:58:07",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 03:59:56",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 03:59:56",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:00:52",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:01:24",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:03:27",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:05:10",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:05:10",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:06:05",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:06:37",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:08:40",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:10:30",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:10:30",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:11:24",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:11:56",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:13:52",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:15:42",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:15:42",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:16:37",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:17:09",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:19:12",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:21:01",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:21:01",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:21:55",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:22:27",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:24:25",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:26:14",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:26:14",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:27:09",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:27:41",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:29:44",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:31:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:31:33",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:32:28",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:33:00",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:34:54",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:36:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:36:43",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:37:37",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:38:10",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:40:13",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:42:04",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:42:04",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:42:59",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:43:31",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:45:26",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:47:15",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:47:15",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:48:10",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:48:42",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:50:46",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:52:35",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:52:35",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:53:30",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:53:53",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:55:55",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc \ub300\uc0c1\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 0,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:57:45",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc790\ub3d9 \ucd94\ucc9c \uac31\uc2e0 \uc2e4\ud328 (US): name 'seed' is not defined",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 04:57:45",
+        "level": "warning",
+        "message": "\ub2e8\ud0c0 \uc2e0\uaddc \uc9c4\uc785 \ucc28\ub2e8 (US): \uc2b9\ub960 20.00% / \uac80\uc99d \uc2b9\ub960 20.00% / \ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "block_new_entries": true,
+            "issues": [
+                "\uc2b9\ub960 20.00%",
+                "\uac80\uc99d \uc2b9\ub960 20.00%",
+                "\ud604\uc7ac \ucd94\uc138\uc815\ud569 -0.94"
+            ],
+            "trade_ready_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:58:40",
+        "level": "info",
+        "message": "\ub2e8\ud0c0 \ud6c4\ubcf4 \uacc4\uc0b0 \uc2dc\uc791 (US)",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "requested_seed": 1000000.0,
+            "effective_seed": 0.0,
+            "total_seed_krw": 1000000.0,
+            "used_seed_krw": 2050000.0,
+            "remaining_seed_krw": 0.0,
+            "per_symbol_seed_krw": 0.0,
+            "slot_seed_limit_krw": 250000.0,
+            "position_count": 0,
+            "available_slot_count": 4,
+            "slot_target_count": 4,
+            "kis_withdrawable_krw": 12135592.0,
+            "kis_domestic_orderable_krw": 12135592.0,
+            "kis_balance_withdrawable_krw": 13380547.0,
+            "kis_d1_deposit_krw": 13380547.0,
+            "kis_d2_deposit_krw": 0.0,
+            "kis_available_for_daytrade": 24846298.0,
+            "infinite_buy_reserve_krw": 1887500.0,
+            "balance_source": "us_buying_power:frcr_ord_psbl_amt1"
+        }
+    },
+    {
+        "timestamp": "2026-06-17 04:59:12",
+        "level": "info",
+        "message": "\ubbf8\uad6d \ub2e8\ud0c0 \uc790\ub3d9\uc21c\ud658 \uc2dc\uc791",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "market": "US",
+            "user_id": "",
+            "requested_seed": 1000000.0,
+            "candidate_count": 0,
+            "position_count": 0,
+            "remaining_seed_krw": 0.0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:00:16",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:05:28",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:10:44",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:16:01",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:21:27",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:26:29",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:31:44",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:37:00",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:42:15",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:47:30",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:52:45",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 05:58:00",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:03:19",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:08:29",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:13:46",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:19:02",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:24:16",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:29:41",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:34:47",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:40:05",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:45:28",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:50:28",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 06:55:31",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:00:49",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:06:02",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:11:20",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:16:34",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:21:50",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:27:05",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:32:20",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:37:36",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:42:52",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:48:07",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:53:27",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 07:58:41",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:04:16",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:09:29",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:14:47",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:20:00",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:25:15",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:30:34",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:35:47",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:41:10",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:46:20",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 08:51:43",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:09:19",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-17 09:09:38",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:15:07",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:20:41",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:25:55",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:31:29",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:36:35",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:41:35",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:46:43",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:51:47",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 09:56:49",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 10:01:56",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 10:07:33",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 10:12:39",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 10:17:48",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-17 10:23:06",
+        "level": "info",
+        "message": "\ubbf8\uc7a5 \uc790\ub3d9\uccad\uc0b0 \uac10\uc2dc 1\uac74 \uc810\uac80 \uc644\ub8cc",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {
+            "watched_count": 1,
+            "executed_count": 0
+        }
+    },
+    {
+        "timestamp": "2026-06-18 09:07:02",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-18 21:54:18",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: \uad6d\ub0b4 \uae30\uac04 \uc190\uc775 \uc870\ud68c \uc2e4\ud328: AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-18 21:54:18",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:\ud574\uc678 \uccb4\uacb0 \uc870\ud68c \uc2e4\ud328: NASD:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-19 09:13:18",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-24 20:12:17",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: \uad6d\ub0b4 \uae30\uac04 \uc190\uc775 \uc870\ud68c \uc2e4\ud328: AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-24 20:12:17",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:\ud574\uc678 \uccb4\uacb0 \uc870\ud68c \uc2e4\ud328: NASD/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NASD/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-24 20:18:04",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: \uad6d\ub0b4 \uae30\uac04 \uc190\uc775 \uc870\ud68c \uc2e4\ud328: AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-24 20:18:04",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:\ud574\uc678 \uccb4\uacb0 \uc870\ud68c \uc2e4\ud328: NASD/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NASD/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 09:00:14",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 09:11:50",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 10:22:50",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: \uad6d\ub0b4 \uae30\uac04 \uc190\uc775 \uc870\ud68c \uc2e4\ud328: AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 10:22:50",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:\ud574\uc678 \uccb4\uacb0 \uc870\ud68c \uc2e4\ud328: NASD/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/ALL:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NASD/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | NYSE/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4. | AMEX/%:AppSecret\uc740 \ud544\uc218\uc785\ub2c8\ub2e4.",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 11:01:00",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: 403 Client Error: Forbidden for url: https://openapivts.koreainvestment.com:29443/oauth2/tokenP",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 11:01:00",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:403 Client Error: Forbidden for url: https://openapivts.koreainvestment.com:29443/oauth2/tokenP",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 11:25:44",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \uc190\uc775 \ub3d9\uae30\ud654 \uc2e4\ud328: 403 Client Error: Forbidden for url: https://openapivts.koreainvestment.com:29443/oauth2/tokenP",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-25 11:25:44",
+        "level": "warning",
+        "message": "\uac70\ub798 \uc77c\uc9c0 KIS \ub3d9\uae30\ud654 \uc77c\ubd80 \uc2e4\ud328: overseas:403 Client Error: Forbidden for url: https://openapivts.koreainvestment.com:29443/oauth2/tokenP",
+        "symbol": "",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-29 09:00:53",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    },
+    {
+        "timestamp": "2026-06-29 09:14:32",
+        "level": "warning",
+        "message": "000660 \ub77c\uc774\ube0c \ubd84\ubd09 fallback: 000660.KS\uc758 \ubd84\ubd09 \ub370\uc774\ud130\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "symbol": "000660",
+        "market": "KS",
+        "strategy_id": "vrev",
+        "meta": {}
+    }
+]

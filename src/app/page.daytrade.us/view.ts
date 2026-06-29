@@ -64,6 +64,7 @@ export class Component implements OnInit, OnDestroy {
 
     public async ngOnInit() {
         await this.service.init(this);
+        await this.service.auth.allow('/access');
         await this.bootstrap();
         this.loading = false;
         await this.service.render();

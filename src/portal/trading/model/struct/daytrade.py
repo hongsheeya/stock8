@@ -9,6 +9,19 @@ import subprocess
 import sys
 import time as _time
 
+try:
+    _KST_MODEL = wiz.model("portal/trading/kst")
+except Exception:
+    _KST_MODEL = None
+
+
+def _kst_model():
+    global _KST_MODEL
+    if _KST_MODEL is None:
+        _KST_MODEL = wiz.model("portal/trading/kst")
+    return _KST_MODEL
+
+
 class Daytrade:
     # 클래스 레벨 TTL 캐시: (symbol, period, interval) → (ts, data)
     _DATASET_CACHE: dict = {}
@@ -315,7 +328,7 @@ class Daytrade:
         self.struct = struct
 
     def _now(self):
-        return wiz.model("portal/trading/kst").now()
+        return _kst_model().now()
 
     def _config(self, key, default=None):
         """매 요청 DB 쿼리 대신 Struct 싱글톤 캐시에서 읽음 — 연결 고갈 방지"""
@@ -775,7 +788,7 @@ class Daytrade:
                 return False
         return True
 
-    def _recommendation_price_filter(self, recommendation, strategy_id="", price_cap=0, market="KS"):
+    def _recommendation_price_filter(self, recommendation, strategy_id="", price_cap=0, market="KS", seed=0):
         if isinstance(recommendation, dict) is False:
             return recommendation
 
@@ -805,9 +818,12 @@ class Daytrade:
         selected_row = dict(selected_pool[0])
 
         result = dict(recommendation)
-        result["leaderboard"] = leaderboard[:12]
+        leaderboard_limit = 48 if market_scope == "KS" else 12
+        result["leaderboard"] = leaderboard[:leaderboard_limit]
         result["peer_comparison"] = leaderboard[1:6]
         result["cross_validation"] = [row.get("validation", {}) for row in leaderboard[:5]]
+        result["leaderboard_limit"] = leaderboard_limit
+        result["leaderboard_total_count"] = len(leaderboard)
         result["selected"] = {
             "symbol": selected_row.get("symbol", ""),
             "market": selected_row.get("market", market_scope),
@@ -884,10 +900,11 @@ class Daytrade:
                 today = self._now().strftime("%Y-%m-%d")
                 if allow_stale_day is False and gen != today:
                     continue
-                expected_key = self._recommendation_cache_key(seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
-                cached_key = data.get("cache_key", {}) if isinstance(data.get("cache_key", {}), dict) else {}
-                if self._recommendation_cache_matches(cached_key, expected_key, seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market) is False:
-                    continue
+                if self._safe_float(seed, 0) > 0 or self._safe_float(price_cap, 0) > 0 or str(strategy_id or "").strip():
+                    expected_key = self._recommendation_cache_key(seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
+                    cached_key = data.get("cache_key", {}) if isinstance(data.get("cache_key", {}), dict) else {}
+                    if self._recommendation_cache_matches(cached_key, expected_key, seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market) is False:
+                        continue
                 return data
             except Exception:
                 pass

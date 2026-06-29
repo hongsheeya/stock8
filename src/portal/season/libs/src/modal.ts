@@ -18,11 +18,27 @@ export default class Modal {
 
     constructor(private service: Service) { }
 
+    private label(value: any, role: string) {
+        if (value === false || value === null || value === undefined || value === '') return value;
+        if (value === true) return role === 'cancel' ? '취소' : '확인';
+        let text = String(value).trim();
+        let lower = text.toLowerCase();
+        if (lower === 'ok' || lower === 'okay' || lower === 'true') return '확인';
+        if (lower === 'cancel' || lower === 'false') return '취소';
+        return text;
+    }
+
+    private normalizeLabels() {
+        this.opts.action = this.label(this.opts.action, 'action');
+        this.opts.cancel = this.label(this.opts.cancel, 'cancel');
+    }
+
     public async show(mopts: any = {}) {
         this.isshow = true;
         this.opts = JSON.parse(JSON.stringify(this.default_opts));
         for (let key in mopts)
             this.opts[key] = mopts[key];
+        this.normalizeLabels();
         await this.service.render();
 
         let fn = () => new Promise((resolve) => {
@@ -48,7 +64,7 @@ export default class Modal {
         return await fn();
     }
 
-    public async error(message: string, cancel: any = false, action: string = 'OK') {
+    public async error(message: string, cancel: any = false, action: string = '확인') {
         return await this.show({
             title: "",
             message: message,
@@ -59,7 +75,7 @@ export default class Modal {
         });
     }
 
-    public async success(message: string, cancel: any = false, action: string = 'OK') {
+    public async success(message: string, cancel: any = false, action: string = '확인') {
         return await this.show({
             title: "",
             message: message,
@@ -70,7 +86,7 @@ export default class Modal {
         });
     }
 
-    public async warning(message: string, cancel: any = false, action: string = 'OK') {
+    public async warning(message: string, cancel: any = false, action: string = '확인') {
         return await this.show({
             title: "",
             message: message,

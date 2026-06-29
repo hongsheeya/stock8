@@ -77,6 +77,7 @@ class KisApi:
         self.struct = struct
         self._token = None
         self._token_expires = None
+        self._token_scope = ""
         self._logger = None
 
     @property
@@ -211,8 +212,16 @@ class KisApi:
     # OAuth 토큰 관리
     # =========================================================================
 
+    def _credential_scope(self):
+        try:
+            user_id = self.struct._current_user_id()
+        except Exception:
+            user_id = ""
+        return f"{user_id}:{self.app_key}:{self.account_no}:{'real' if self.is_real else 'mock'}"
+
     def _issue_token(self):
         """접근토큰 발급"""
+        scope = self._credential_scope()
         url = f"{self.base_url}{TOKEN_ISSUE_PATH}"
         body = {
             "grant_type": "client_credentials",
@@ -224,6 +233,7 @@ class KisApi:
         data = resp.json()
 
         self._token = data.get("access_token")
+        self._token_scope = scope
         # 토큰 유효기간: 약 24시간, 1시간 마진
         expires_in = int(data.get("expires_in", 86400))
         self._token_expires = time.time() + expires_in - 3600
@@ -236,7 +246,8 @@ class KisApi:
 
     def get_token(self):
         """유효한 접근토큰 반환 (만료 시 자동 갱신)"""
-        if self._token and self._token_expires and time.time() < self._token_expires:
+        scope = self._credential_scope()
+        if self._token and self._token_scope == scope and self._token_expires and time.time() < self._token_expires:
             return self._token
 
         # DB 캐시에서 복원 시도
@@ -250,6 +261,7 @@ class KisApi:
         if cached_token and time.time() < cached_expires:
             self._token = cached_token
             self._token_expires = cached_expires
+            self._token_scope = scope
             return self._token
 
         # 신규 발급
@@ -291,7 +303,7 @@ class KisApi:
             time.sleep(wait)
         KisApi._last_request_time = time.time()
 
-    def _request(self, method, path, tr_id, params=None, body=None, retries=2):
+    def _request(self, method, path, tr_id, params=None, body=None, retries=2, tr_cont=""):
         """
         API 요청 공통 래퍼 (Rate limiting 포함)
         - method: "GET" | "POST"
@@ -303,6 +315,8 @@ class KisApi:
         """
         url = f"{self.base_url}{path}"
         headers = self._headers(tr_id)
+        if tr_cont:
+            headers["tr_cont"] = str(tr_cont)
         request_timeout = getattr(_REQUEST_OPTIONS, "timeout", None)
         request_retries = getattr(_REQUEST_OPTIONS, "retries", None)
         try:
@@ -326,6 +340,15 @@ class KisApi:
                     resp = requests.post(url, headers=headers, json=body, timeout=request_timeout)
 
                 data = resp.json()
+                if isinstance(data, dict):
+                    tr_cont = (
+                        resp.headers.get("tr_cont")
+                        or resp.headers.get("Tr-Cont")
+                        or resp.headers.get("TR_CONT")
+                        or ""
+                    )
+                    if tr_cont and not data.get("tr_cont"):
+                        data["tr_cont"] = tr_cont
 
                 # 토큰 만료 에러 시 갱신 후 재시도
                 rt_cd = data.get("rt_cd", "")
@@ -633,7 +656,7 @@ class KisApi:
             "ORD_UNPR": str(int(price)) if price else "0",
         }
 
-        data = self._request("POST", path, tr_id, body=body)
+        data = self._request("POST", path, tr_id, body=body, retries=0)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             raise Exception(f"국내주식 {side} 주문 실패 [{symbol}]: {msg} (qty={qty}, price={price}, order_type={order_type}, ord_dvsn={ord_dvsn})")
@@ -975,7 +998,7 @@ class KisApi:
         self._log("info", f"BUY order payload: PDNO={symbol}, OVRS_EXCG_CD={exchange}, ORD_QTY={qty}, OVRS_ORD_UNPR={price}, ORD_DVSN={ord_dvsn}, order_type={order_type}")
         self._log("info", f"BUY order: {symbol} {qty}주 @ ${price} ({order_type}), CANO={cano}, exchange={exchange}")
 
-        data = self._request("POST", path, tr_id, body=body)
+        data = self._request("POST", path, tr_id, body=body, retries=0)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
@@ -1014,7 +1037,7 @@ class KisApi:
         """
         해외주식 미국 예약매수 주문.
         정규장 전 자동환전/예약매수 용도이며 KIS order-resv API를 사용한다.
-        무한매수는 장마감지정가(LOC) 예약을 기본으로 사용한다.
+        FireGate 기본은 표의 주문방식(지정가/LOC)을 그대로 사용한다.
         """
         tr_id = "TTTT3014U" if self.is_real else "VTTT3014U"
         path = "/uapi/overseas-stock/v1/trading/order-resv"
@@ -1061,7 +1084,7 @@ class KisApi:
             f"ORD_DVSN={ord_dvsn}, order_type={order_type}"
         )
 
-        data = self._request("POST", path, tr_id, body=body)
+        data = self._request("POST", path, tr_id, body=body, retries=0)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
@@ -1106,64 +1129,278 @@ class KisApi:
         if not end_date:
             end_date = start_date
 
-        exchanges = exchanges or ["NASD", "AMEX", "NYSE"]
+        # KIS reservation list returns all US reservation rows from a single
+        # exchange query. Querying every exchange duplicates the same pages.
+        exchanges = exchanges or ["NASD"]
         orders = []
         seen = set()
 
+        try:
+            max_pages = int(float(self.struct.get_config("kis_reservation_query_max_pages", "200") or 200))
+        except Exception:
+            max_pages = 200
+        max_pages = max(1, max_pages)
+
         for exchange in exchanges:
-            params = {
-                "CANO": self.account_prefix,
-                "ACNT_PRDT_CD": self.account_suffix,
-                "INQR_STRT_DT": start_date,
-                "INQR_END_DT": end_date,
-                "INQR_DVSN_CD": "00",
-                "OVRS_EXCG_CD": str(exchange or "NASD").upper(),
-                "PRDT_TYPE_CD": "",
-                "CTX_AREA_FK200": "",
-                "CTX_AREA_NK200": "",
-            }
+            ctx_fk = ""
+            ctx_nk = ""
+            page = 0
+            while page < max_pages:
+                page += 1
+                params = {
+                    "CANO": self.account_prefix,
+                    "ACNT_PRDT_CD": self.account_suffix,
+                    "INQR_STRT_DT": start_date,
+                    "INQR_END_DT": end_date,
+                    "INQR_DVSN_CD": "00",
+                    "OVRS_EXCG_CD": str(exchange or "NASD").upper(),
+                    "PRDT_TYPE_CD": "",
+                    "CTX_AREA_FK200": ctx_fk,
+                    "CTX_AREA_NK200": ctx_nk,
+                }
 
-            data = self._request("GET", path, tr_id, params=params, retries=0)
-            if not data or data.get("rt_cd") != "0":
-                continue
+                data = self._request(
+                    "GET",
+                    path,
+                    tr_id,
+                    params=params,
+                    retries=0,
+                    tr_cont="N" if (ctx_fk or ctx_nk) else "",
+                )
+                if not data or data.get("rt_cd") != "0":
+                    break
 
-            output = data.get("output", []) or data.get("output1", []) or []
-            for item in output:
-                row = {str(k).lower(): v for k, v in (item or {}).items()}
-                reserve_no = str(row.get("ovrs_rsvn_odno") or row.get("odno") or "").strip()
-                symbol = str(row.get("pdno") or row.get("ovrs_pdno") or "").strip().upper()
-                receipt_date = str(row.get("rsvn_ord_rcit_dt") or row.get("ord_dt") or start_date)
-                output_exchange = str(row.get("ovrs_excg_cd") or exchange or "").upper()
-                key = f"{receipt_date}:{reserve_no}:{symbol}:{output_exchange}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                orders.append({
-                    "reserve_order_no": reserve_no,
-                    "order_no": reserve_no,
-                    "symbol": symbol,
-                    "exchange": output_exchange,
-                    "receipt_date": receipt_date,
-                    "receipt_time": str(row.get("ord_rcit_tmd") or ""),
-                    "forward_time": str(row.get("ord_fwdg_tmd") or ""),
-                    "side": "BUY" if str(row.get("sll_buy_dvsn_cd") or "") == "02" else "SELL",
-                    "qty": self._safe_int(row.get("ft_ord_qty") or row.get("ord_rsvn_qty") or 0, 0),
-                    "price": self._safe_float(row.get("ft_ord_unpr3") or row.get("ord_rsvn_unpr") or 0, 0),
-                    "filled_qty": self._safe_int(row.get("ft_ccld_qty") or 0, 0),
-                    "filled_price": self._safe_float(row.get("ft_ccld_unpr3") or 0, 0),
-                    "status_code": str(row.get("ovrs_rsvn_ord_stat_cd") or ""),
-                    "status_name": str(row.get("ovrs_rsvn_ord_stat_cd_name") or ""),
-                    "trade_status_name": str(row.get("tr_dvsn_name") or ""),
-                    "reject_reason": str(row.get("nprc_rson_text") or ""),
-                    "cancel_yn": str(row.get("cncl_yn") or ""),
-                    "raw": item,
-                })
+                output = data.get("output", []) or data.get("output1", []) or []
+                for item in output:
+                    row = {str(k).lower(): v for k, v in (item or {}).items()}
+                    reserve_no = str(self._first_ci(item, [
+                        "ovrs_rsvn_odno", "odno", "ovrs_odno", "ord_no", "order_no",
+                    ], "") or "").strip()
+                    symbol = str(self._first_ci(item, [
+                        "pdno", "ovrs_pdno", "prdt_no", "symbol", "ovrs_item_cd",
+                    ], "") or "").strip().upper()
+                    receipt_date = str(self._first_ci(item, [
+                        "rsvn_ord_rcit_dt", "ord_dt", "order_date",
+                    ], start_date) or start_date)
+                    output_exchange = str(self._first_ci(item, [
+                        "ovrs_excg_cd", "exchange",
+                    ], exchange) or exchange).upper()
+                    side = self._normalize_overseas_action(item)
+                    if not side:
+                        side = self._normalize_overseas_action(row)
+                    if not side:
+                        side = "BUY" if str(row.get("sll_buy_dvsn_cd") or "") == "02" else "SELL"
+                    ord_dvsn = str(self._first_ci(item, [
+                        "ord_dvsn", "ORD_DVSN", "ovrs_ord_dvsn", "OVRS_ORD_DVSN",
+                        "ord_dvsn_cd", "ORD_DVSN_CD",
+                    ], "") or "").strip()
+                    order_type = ""
+                    if ord_dvsn == "34":
+                        order_type = "LOC"
+                    elif ord_dvsn == "00":
+                        order_type = "LIMIT"
+                    key = f"{receipt_date}:{reserve_no}:{symbol}:{output_exchange}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    orders.append({
+                        "reserve_order_no": reserve_no,
+                        "order_no": reserve_no,
+                        "symbol": symbol,
+                        "exchange": output_exchange,
+                        "order_type": order_type,
+                        "ord_dvsn": ord_dvsn,
+                        "receipt_date": receipt_date,
+                        "receipt_time": str(self._first_ci(item, ["ord_rcit_tmd", "ord_tmd", "order_time"], "") or ""),
+                        "forward_time": str(self._first_ci(item, ["ord_fwdg_tmd", "fwdg_tmd"], "") or ""),
+                        "side": side,
+                        "qty": self._safe_int(self._first_ci(item, [
+                            "ft_ord_qty", "ord_qty", "order_qty", "qty", "ord_rsvn_qty", "rsvn_ord_qty",
+                        ], 0), 0),
+                        "price": self._safe_float(self._first_ci(item, [
+                            "ft_ord_unpr3", "ord_unpr", "ovrs_ord_unpr", "order_price",
+                            "price", "ord_rsvn_unpr", "rsvn_ord_unpr",
+                        ], 0), 0),
+                        "filled_qty": self._safe_int(self._first_ci(item, [
+                            "ft_ccld_qty", "ccld_qty", "tot_ccld_qty", "exec_qty", "filled_qty",
+                        ], 0), 0),
+                        "filled_price": self._safe_float(self._first_ci(item, [
+                            "ft_ccld_unpr3", "ccld_unpr", "avg_pric", "exec_pric", "filled_price",
+                        ], 0), 0),
+                        "unfilled_qty": self._safe_int(self._first_ci(item, [
+                            "nccs_qty", "unfilled_qty", "ord_psbl_qty",
+                        ], 0), 0),
+                        "status_code": str(self._first_ci(item, ["ovrs_rsvn_ord_stat_cd", "prcs_stat_cd", "status_code"], "") or ""),
+                        "status_name": str(self._first_ci(item, ["ovrs_rsvn_ord_stat_cd_name", "prcs_stat_name", "status_name"], "") or ""),
+                        "trade_status_name": str(self._first_ci(item, ["tr_dvsn_name", "rvse_cncl_dvsn_name", "trade_status_name"], "") or ""),
+                        "reject_reason": str(self._first_ci(item, ["nprc_rson_text", "rjct_rson_name", "rjct_rson", "reject_reason"], "") or ""),
+                        "cancel_yn": str(self._first_ci(item, ["cncl_yn", "cancel_yn", "rvse_cncl_dvsn"], "") or ""),
+                        "raw": item,
+                    })
+
+                next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
+                next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
+                tr_cont = str(data.get("tr_cont", "") or "")
+                if (next_fk == "" and next_nk == "") or tr_cont in ("", "D", "E"):
+                    break
+                if next_fk == ctx_fk and next_nk == ctx_nk:
+                    break
+                ctx_fk = next_fk
+                ctx_nk = next_nk
+            else:
+                raise Exception(
+                    f"해외 예약주문 조회가 {max_pages}페이지 한도를 초과했습니다. "
+                    "전체 예약을 확인하지 못했으므로 취소/재예약을 중단해야 합니다."
+                )
 
         return orders
 
     # =========================================================================
     # 해외주식 매도 주문
     # =========================================================================
+
+    def sell_reservation_order(self, symbol, qty, price=0, order_type="LOC", exchange="NASD"):
+        """
+        해외주식 미국 예약매도 주문.
+        KIS는 미국 예약주문에서 LOC 매도를 별도 TR_ID(TTTT3016U)로 접수한다.
+        """
+        tr_id = "TTTT3016U" if self.is_real else "VTTT3016U"
+        path = "/uapi/overseas-stock/v1/trading/order-resv"
+
+        cano = self.account_prefix
+        acnt_cd = self.account_suffix
+        if not cano or not acnt_cd:
+            raw_acc = self.account_no
+            raise Exception(
+                f"예약매도 주문 실패 [{symbol}]: 계좌번호가 올바르지 않습니다. "
+                f"(원본: '{raw_acc}', CANO: '{cano}', ACNT_PRDT_CD: '{acnt_cd}')."
+            )
+
+        qty = int(qty)
+        price = self._safe_float(price, 0)
+        if qty <= 0 or price <= 0:
+            raise Exception(f"예약매도 주문 실패 [{symbol}]: 주문수량/가격이 올바르지 않습니다. qty={qty}, price={price}")
+
+        order_type = str(order_type or "LOC").upper()
+        if order_type in ("LOC", "RESERVE_LOC"):
+            ord_dvsn = "34"
+            returned_order_type = "RESERVE_LOC"
+        else:
+            ord_dvsn = "00"
+            returned_order_type = "RESERVE_LIMIT"
+        price_text = f"{price:.4f}" if price < 1 else f"{price:.2f}"
+        price_text = price_text.rstrip("0").rstrip(".")
+
+        body = {
+            "CANO": cano,
+            "ACNT_PRDT_CD": acnt_cd,
+            "PDNO": str(symbol).upper(),
+            "OVRS_EXCG_CD": str(exchange or "NASD").upper(),
+            "FT_ORD_QTY": str(qty),
+            "FT_ORD_UNPR3": price_text,
+            "ORD_DVSN": ord_dvsn,
+            "ORD_SVR_DVSN_CD": "0",
+        }
+
+        self._log(
+            "info",
+            f"SELL reserve payload: PDNO={body['PDNO']}, OVRS_EXCG_CD={body['OVRS_EXCG_CD']}, "
+            f"FT_ORD_QTY={body['FT_ORD_QTY']}, FT_ORD_UNPR3={body['FT_ORD_UNPR3']}, "
+            f"ORD_DVSN={ord_dvsn}, order_type={order_type}"
+        )
+
+        data = self._request("POST", path, tr_id, body=body, retries=0)
+        if not data or data.get("rt_cd") != "0":
+            msg = data.get("msg1", "Unknown error") if data else "No response"
+            rt_cd = data.get("rt_cd", "?") if data else "no_data"
+            raise Exception(
+                f"예약매도 주문 실패 [{symbol}]: {msg} "
+                f"(rt_cd={rt_cd}, CANO={cano}, ACNT_PRDT_CD={acnt_cd}, "
+                f"exchange={exchange}, qty={qty}, price={price_text}, ord_dvsn={ord_dvsn}, "
+                f"tr_id={tr_id}, is_real={self.is_real})"
+            )
+
+        output = data.get("output", {}) or {}
+        reserve_order_no = (
+            output.get("ODNO")
+            or output.get("OVRS_RSVN_ODNO")
+            or output.get("ovrs_rsvn_odno")
+            or output.get("odno")
+            or ""
+        )
+        return {
+            "order_no": reserve_order_no,
+            "reserve_order_no": reserve_order_no,
+            "order_time": output.get("ORD_TMD", output.get("ord_tmd", "")),
+            "symbol": str(symbol).upper(),
+            "qty": qty,
+            "price": price,
+            "order_type": returned_order_type,
+            "requested_order_type": order_type,
+            "exchange": str(exchange or "NASD").upper(),
+            "reserved": True,
+            "raw": output,
+        }
+
+    def cancel_overseas_reservation_order(self, reservation_order_no, symbol="", qty=0, exchange="NASD", side="", receipt_date=""):
+        """
+        해외주식 미국 예약주문접수취소.
+        KIS 해외주식 예약주문접수취소 API는 예약주문번호(OVRS_RSVN_ODNO) 단위로 취소한다.
+        """
+        tr_id = "TTTT3017U" if self.is_real else "VTTT3017U"
+        path = "/uapi/overseas-stock/v1/trading/order-resv-ccnl"
+
+        cano = self.account_prefix
+        acnt_cd = self.account_suffix
+        if not cano or not acnt_cd:
+            raise Exception("해외 예약주문 취소를 위한 계좌번호가 올바르지 않습니다.")
+
+        reservation_order_no = str(reservation_order_no or "").strip()
+        if reservation_order_no == "":
+            raise Exception(f"해외 예약주문 취소 실패 [{symbol or '-'}]: 예약주문번호가 없습니다.")
+        receipt_date = str(receipt_date or "").strip().replace("-", "")[:8]
+        if receipt_date == "":
+            raise Exception(f"해외 예약주문 취소 실패 [{symbol or '-'}]: 해외주문접수일자가 없습니다.")
+
+        body = {
+            "CANO": cano,
+            "ACNT_PRDT_CD": acnt_cd,
+            "RSVN_ORD_RCIT_DT": receipt_date,
+            "OVRS_RSVN_ODNO": reservation_order_no,
+        }
+
+        self._log(
+            "info",
+            f"OVERSEAS reserve cancel payload: RSVN_ORD_RCIT_DT={receipt_date}, OVRS_RSVN_ODNO={reservation_order_no}, "
+            f"symbol={str(symbol or '').upper()}, exchange={str(exchange or 'NASD').upper()}, side={str(side or '').upper()}"
+        )
+
+        data = self._request("POST", path, tr_id, body=body, retries=0)
+        if not data or data.get("rt_cd") != "0":
+            msg = data.get("msg1", "Unknown error") if data else "No response"
+            rt_cd = data.get("rt_cd", "?") if data else "no_data"
+            raise Exception(
+                f"해외 예약주문 취소 실패 [{symbol or '-'}]: {msg} "
+                f"(rt_cd={rt_cd}, receipt_date={receipt_date}, reserve_order_no={reservation_order_no}, tr_id={tr_id}, is_real={self.is_real})"
+            )
+
+        output = data.get("output", {}) or {}
+        qty_value = 0
+        try:
+            qty_value = int(float(qty or 0))
+        except Exception:
+            qty_value = 0
+        return {
+            "cancel_order_no": output.get("ODNO", output.get("odno", "")),
+            "reserve_order_no": reservation_order_no,
+            "original_order_no": reservation_order_no,
+            "receipt_date": receipt_date,
+            "symbol": str(symbol or "").upper(),
+            "qty": qty_value,
+            "exchange": str(exchange or "NASD").upper(),
+            "side": str(side or "").upper(),
+            "raw": output,
+        }
 
     def sell_order(self, symbol, qty, price=0, order_type="MARKET", exchange="NASD"):
         """
@@ -1242,6 +1479,7 @@ class KisApi:
         path = "/uapi/overseas-stock/v1/trading/inquire-balance"
 
         all_holdings = []
+        holdings_by_symbol = {}
         summary_eval_candidates = []
         cash_balance = 0.0
 
@@ -1277,7 +1515,7 @@ class KisApi:
                     item_eval = self._safe_float(item.get("ovrs_stck_evlu_amt", 0), 0)
                     item_profit = self._safe_float(item.get("frcr_evlu_pfls_amt", 0), 0)
                     item_profit_rate = self._safe_float(item.get("evlu_pfls_rt", 0), 0)
-                    all_holdings.append({
+                    holding = {
                         "symbol": item.get("ovrs_pdno", ""),
                         "name": item.get("ovrs_item_name", ""),
                         "qty": item_qty,
@@ -1287,7 +1525,11 @@ class KisApi:
                         "profit_loss": item_profit,
                         "profit_rate": item_profit_rate,
                         "exchange": item.get("ovrs_excg_cd", excg),
-                    })
+                    }
+                    symbol_key = str(holding.get("symbol", "") or "").upper()
+                    prev = holdings_by_symbol.get(symbol_key)
+                    if prev is None or self._safe_float(holding.get("eval_amount", 0), 0) >= self._safe_float(prev.get("eval_amount", 0), 0):
+                        holdings_by_symbol[symbol_key] = holding
 
                 # 주의: tot_evlu_pfls_amt 는 '평가손익'이므로 평가금액으로 사용하면 안됨
                 excg_eval_info = self._pick_amount_info(output2, [
@@ -1314,6 +1556,7 @@ class KisApi:
             except Exception:
                 continue
 
+        all_holdings = list(holdings_by_symbol.values())
         holdings_eval_sum = sum(self._safe_float(item.get("eval_amount", 0), 0) for item in all_holdings)
         # 거래소별 output2 요약은 계좌 전체 평가액이 반복될 수 있어 더하면 중복된다.
         # 실제 보유 row가 있으면 row 합계를 신뢰하고, row 평가액이 비어 있을 때만 요약값 중 최댓값을 fallback으로 쓴다.
@@ -1386,10 +1629,78 @@ class KisApi:
     # 해외주식 주문 체결 내역
     # =========================================================================
 
+    def _row_ci(self, item):
+        if not isinstance(item, dict):
+            return {}
+        return {str(k).lower(): v for k, v in item.items()}
+
+    def _first_ci(self, item, keys, default=""):
+        if not isinstance(item, dict):
+            return default
+        lowered = self._row_ci(item)
+        for key in keys:
+            if key in item:
+                value = item.get(key)
+            else:
+                value = lowered.get(str(key).lower(), None)
+            if value is not None and value != "":
+                return value
+        return default
+
+    def _overseas_ccnl_rows(self, data):
+        rows = []
+        if not isinstance(data, dict):
+            return rows
+        for key in ("output", "output1", "output2"):
+            output = data.get(key)
+            if isinstance(output, list):
+                rows.extend([item for item in output if isinstance(item, dict)])
+            elif isinstance(output, dict):
+                rows.append(output)
+        return rows
+
+    def _normalize_overseas_action(self, item):
+        values = [
+            self._first_ci(item, ["sll_buy_dvsn_cd", "sll_buy_dvsn", "sll_buy_dvsn_code", "side", "action"], ""),
+            self._first_ci(item, ["sll_buy_dvsn_cd_name", "sll_buy_dvsn_name", "trad_dvsn_name", "tr_dvsn_name"], ""),
+        ]
+        for raw in values:
+            token = str(raw or "").strip().upper()
+            if token in ("02", "2", "BUY", "B"):
+                return "BUY"
+            if token in ("01", "1", "SELL", "S"):
+                return "SELL"
+            if "매수" in token:
+                return "BUY"
+            if "매도" in token:
+                return "SELL"
+        return ""
+
     def _normalize_overseas_ccnl_status(self, item):
-        filled_qty = self._safe_int(item.get("ft_ccld_qty", item.get("ccld_qty", 0)), 0)
-        order_qty = self._safe_int(item.get("ft_ord_qty", item.get("ord_qty", 0)), 0)
-        remaining_qty = self._safe_int(item.get("nccs_qty", item.get("rmn_qty", max(0, order_qty - filled_qty))), max(0, order_qty - filled_qty))
+        filled_qty = self._safe_int(self._first_ci(item, [
+            "ft_ccld_qty",
+            "ccld_qty",
+            "tot_ccld_qty",
+            "ccld_qty_smtl",
+            "exec_qty",
+            "filled_qty",
+            "ft_ccld_qty1",
+        ], 0), 0)
+        order_qty = self._safe_int(self._first_ci(item, [
+            "ft_ord_qty",
+            "ord_qty",
+            "order_qty",
+            "qty",
+            "ord_rsvn_qty",
+        ], 0), 0)
+        default_remaining = max(0, order_qty - filled_qty)
+        remaining_qty = self._safe_int(self._first_ci(item, [
+            "nccs_qty",
+            "rmn_qty",
+            "ord_unexec_qty",
+            "unfilled_qty",
+            "ord_psbl_qty",
+        ], default_remaining), default_remaining)
         if filled_qty <= 0 and remaining_qty <= 0:
             return "CANCELLED"
         if filled_qty <= 0:
@@ -1397,6 +1708,157 @@ class KisApi:
         if remaining_qty > 0:
             return "PARTIAL"
         return "FILLED"
+
+    def _normalize_overseas_ccnl_row(self, item, exchange, start_date):
+        item_symbol = str(self._first_ci(item, [
+            "pdno",
+            "ovrs_pdno",
+            "prdt_no",
+            "symbol",
+            "ovrs_item_cd",
+        ], "") or "").strip().upper()
+        order_no = str(self._first_ci(item, [
+            "odno",
+            "ovrs_odno",
+            "ord_no",
+            "order_no",
+            "ovrs_ord_no",
+            "ovrs_rsvn_odno",
+        ], "") or "").strip()
+        if not item_symbol and not order_no:
+            return None
+
+        action = self._normalize_overseas_action(item)
+        order_date = str(self._first_ci(item, [
+            "ord_dt",
+            "order_date",
+            "ccld_dt",
+            "trad_dt",
+            "trade_date",
+            "rsvn_ord_rcit_dt",
+        ], start_date) or start_date).replace("-", "")[:8]
+        order_time = str(self._first_ci(item, [
+            "ord_tmd",
+            "order_time",
+            "ccld_tmd",
+            "trad_tmd",
+            "trade_time",
+            "ord_rcit_tmd",
+        ], "") or "").replace(":", "")[:6]
+        order_qty = self._safe_int(self._first_ci(item, [
+            "ft_ord_qty",
+            "ord_qty",
+            "order_qty",
+            "qty",
+            "ord_rsvn_qty",
+        ], 0), 0)
+        filled_qty = self._safe_int(self._first_ci(item, [
+            "ft_ccld_qty",
+            "ccld_qty",
+            "tot_ccld_qty",
+            "ccld_qty_smtl",
+            "exec_qty",
+            "filled_qty",
+            "ft_ccld_qty1",
+        ], 0), 0)
+        order_price = self._safe_float(self._first_ci(item, [
+            "ft_ord_unpr3",
+            "ord_unpr",
+            "ovrs_ord_unpr",
+            "order_price",
+            "price",
+            "ord_rsvn_unpr",
+        ], 0), 0)
+        filled_price = self._safe_float(self._first_ci(item, [
+            "ft_ccld_unpr3",
+            "ccld_unpr",
+            "avg_pric",
+            "exec_pric",
+            "filled_price",
+            "ft_ccld_unpr",
+        ], 0), 0)
+        filled_amount = self._safe_float(self._first_ci(item, [
+            "ft_ccld_amt3",
+            "ccld_amt",
+            "exec_amt",
+            "filled_amount",
+            "ft_ccld_amt",
+        ], 0), 0)
+        if filled_price <= 0 and filled_qty > 0 and filled_amount > 0:
+            filled_price = filled_amount / filled_qty
+        if filled_amount <= 0 and filled_qty > 0 and filled_price > 0:
+            filled_amount = filled_qty * filled_price
+
+        return {
+            "order_no": order_no,
+            "symbol": item_symbol,
+            "market": "US",
+            "exchange": str(self._first_ci(item, ["ovrs_excg_cd", "exchange"], exchange) or exchange).upper(),
+            "order_date": order_date,
+            "order_time": order_time,
+            "action": action,
+            "side": action,
+            "ord_qty": order_qty,
+            "order_qty": order_qty,
+            "order_price": order_price,
+            "filled_qty": filled_qty,
+            "filled_price": filled_price,
+            "filled_amount": filled_amount,
+            "status": self._normalize_overseas_ccnl_status(item),
+            "broker": "KIS",
+            "raw": item,
+        }
+
+    def _overseas_fill_signature(self, order):
+        row = order if isinstance(order, dict) else {}
+        return ":".join([
+            str(row.get("symbol", "") or "").upper(),
+            str(row.get("action", row.get("side", "")) or "").upper(),
+            str(row.get("order_date", "") or "").replace("-", "")[:8],
+            str(self._safe_int(row.get("filled_qty", 0), 0)),
+            f"{self._safe_float(row.get('filled_price', 0), 0):.4f}",
+        ])
+
+    def _overseas_reservation_history_rows(self, start_date, end_date, exchanges):
+        try:
+            reservations = self.get_overseas_reservation_orders(start_date=start_date, end_date=end_date, exchanges=exchanges) or []
+        except Exception as e:
+            self._log("warning", f"Filled reservation fallback failed: {e}")
+            return []
+
+        rows = []
+        for item in reservations:
+            if not isinstance(item, dict):
+                continue
+            filled_qty = self._safe_int(item.get("filled_qty", 0), 0)
+            filled_price = self._safe_float(item.get("filled_price", item.get("price", 0)), 0)
+            if filled_qty <= 0 or filled_price <= 0:
+                continue
+            qty = self._safe_int(item.get("qty", filled_qty), filled_qty)
+            side = self._normalize_overseas_action(item) or str(item.get("side", "") or "").upper()
+            order_date = str(item.get("order_date") or item.get("filled_date") or item.get("receipt_date") or start_date).replace("-", "")[:8]
+            order_time = str(item.get("order_time") or item.get("forward_time") or item.get("receipt_time") or "").replace(":", "")[:6]
+            rows.append({
+                "order_no": str(item.get("order_no") or item.get("reserve_order_no") or "").strip(),
+                "symbol": str(item.get("symbol", "") or "").strip().upper(),
+                "market": "US",
+                "exchange": str(item.get("exchange", "") or "NASD").upper(),
+                "order_date": order_date,
+                "order_time": order_time,
+                "action": side,
+                "side": side,
+                "ord_qty": qty,
+                "order_qty": qty,
+                "order_price": self._safe_float(item.get("price", filled_price), filled_price),
+                "filled_qty": filled_qty,
+                "filled_price": filled_price,
+                "filled_amount": filled_qty * filled_price,
+                "status": "PARTIAL" if qty > filled_qty else "FILLED",
+                "broker": "KIS",
+                "source": "reservation_filled_fallback",
+                "raw": item,
+            })
+        return rows
 
     def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None):
         """해외주식 체결/미체결 내역 조회 (NASD/NYSE/AMEX 전체, 페이지네이션 지원)."""
@@ -1409,79 +1871,97 @@ class KisApi:
             end_date = start_date
 
         exchanges = exchanges or ["NASD", "NYSE", "AMEX"]
+        symbol = str(symbol or "").strip().upper()
+        # KIS occasionally omits recent reservation-origin fills when PDNO is set.
+        # Query the requested symbol first, then the all-symbol view and filter locally.
+        pdno_values = [symbol, ""] if symbol else ["", "%"]
         orders = []
         seen = set()
+        fill_seen = set()
         errors = []
+        attempted_queries = 0
+        failed_queries = 0
 
-        for exchange in exchanges:
-            ctx_nk = ""
-            ctx_fk = ""
-            for _ in range(10):
-                params = {
-                    "CANO": self.account_prefix,
-                    "ACNT_PRDT_CD": self.account_suffix,
-                    "PDNO": symbol or "%",
-                    "ORD_STRT_DT": start_date,
-                    "ORD_END_DT": end_date,
-                    "SLL_BUY_DVSN": "00",
-                    "CCLD_NCCS_DVSN": "00",
-                    "OVRS_EXCG_CD": exchange,
-                    "SORT_SQN": "DS",
-                    "ORD_DT": "",
-                    "ORD_GNO_BRNO": "",
-                    "ODNO": "",
-                    "CTX_AREA_NK200": ctx_nk,
-                    "CTX_AREA_FK200": ctx_fk,
-                }
+        for pdno_value in pdno_values:
+            if pdno_value == "%" and orders:
+                break
+            for exchange in exchanges:
+                ctx_nk = ""
+                ctx_fk = ""
+                for _ in range(10):
+                    params = {
+                        "CANO": self.account_prefix,
+                        "ACNT_PRDT_CD": self.account_suffix,
+                        "PDNO": pdno_value,
+                        "ORD_STRT_DT": start_date,
+                        "ORD_END_DT": end_date,
+                        "SLL_BUY_DVSN": "00",
+                        "CCLD_NCCS_DVSN": "00",
+                        "OVRS_EXCG_CD": exchange,
+                        "SORT_SQN": "DS",
+                        "ORD_DT": "",
+                        "ORD_GNO_BRNO": "",
+                        "ODNO": "",
+                        "CTX_AREA_NK200": ctx_nk,
+                        "CTX_AREA_FK200": ctx_fk,
+                    }
 
-                data = self._request("GET", path, tr_id, params=params)
-                if not data or data.get("rt_cd") != "0":
-                    msg = data.get("msg1", "Unknown error") if data else "No response"
-                    errors.append(f"{exchange}:{msg}")
-                    break
+                    attempted_queries += 1
+                    data = self._request("GET", path, tr_id, params=params)
+                    if not data or data.get("rt_cd") != "0":
+                        failed_queries += 1
+                        msg = data.get("msg1", "Unknown error") if data else "No response"
+                        errors.append(f"{exchange}/{pdno_value or 'ALL'}:{msg}")
+                        break
 
-                output = data.get("output", []) or data.get("output1", []) or []
-                for item in output:
-                    order_no = str(item.get("odno", "") or "").strip()
-                    item_symbol = str(item.get("pdno", "") or "").strip().upper()
-                    action = "BUY" if str(item.get("sll_buy_dvsn_cd", "") or "") == "02" else "SELL"
-                    order_date = str(item.get("ord_dt", "") or start_date)
-                    order_time = str(item.get("ord_tmd", "") or "")[:6]
-                    filled_qty = self._safe_int(item.get("ft_ccld_qty", 0), 0)
-                    filled_price = self._safe_float(item.get("ft_ccld_unpr3", 0), 0)
-                    dedup_key = f"{exchange}:{order_no}:{item_symbol}:{action}:{order_date}:{order_time}:{filled_qty}:{filled_price}"
-                    if dedup_key in seen:
-                        continue
-                    seen.add(dedup_key)
-                    orders.append({
-                        "order_no": order_no,
-                        "symbol": item_symbol,
-                        "market": "US",
-                        "exchange": exchange,
-                        "order_date": order_date,
-                        "order_time": order_time,
-                        "action": action,
-                        "side": action,
-                        "ord_qty": self._safe_int(item.get("ft_ord_qty", 0), 0),
-                        "order_qty": self._safe_int(item.get("ft_ord_qty", 0), 0),
-                        "order_price": self._safe_float(item.get("ft_ord_unpr3", 0), 0),
-                        "filled_qty": filled_qty,
-                        "filled_price": filled_price,
-                        "filled_amount": self._safe_float(item.get("ft_ccld_amt3", 0), 0),
-                        "status": self._normalize_overseas_ccnl_status(item),
-                    })
+                    for item in self._overseas_ccnl_rows(data):
+                        order = self._normalize_overseas_ccnl_row(item, exchange, start_date)
+                        if not order:
+                            continue
+                        item_symbol = str(order.get("symbol", "") or "").upper()
+                        if symbol and item_symbol != symbol:
+                            continue
+                        action = str(order.get("action", "") or "").upper()
+                        order_date = str(order.get("order_date", "") or start_date)
+                        order_time = str(order.get("order_time", "") or "")[:6]
+                        filled_qty = self._safe_int(order.get("filled_qty", 0), 0)
+                        filled_price = self._safe_float(order.get("filled_price", 0), 0)
+                        dedup_key = f"{order.get('exchange', exchange)}:{order.get('order_no', '')}:{item_symbol}:{action}:{order_date}:{order_time}:{filled_qty}:{filled_price}"
+                        if dedup_key in seen:
+                            continue
+                        seen.add(dedup_key)
+                        fill_seen.add(self._overseas_fill_signature(order))
+                        orders.append(order)
 
-                next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
-                next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
-                tr_cont = str(data.get("tr_cont", "") or "")
-                if (next_nk == "" and next_fk == "") or tr_cont in ("", "D", "E"):
-                    break
-                if next_nk == ctx_nk and next_fk == ctx_fk:
-                    break
-                ctx_nk = next_nk
-                ctx_fk = next_fk
+                    next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
+                    next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
+                    tr_cont = str(data.get("tr_cont", "") or "")
+                    if (next_nk == "" and next_fk == "") or tr_cont in ("", "D", "E"):
+                        break
+                    if next_nk == ctx_nk and next_fk == ctx_fk:
+                        break
+                    ctx_nk = next_nk
+                    ctx_fk = next_fk
 
-        if len(orders) == 0 and len(errors) == len(exchanges):
+        for order in self._overseas_reservation_history_rows(start_date, end_date, exchanges):
+            item_symbol = str(order.get("symbol", "") or "").upper()
+            if symbol and item_symbol != symbol:
+                continue
+            fill_signature = self._overseas_fill_signature(order)
+            if fill_signature in fill_seen:
+                continue
+            dedup_key = (
+                f"{order.get('exchange', '')}:{order.get('order_no', '')}:{item_symbol}:"
+                f"{order.get('action', '')}:{order.get('order_date', '')}:{order.get('order_time', '')}:"
+                f"{order.get('filled_qty', 0)}:{order.get('filled_price', 0)}"
+            )
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            fill_seen.add(fill_signature)
+            orders.append(order)
+
+        if len(orders) == 0 and attempted_queries > 0 and failed_queries == attempted_queries:
             raise Exception(f"해외 체결 조회 실패: {' | '.join(errors)}")
 
         return sorted(orders, key=lambda x: (x.get("order_date", ""), x.get("order_time", ""), x.get("order_no", "")))
@@ -1785,6 +2265,22 @@ class KisApi:
             "bfdy_tot_asst_evlu_amt",
         ])
         total_asset_krw = self._safe_float(total_asset_info.get("value", 0), 0)
+        portfolio_eval_info = self._pick_amount_info(summary_row, [
+            "evlu_amt_smtl_amt",
+            "evlu_amt_smtl",
+            "frcr_evlu_amt2",
+        ])
+        portfolio_eval_krw = self._safe_float(portfolio_eval_info.get("value", 0), 0)
+        unsettled_buy_info = self._pick_amount_info(summary_row, [
+            "ustl_buy_amt_smtl",
+            "ustl_buy_amt_smtl_amt",
+            "frcr_buy_amt_smtl",
+        ])
+        unsettled_sell_info = self._pick_amount_info(summary_row, [
+            "ustl_sll_amt_smtl",
+            "ustl_sll_amt_smtl_amt",
+            "frcr_sll_amt_smtl",
+        ])
 
         exchange_rate_source = "present_balance"
         usd_krw = self._safe_float(currency_row.get("frst_bltn_exrt", row.get("frst_bltn_exrt", 0)))
@@ -1806,13 +2302,20 @@ class KisApi:
             "krw_balance": krw_balance,
             "withdrawable_krw": withdrawable_krw if withdrawable_krw > 0 else krw_balance,
             "total_asset_krw": total_asset_krw,
+            "portfolio_eval_krw": portfolio_eval_krw,
+            "unsettled_buy_krw": self._safe_float(unsettled_buy_info.get("value", 0), 0),
+            "unsettled_sell_krw": self._safe_float(unsettled_sell_info.get("value", 0), 0),
             "meta": {
                 "krw_key": krw_info["key"],
                 "withdrawable_key": withdrawable_info["key"],
                 "total_asset_key": total_asset_info.get("key"),
+                "portfolio_eval_key": portfolio_eval_info.get("key"),
+                "unsettled_buy_key": unsettled_buy_info.get("key"),
+                "unsettled_sell_key": unsettled_sell_info.get("key"),
                 "krw_present": krw_info["present"],
                 "withdrawable_present": withdrawable_info["present"],
                 "total_asset_present": total_asset_krw > 0,
+                "portfolio_eval_present": portfolio_eval_krw > 0,
                 "exchange_rate_present": usd_krw > 0,
                 "exchange_rate_source": exchange_rate_source,
             },

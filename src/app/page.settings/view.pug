@@ -1,30 +1,26 @@
 //- ============================================================
-//- Settings Page (5 Tabs: API / Risk / Watchlist / Parameters / Strategy)
+//- Settings Page (API / Risk / Watchlist / Strategy)
 //- ============================================================
 
 //- Tab Navigation
-div(class="flex flex-wrap items-center gap-2 mb-6")
+div(class="settings-tabs flex flex-nowrap items-center justify-center gap-2 mb-6 overflow-x-auto pb-1")
     button(*ngIf="!isInfiniteBuyMode()", (click)="switchTab('api')", [class]="tabClass('api')")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z")
         span {{t('set.api_settings')}}
-    button(*ngIf="!isInfiniteBuyMode()", (click)="switchTab('risk')", [class]="tabClass('risk')")
+    button(*ngIf="!isInfiniteBuyMode() && showDaytradeSettingsTab()", (click)="switchTab('risk')", [class]="tabClass('risk')")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M12 3.75 4.5 6.75v5.25c0 4.142 3.134 7.84 7.5 8.25 4.366-.41 7.5-4.108 7.5-8.25V6.75L12 3.75Z")
             path(stroke-linecap="round", stroke-linejoin="round", d="M12 8.25v4.5m0 3h.008")
         span 단타 ON/OFF
-    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('watchlist')", [class]="tabClass('watchlist')")
+    button((click)="switchTab('watchlist')", [class]="tabClass('watchlist')")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z")
         span {{t('set.watchlist')}}
-    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('params')", [class]="tabClass('params')")
-        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-            path(stroke-linecap="round", stroke-linejoin="round", d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75")
-        span {{t('set.parameters')}}
-    button(*ngIf="isInfiniteBuyMode()", (click)="switchTab('strategy')", [class]="tabClass('strategy')")
+    button((click)="switchTab('strategy')", [class]="tabClass('strategy')")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605")
-        span {{t('set.sell_strategy')}}
+        span 매매전략
 
 //- ============================================================
 //- TAB: API Settings
@@ -33,27 +29,66 @@ div(*ngIf="tab === 'api'")
     div(class="glass-card p-6 max-w-2xl")
         div(*ngIf="loadError", class="mb-5 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-200") {{loadError}}
         div(*ngIf="!isInfiniteBuyMode()", class="mb-5 rounded-xl border border-white/10 bg-white/5 px-4 py-3")
-            div(class="text-[10px] uppercase tracking-[0.2em] text-slate-500") Settings
-            h2(class="mt-1 text-sm font-semibold text-white") 계정 및 KIS API 설정
-            p(class="mt-1 text-[12px] text-slate-400") 무한매수 관심종목과 매매 파라미터는 이제 무한매수 운영 페이지에서 관리합니다.
-        h2(class="text-sm font-semibold text-white mb-5") {{t('set.kis_config')}}
+            div(class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between")
+                div(class="min-w-0")
+                    div(class="text-[10px] font-semibold text-slate-500") 설정
+                    h2(class="mt-1 text-sm font-semibold text-white") 계정 및 증권사 API 설정
+                    p(class="mt-1 text-[12px] text-slate-400") 무한매수 관심종목, 수익률, 회차, 매매전략은 상단 탭에서 관리할 수 있습니다.
+                a(href="/assets/InfinityStock_User_Guide.pdf",
+                    download="InfinityStock_User_Guide.pdf",
+                    target="_blank",
+                    class="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-2 text-[12px] font-semibold text-indigo-300 transition-colors hover:bg-indigo-500/20")
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M7.5 10.5 12 15m0 0 4.5-4.5M12 15V3")
+                    span 가이드북 PDF
+        h2(class="text-sm font-semibold text-white mb-5") 증권사 API 설정
 
         div(class="space-y-4")
-            //- App Key
             div
+                label(class="block text-xs font-medium text-slate-400 mb-1") 증권사
+                div(class="broker-select relative", (click)="$event.stopPropagation()")
+                    button((click)="toggleBrokerDropdown()",
+                        type="button",
+                        class="broker-select-trigger")
+                        div(class="flex items-center gap-3")
+                            span([class]="brokerLogoClass(selectedBrokerOption())") {{selectedBrokerOption().logo}}
+                            div(class="min-w-0 flex-1")
+                                div(class="flex items-center gap-2")
+                                    span(class="broker-option-title truncate") {{selectedBrokerOption().name}}
+                                    span(class="broker-status-badge") {{selectedBrokerOption().status}}
+                                p(class="broker-option-summary truncate") {{selectedBrokerOption().summary}}
+                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="broker-chevron")
+                                path(stroke-linecap="round", stroke-linejoin="round", d="m19.5 8.25-7.5 7.5-7.5-7.5")
+                    div(*ngIf="brokerDropdownOpen",
+                        class="broker-select-menu")
+                        button(*ngFor="let item of brokerOptions",
+                            type="button",
+                            (click)="selectBrokerOption(item)",
+                            [disabled]="item.enabled !== true",
+                            [class]="brokerOptionClass(item)")
+                            span([class]="brokerLogoClass(item)") {{item.logo}}
+                            div(class="min-w-0 flex-1")
+                                div(class="flex items-center gap-2")
+                                    span(class="broker-option-title truncate") {{item.name}}
+                                    span(class="broker-status-badge") {{item.status}}
+                                p(class="broker-option-summary") {{item.summary}}
+                p(class="text-[11px] text-slate-500 mt-1") 무한매수 주문과 대시보드 계좌 조회에 사용할 증권사를 선택합니다. 현재는 한국투자증권과 토스증권만 활성화되어 있습니다.
+
+            //- App Key
+            div(*ngIf="brokerProvider === 'kis'")
                 label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.app_key')}}
                 input([(ngModel)]="appKey",
                     type="text",
-                    placeholder="PSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                    placeholder="예: PSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
                     class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
 
             //- App Secret
-            div
+            div(*ngIf="brokerProvider === 'kis'")
                 label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.app_secret')}}
                 div(class="relative")
                     input([(ngModel)]="appSecret",
                         [type]="showSecret ? 'text' : 'password'",
-                        placeholder="Secret Key",
+                        placeholder="예: 한국투자증권 앱 시크릿",
                         class="w-full px-3 py-2 pr-10 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
                     button((click)="showSecret = !showSecret; service.render();",
                         class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300")
@@ -64,7 +99,7 @@ div(*ngIf="tab === 'api'")
                             path(stroke-linecap="round", stroke-linejoin="round", d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88")
 
             //- Account
-            div
+            div(*ngIf="brokerProvider === 'kis'")
                 label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.account_no')}}
                 input([(ngModel)]="accountNo",
                     type="text",
@@ -74,7 +109,7 @@ div(*ngIf="tab === 'api'")
                 p(class="text-[11px] text-slate-500 mt-1") 예: 12345678-01 (8자리 계좌번호 + 하이픈 + 2자리 상품코드)
 
             //- Mode Toggle
-            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
+            div(*ngIf="brokerProvider === 'kis'", class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
                 div
                     span(class="text-[13px] font-medium", [class]="isMock ? 'text-amber-300' : 'text-emerald-300'")
                         | {{isMock ? t('set.mock_trading') : t('set.live_trading')}}
@@ -85,6 +120,31 @@ div(*ngIf="tab === 'api'")
                     [class]="isMock ? 'bg-amber-500' : 'bg-emerald-500'")
                     div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
                         [class]="isMock ? 'translate-x-0.5' : 'translate-x-5'")
+
+            div(*ngIf="brokerProvider === 'toss'", class="rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-3")
+                h3(class="text-[13px] font-semibold text-sky-100") 토스증권 API
+                p(class="mt-1 text-[11px] leading-5 text-sky-100/70") 토스증권 WTS 설정 > Open API에서 받은 값 중 api key(tsck_...)는 첫 번째 칸, secret key(tssk_...)는 두 번째 칸에 입력합니다. accountSeq는 비워두는 것을 권장합니다.
+            div(*ngIf="brokerProvider === 'toss'")
+                label(class="block text-xs font-medium text-slate-400 mb-1") 토스증권 API key (tsck_...)
+                input([(ngModel)]="tossClientId",
+                    type="text",
+                    placeholder="예: tsck_live_...",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-400/50 transition-colors")
+                p(class="text-[11px] text-slate-500 mt-1") 토스증권 Open API 화면에서 api key라고 표시된 값을 앞뒤 공백 없이 그대로 붙여넣습니다. secret key를 이 칸에 넣으면 안 됩니다.
+            div(*ngIf="brokerProvider === 'toss'")
+                label(class="block text-xs font-medium text-slate-400 mb-1") 토스증권 Secret key (tssk_...)
+                input([(ngModel)]="tossClientSecret",
+                    [type]="showSecret ? 'text' : 'password'",
+                    placeholder="예: tssk_live_...",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-400/50 transition-colors")
+                p(class="text-[11px] text-slate-500 mt-1") 토스증권 Open API 화면에서 secret key라고 표시된 값을 붙여넣습니다. api key를 이 칸에 넣으면 안 됩니다.
+            div(*ngIf="brokerProvider === 'toss'")
+                label(class="block text-xs font-medium text-slate-400 mb-1") 토스증권 accountSeq (선택, 자동 조회)
+                input([(ngModel)]="tossAccountSeq",
+                    type="text",
+                    placeholder="비워두세요 - 연결 성공 시 자동 조회",
+                    class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-400/50 transition-colors")
+                p(class="text-[11px] text-slate-500 mt-1") 계좌번호나 계좌 뒷번호를 입력하는 칸이 아닙니다. 비워둔 채 연결 테스트를 누르면 토스 API 계좌 목록 응답의 accountSeq를 자동 저장합니다.
 
             //- Buttons
             div(class="flex items-center gap-3 pt-2")
@@ -100,6 +160,11 @@ div(*ngIf="tab === 'api'")
                 class="mt-3 px-3 py-2 rounded-lg text-[13px]",
                 [class]="testOk ? 'bg-emerald-500/10 border border-emerald-400/20 text-emerald-300' : 'bg-red-500/10 border border-red-400/20 text-red-300'")
                 | {{testResult}}
+            div(*ngIf="brokerProvider === 'toss' && apiDiagnostics.length > 0",
+                class="mt-2 rounded-lg border border-slate-500/20 bg-slate-500/10 px-3 py-2")
+                div(class="mb-1 text-[11px] font-semibold text-slate-300") 토스 연결 진단
+                div(*ngFor="let line of apiDiagnostics", class="break-words text-[11px] leading-5 text-slate-400")
+                    | {{line}}
 
         div(class="mt-6 pt-5 border-t border-white/10 space-y-5")
             h3(class="text-sm font-semibold text-white") 계정 정보
@@ -109,7 +174,7 @@ div(*ngIf="tab === 'api'")
                     label(class="block text-xs font-medium text-slate-400 mb-1") 아이디
                     input([(ngModel)]="accountLoginId",
                         type="text",
-                        placeholder="login id",
+                        placeholder="예: honggildong",
                         class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
                     p(class="text-[11px] text-slate-500 mt-1") 이메일 로컬 파트(&#64; 앞부분)
 
@@ -117,7 +182,7 @@ div(*ngIf="tab === 'api'")
                     label(class="block text-xs font-medium text-slate-400 mb-1") 이메일
                     input([(ngModel)]="accountEmail",
                         type="email",
-                        placeholder="user&#64;example.com",
+                        placeholder="예: user@example.com",
                         class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
 
             div
@@ -164,6 +229,50 @@ div(*ngIf="tab === 'risk'")
     div(class="glass-card p-6 max-w-2xl")
         h2(class="text-sm font-semibold text-white mb-5") 단타 리스크 설정
 
+        div(*ngIf="effectiveAdminMode()", class="mb-5 rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-4")
+            div(class="flex items-start justify-between gap-4")
+                div
+                    h3(class="text-[13px] font-semibold text-amber-200") 관리자 단타 기능
+                    p(class="mt-1 text-[11px] text-amber-100/75") 전역 ON은 단타 메뉴와 설정 접근만 열어줍니다. 사용자별 자동매매는 절대 함께 켜지지 않습니다.
+                button((click)="daytradeFeatureEnabled = !daytradeFeatureEnabled; service.render();",
+                    class="relative mt-0.5 h-5 w-10 rounded-full transition-colors",
+                    [class]="daytradeFeatureEnabled ? 'bg-amber-400' : 'bg-slate-600'")
+                    div(class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+                        [class]="daytradeFeatureEnabled ? 'translate-x-5' : 'translate-x-0.5'")
+            div(class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2")
+                div
+                    label(class="block text-xs font-medium text-amber-100/80 mb-1") 인증 사용자 ID
+                    textarea([(ngModel)]="daytradeAuthorizedUserIds",
+                        rows="4",
+                        placeholder="사용자 ID를 줄바꿈 또는 쉼표로 입력",
+                        class="w-full resize-y rounded-lg border border-amber-300/20 bg-black/10 px-3 py-2 text-[12px] text-amber-50 placeholder-amber-100/35 focus:outline-none focus:border-amber-300/60")
+                div
+                    label(class="block text-xs font-medium text-amber-100/80 mb-1") 인증 사용자 이메일
+                    textarea([(ngModel)]="daytradeAuthorizedUserEmails",
+                        rows="4",
+                        placeholder="예: user@example.com",
+                        class="w-full resize-y rounded-lg border border-amber-300/20 bg-black/10 px-3 py-2 text-[12px] text-amber-50 placeholder-amber-100/35 focus:outline-none focus:border-amber-300/60")
+            div(class="mt-3 flex justify-end")
+                button((click)="saveDaytradeAdminSettings()",
+                    class="px-4 py-2 rounded-lg bg-amber-400/20 border border-amber-300/35 text-amber-100 text-[13px] font-semibold hover:bg-amber-400/30 transition-colors")
+                    | 관리자 설정 저장
+
+        div(*ngIf="!effectiveAdminMode() && daytradeFeatureEnabled && daytradeUserAuthorized && !daytradeUserConfirmed", class="mb-5 rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-4")
+            h3(class="text-[13px] font-semibold text-red-200") 단타 위험 확인 필요
+            p(class="mt-1 text-[11px] leading-5 text-red-100/75") 단타는 손실 가능성이 크며 자동매매가 켜져도 수익이 보장되지 않습니다. 사용자가 직접 손실 책임을 확인해야 활성화할 수 있습니다.
+            div(class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center")
+                input([(ngModel)]="daytradeConfirmationInput",
+                    type="text",
+                    [placeholder]="daytradeConfirmationPhrase",
+                    class="flex-1 rounded-lg border border-red-300/20 bg-black/10 px-3 py-2 text-[13px] text-red-50 placeholder-red-100/35 focus:outline-none focus:border-red-300/60")
+                button((click)="confirmDaytradeWarning()",
+                    class="px-4 py-2 rounded-lg bg-red-400/20 border border-red-300/35 text-red-100 text-[13px] font-semibold hover:bg-red-400/30 transition-colors")
+                    | 확인 문구 저장
+
+        div(*ngIf="!daytradeFeatureEnabled || !daytradeUserAuthorized || !daytradeUserConfirmed", class="mb-5 rounded-xl border border-white/10 bg-white/5 px-4 py-3")
+            h3(class="text-[13px] font-semibold text-slate-200") 단타 기능 정지됨
+            p(class="mt-1 text-[11px] leading-5 text-slate-400") 현재 단타 자동매매와 수동 매도는 차단되어 있습니다. 관리자가 전역 기능을 켜고 사용자를 인증한 뒤, 일반 사용자가 '{{daytradeConfirmationPhrase}}' 문구를 입력해야 사용할 수 있습니다.
+
         div(class="space-y-5")
             div(class="grid grid-cols-1 md:grid-cols-2 gap-4")
                 div
@@ -196,8 +305,9 @@ div(*ngIf="tab === 'risk'")
                     span(class="text-[13px] font-medium text-slate-200") 국내 단타 자동순환
                     p(class="text-[11px] text-slate-500 mt-0.5") 꺼두면 아무 작업도 하지 않습니다. 수동 운용만 유지됩니다.
                 button((click)="toggleDaytradeAutoEnabled()",
+                    [disabled]="!daytradeFeatureEnabled || !daytradeUserAuthorized || !daytradeUserConfirmed",
                     class="relative w-10 h-5 rounded-full transition-colors",
-                    [class]="daytradeAutoEnabled ? 'bg-indigo-500' : 'bg-slate-600'")
+                    [class]="daytradeAutoEnabled ? 'bg-indigo-500' : 'bg-slate-600 disabled:opacity-50'")
                     div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
                         [class]="daytradeAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
 
@@ -206,8 +316,9 @@ div(*ngIf="tab === 'risk'")
                     span(class="text-[13px] font-medium text-slate-200") 미장 단타 자동순환
                     p(class="text-[11px] text-slate-500 mt-0.5") 꺼두면 아무 작업도 하지 않습니다. 수동 운용만 유지됩니다.
                 button((click)="toggleDaytradeUsAutoEnabled()",
+                    [disabled]="!daytradeFeatureEnabled || !daytradeUserAuthorized || !daytradeUserConfirmed",
                     class="relative w-10 h-5 rounded-full transition-colors",
-                    [class]="daytradeUsAutoEnabled ? 'bg-blue-500' : 'bg-slate-600'")
+                    [class]="daytradeUsAutoEnabled ? 'bg-blue-500' : 'bg-slate-600 disabled:opacity-50'")
                     div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
                         [class]="daytradeUsAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
 
@@ -388,7 +499,7 @@ div(*ngIf="tab === 'watchlist'")
 
                 //- Investment
                 div(class="w-28")
-                    label(class="text-[10px] text-slate-500 uppercase") Investment
+                    label(class="text-[10px] text-slate-500") 투자금
                     input([(ngModel)]="item.total_investment",
                         (blur)="updateWatchlistItem(item)",
                         type="number",
@@ -450,151 +561,108 @@ div(*ngIf="tab === 'watchlist'")
                     span(class="text-[11px] text-slate-400") {{t('set.manual_desc')}}
 
 //- ============================================================
-//- TAB: Parameters
-//- ============================================================
-div(*ngIf="tab === 'params'")
-    div(class="glass-card p-6 max-w-2xl")
-        h2(class="text-sm font-semibold text-white mb-5") {{t('set.trading_params')}}
-
-        div(class="space-y-5")
-            //- Division Count
-            div
-                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.default_division')}}
-                div(class="flex items-center gap-3")
-                    input([(ngModel)]="divisionCount",
-                        type="range", min="10", max="80", step="5",
-                        class="flex-1 accent-indigo-500")
-                    span(class="text-sm font-medium text-white w-10 text-right") {{divisionCount}}
-                p(class="text-[11px] text-slate-500 mt-1") {{t('set.division_desc')}}
-
-            //- Target Profit
-            div
-                label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.default_target')}}
-                div(class="flex items-center gap-3")
-                    input([(ngModel)]="targetProfit",
-                        type="range", min="3", max="30", step="1",
-                        class="flex-1 accent-indigo-500")
-                    span(class="text-sm font-medium text-white w-10 text-right") {{targetProfit}}%
-                p(class="text-[11px] text-slate-500 mt-1") {{t('set.target_desc')}}
-
-            //- Commission & Tax Section
-            div(class="pt-3 border-t border-white/5")
-                h3(class="text-[13px] font-semibold text-slate-300 mb-4 flex items-center gap-2")
-                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                        path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z")
-                    | {{t('set.commission_tax')}}
-
-                div(class="grid grid-cols-3 gap-4")
-                    //- Buy Commission
-                    div
-                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.buy_commission')}}
-                        input([(ngModel)]="buyCommissionRate",
-                            type="number",
-                            step="0.01",
-                            min="0",
-                            max="5",
-                            placeholder="0.25",
-                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
-                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.us_default')}}
-
-                    //- Sell Commission
-                    div
-                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.sell_commission')}}
-                        input([(ngModel)]="sellCommissionRate",
-                            type="number",
-                            step="0.01",
-                            min="0",
-                            max="5",
-                            placeholder="0.25",
-                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
-                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.us_default')}}
-
-                    //- Tax Rate
-                    div
-                        label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.sell_tax')}}
-                        input([(ngModel)]="taxRate",
-                            type="number",
-                            step="0.01",
-                            min="0",
-                            max="5",
-                            placeholder="0",
-                            class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400/50 transition-colors")
-                        p(class="text-[10px] text-slate-600 mt-1") {{t('set.kr_tax')}}
-
-                //- Preset buttons
-                div(class="flex items-center gap-2 mt-3")
-                    span(class="text-[11px] text-slate-500 mr-1") {{t('set.presets')}}
-                    button((click)="applyPreset('us')",
-                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
-                        | {{t('set.us_stock')}}
-                    button((click)="applyPreset('kr')",
-                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
-                        | {{t('set.kr_stock')}}
-                    button((click)="applyPreset('none')",
-                        class="preset-outline-button px-2 py-1 rounded text-[11px] bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors")
-                        | {{t('set.no_fee')}}
-
-            //- Auto Trade
-            div(class="flex items-center justify-between px-3 py-3 rounded-lg bg-white/5 border border-white/10")
-                div
-                    span(class="text-[13px] font-medium text-slate-200") {{t('set.auto_trading')}}
-                    p(class="text-[11px] text-slate-500 mt-0.5") {{t('set.auto_trade_desc')}}
-                button((click)="autoTrade = !autoTrade; service.render();",
-                    class="relative w-10 h-5 rounded-full transition-colors",
-                    [class]="autoTrade ? 'bg-emerald-500' : 'bg-slate-600'")
-                    div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
-                        [class]="autoTrade ? 'translate-x-5' : 'translate-x-0.5'")
-
-            //- Save
-            div(class="pt-2")
-                button((click)="saveParams()",
-                    class="px-4 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors")
-                    | {{t('set.save_params')}}
-
-//- ============================================================
 //- TAB: Strategy
 //- ============================================================
 div(*ngIf="tab === 'strategy'")
     div(class="glass-card p-6 max-w-2xl")
-        h2(class="text-sm font-semibold text-white mb-5") {{t('set.sell_strategy')}}
+        h2(class="text-sm font-semibold text-white mb-5") 매매전략
 
         div(class="space-y-6")
-            //- Sell Method (Market vs LOC)
-            div
-                label(class="block text-xs font-medium text-slate-400 mb-3") {{t('set.sell_method')}}
-                div(class="grid grid-cols-2 gap-3")
-                    //- Market
-                    button((click)="sellMethod = 'market'; service.render();",
-                        class="p-4 rounded-lg border text-left transition-all",
-                        [class]="sellMethod === 'market' ? 'bg-emerald-500/10 border-emerald-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
-                        div(class="flex items-center gap-2 mb-2")
-                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
-                                [class]="sellMethod === 'market' ? 'border-emerald-400' : 'border-slate-600'")
-                                div(*ngIf="sellMethod === 'market'",
-                                    class="w-1.5 h-1.5 rounded-full bg-emerald-400")
-                            span(class="text-[13px] font-medium",
-                                [class]="sellMethod === 'market' ? 'text-emerald-300' : 'text-slate-300'")
-                                | {{t('set.sell_market')}}
-                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.sell_market_desc')}}
+            div(class="rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-4")
+                div(class="flex items-start justify-between gap-4")
+                    div
+                        div(class="flex items-center gap-2")
+                            div(class="w-3 h-3 rounded-full bg-emerald-400")
+                            h3(class="text-[13px] font-semibold text-emerald-200") FireGate 그대로 운용
+                            span(class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200") 기본
+                        p(class="mt-1 text-[11px] leading-5 text-emerald-100/70") 매수·매도 가격, 분할 수량, LOC/지정가 구분을 FireGate 표와 동일하게 예약합니다.
+                    button(type="button",
+                        class="shrink-0 rounded-lg border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100",
+                        (click)="buyMethod = 'firegate'; sellMethod = 'firegate'; service.render();")
+                        | 기본값 적용
 
-                    //- LOC
-                    button((click)="sellMethod = 'loc'; service.render();",
-                        class="p-4 rounded-lg border text-left transition-all",
-                        [class]="sellMethod === 'loc' ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
-                        div(class="flex items-center gap-2 mb-2")
-                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
-                                [class]="sellMethod === 'loc' ? 'border-cyan-400' : 'border-slate-600'")
-                                div(*ngIf="sellMethod === 'loc'",
-                                    class="w-1.5 h-1.5 rounded-full bg-cyan-400")
-                            span(class="text-[13px] font-medium",
-                                [class]="sellMethod === 'loc' ? 'text-cyan-300' : 'text-slate-300'")
-                                | {{t('set.sell_loc')}}
-                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.sell_loc_desc')}}
+            div(class="rounded-xl border border-white/10 bg-white/5")
+                button(type="button",
+                    class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left",
+                    (click)="advancedOrderSettingsOpen = !advancedOrderSettingsOpen; service.render();")
+                    div
+                        h3(class="text-[13px] font-semibold text-slate-200") 고급 LOC 주문 설정
+                        p(class="mt-0.5 text-[11px] text-slate-500") 필요할 때만 FireGate 주문방식을 LOC 중심으로 덮어씁니다.
+                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+                        class="size-4 text-slate-400 transition-transform",
+                        [class.rotate-180]="advancedOrderSettingsOpen")
+                        path(stroke-linecap="round", stroke-linejoin="round", d="m19.5 8.25-7.5 7.5-7.5-7.5")
+                div(*ngIf="advancedOrderSettingsOpen", class="space-y-4 border-t border-white/10 px-4 py-4")
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-3") 매수 주문 방식
+                        div(class="grid grid-cols-1 sm:grid-cols-2 gap-3")
+                            button((click)="setBuyMethod('firegate')",
+                                class="p-4 rounded-lg border text-left transition-all",
+                                [class]="buyMethod === 'firegate' ? 'bg-emerald-500/10 border-emerald-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                                div(class="flex items-center gap-2 mb-2")
+                                    div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                        [class]="buyMethod === 'firegate' ? 'border-emerald-400' : 'border-slate-600'")
+                                        div(*ngIf="buyMethod === 'firegate'", class="w-1.5 h-1.5 rounded-full bg-emerald-400")
+                                    span(class="text-[13px] font-medium",
+                                        [class]="buyMethod === 'firegate' ? 'text-emerald-300' : 'text-slate-300'")
+                                        | FireGate 매수 그대로
+                                p(class="text-[11px] text-slate-500 ml-5") FireGate 표의 매수 라인을 그대로 예약합니다.
+                            button((click)="setBuyMethod('loc')",
+                                class="p-4 rounded-lg border text-left transition-all",
+                                [class]="buyMethod === 'loc' ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                                div(class="flex items-center gap-2 mb-2")
+                                    div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                        [class]="buyMethod === 'loc' ? 'border-cyan-400' : 'border-slate-600'")
+                                        div(*ngIf="buyMethod === 'loc'", class="w-1.5 h-1.5 rounded-full bg-cyan-400")
+                                    span(class="text-[13px] font-medium",
+                                        [class]="buyMethod === 'loc' ? 'text-cyan-300' : 'text-slate-300'")
+                                        | LOC 매수 고정
+                                p(class="text-[11px] text-slate-500 ml-5") 1회차도 LOC 예약으로 고정합니다.
+
+                    div
+                        label(class="block text-xs font-medium text-slate-400 mb-3") 매도 주문 방식
+                        div(class="grid grid-cols-1 sm:grid-cols-2 gap-3")
+                            button((click)="setSellMethod('firegate')",
+                                class="p-4 rounded-lg border text-left transition-all",
+                                [class]="sellMethod === 'firegate' ? 'bg-emerald-500/10 border-emerald-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                                div(class="flex items-center gap-2 mb-2")
+                                    div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                        [class]="sellMethod === 'firegate' ? 'border-emerald-400' : 'border-slate-600'")
+                                        div(*ngIf="sellMethod === 'firegate'", class="w-1.5 h-1.5 rounded-full bg-emerald-400")
+                                    span(class="text-[13px] font-medium",
+                                        [class]="sellMethod === 'firegate' ? 'text-emerald-300' : 'text-slate-300'")
+                                        | FireGate 매도 그대로
+                                p(class="text-[11px] text-slate-500 ml-5") LOC와 지정가 분할 매도를 FireGate 표와 동일하게 예약합니다.
+                            button((click)="setSellMethod('loc')",
+                                class="p-4 rounded-lg border text-left transition-all",
+                                [class]="sellMethod === 'loc' ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                                div(class="flex items-center gap-2 mb-2")
+                                    div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                        [class]="sellMethod === 'loc' ? 'border-cyan-400' : 'border-slate-600'")
+                                        div(*ngIf="sellMethod === 'loc'", class="w-1.5 h-1.5 rounded-full bg-cyan-400")
+                                    span(class="text-[13px] font-medium",
+                                        [class]="sellMethod === 'loc' ? 'text-cyan-300' : 'text-slate-300'")
+                                        | LOC 매도 고정
+                                p(class="text-[11px] text-slate-500 ml-5") FireGate의 매도 가격과 수량은 유지하고 주문방식만 모두 LOC로 예약합니다.
 
             //- Sell Strategy Selection
             div
                 label(class="block text-xs font-medium text-slate-400 mb-3") {{t('set.sell_strategy')}}
-                div(class="grid grid-cols-2 gap-3")
+                div(class="grid grid-cols-1 md:grid-cols-3 gap-3")
+                    //- FireGate Default
+                    button((click)="setStrategy('firegate')",
+                        class="p-4 rounded-lg border text-left transition-all",
+                        [class]="sellStrategy === 'firegate' ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-white/5 border-white/10 hover:border-white/20'")
+                        div(class="flex items-center gap-2 mb-2")
+                            div(class="w-3 h-3 rounded-full border-2 flex items-center justify-center",
+                                [class]="sellStrategy === 'firegate' ? 'border-cyan-400' : 'border-slate-600'")
+                                div(*ngIf="sellStrategy === 'firegate'",
+                                    class="w-1.5 h-1.5 rounded-full bg-cyan-400")
+                            span(class="text-[13px] font-medium",
+                                [class]="sellStrategy === 'firegate' ? 'text-cyan-300' : 'text-slate-300'")
+                                | {{t('set.strategy_firegate')}}
+                        p(class="text-[11px] text-slate-500 ml-5") {{t('set.strategy_firegate_desc')}}
+
                     //- Full Sell
                     button((click)="setStrategy('full')",
                         class="p-4 rounded-lg border text-left transition-all",
@@ -701,41 +769,6 @@ div(*ngIf="tab === 'strategy'")
                                     class="flex-1 accent-red-500")
                                 span(class="text-sm font-medium text-white w-10 text-right") {{crashBuyMaxPerCycle}}
 
-            //- Daytrade Auto Rotation
-            div(class="pt-4 border-t border-white/5")
-                div(class="flex items-center justify-between mb-4")
-                    div
-                        h3(class="text-[13px] font-semibold text-slate-300 flex items-center gap-2")
-                            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-indigo-300")
-                                path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.5 8.25 8.25l4.5 4.5L21 4.5m0 0v6.75m0-6.75H14.25")
-                            | 국내 단타 자동순환
-                        p(class="text-[11px] text-slate-500 mt-1") 남는 원화 시드를 단타로 계속 돌리되, 변동성/유동성 점수가 높은 종목을 우선 감시합니다.
-                    button((click)="toggleDaytradeAutoEnabled()",
-                        class="relative w-10 h-5 rounded-full transition-colors",
-                        [class]="daytradeAutoEnabled ? 'bg-indigo-500' : 'bg-slate-600'")
-                        div(class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
-                            [class]="daytradeAutoEnabled ? 'translate-x-5' : 'translate-x-0.5'")
-
-                div(*ngIf="daytradeAutoEnabled",
-                    class="p-4 rounded-lg bg-indigo-500/5 border border-indigo-400/10 space-y-4")
-                    div(class="grid grid-cols-2 gap-4")
-                        div
-                            label(class="block text-xs font-medium text-slate-400 mb-1") 일일 손실 제한 (KRW)
-                            input([(ngModel)]="daytradeDailyLossLimitKrw",
-                                type="number",
-                                step="10000",
-                                min="0",
-                                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50 transition-colors")
-                            p(class="text-[10px] text-slate-600 mt-1") 손실이 이 금액을 넘으면 신규 단타 진입을 막고 기존 포지션 청산만 허용합니다.
-                        div
-                            label(class="block text-xs font-medium text-slate-400 mb-1") 최대 감시 종목 수
-                            div(class="flex items-center gap-3")
-                                input([(ngModel)]="daytradeAutoMaxSymbols",
-                                    type="range", min="1", max="40", step="1",
-                                    class="flex-1 accent-indigo-500")
-                                span(class="text-sm font-medium text-white w-10 text-right") {{daytradeAutoMaxSymbols}}
-                            p(class="text-[10px] text-slate-600 mt-1") 현재 보유 종목을 우선 포함한 뒤, 변동성 높은 추천 종목을 이 개수까지 자동 감시합니다.
-
             //- LOC Auto Schedule
             div(class="pt-4 border-t border-white/5")
                 div(class="flex items-center justify-between")
@@ -744,7 +777,7 @@ div(*ngIf="tab === 'strategy'")
                             svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-cyan-300")
                                 path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z")
                             | 무한매수 LOC 자동 예약
-                        p(class="text-[11px] text-slate-500 mt-1") 매일 17:40 KST 이후 스케줄러 또는 대시보드 자동새로고침이 LOC 예약 접수를 시도합니다. 매수는 2회차 이후 LOC만 대상이고, 매도는 LOC 매도 방식일 때만 접수합니다.
+                        p(class="text-[11px] text-slate-500 mt-1") 매일 10:00 KST부터 스케줄러 또는 대시보드 자동새로고침이 FireGate 표의 매수·매도 예약을 검증하고 누락분을 접수합니다. 접수 마감은 일반 23:20, 서머타임 22:20 KST입니다.
                     button((click)="locAutoScheduleEnabled = !locAutoScheduleEnabled; service.render();",
                         class="relative w-10 h-5 rounded-full transition-colors",
                         [class]="locAutoScheduleEnabled ? 'bg-cyan-500' : 'bg-slate-600'")

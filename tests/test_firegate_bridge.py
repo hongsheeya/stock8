@@ -19,8 +19,41 @@ class FireGateBridgeTests(unittest.TestCase):
         self.assertIs(bridge.Model.sync_cycle_trade, bridge.sync_cycle_trade)
         self.assertIs(bridge.Model.sync_portfolios_to_local, bridge.sync_portfolios_to_local)
         self.assertIs(bridge.Model.sync_local_to_firegate, bridge.sync_local_to_firegate)
+        self.assertIs(bridge.Model.sync_firegate_authoritative, bridge.sync_firegate_authoritative)
         self.assertIs(bridge.Model.sync_portfolios_bidirectional, bridge.sync_portfolios_bidirectional)
         self.assertEqual(bridge.Model.INFINITYSTOCK_SOURCE, bridge.INFINITYSTOCK_SOURCE)
+
+    def test_firegate_authoritative_sync_does_not_push_local_state(self):
+        calls = []
+        original_pull = bridge.sync_portfolios_to_local
+        original_push = bridge.sync_local_to_firegate
+
+        def _pull(struct, symbol_filter=""):
+            calls.append(("pull", symbol_filter))
+            return {
+                "executed": True,
+                "firegate_portfolios": 2,
+                "cycles_created": 1,
+                "cycles_updated": 1,
+                "errors": [],
+            }
+
+        def _push(struct, symbol_filter=""):
+            calls.append(("push", symbol_filter))
+            raise AssertionError("default FireGate sync must not push stale local state")
+
+        bridge.sync_portfolios_to_local = _pull
+        bridge.sync_local_to_firegate = _push
+        try:
+            result = bridge.sync_firegate_authoritative(object(), symbol_filter="TQQQ")
+        finally:
+            bridge.sync_portfolios_to_local = original_pull
+            bridge.sync_local_to_firegate = original_push
+
+        self.assertEqual(calls, [("pull", "TQQQ")])
+        self.assertTrue(result["executed"])
+        self.assertEqual(result["mode"], "firegate_pull_authoritative")
+        self.assertEqual(result["pushed_portfolios"], 0)
 
     def test_firestore_document_round_trip_preserves_firegate_fields(self):
         source = {
@@ -64,6 +97,7 @@ class FireGateBridgeTests(unittest.TestCase):
         self.assertEqual(portfolio["holdingQty"], 4)
         self.assertEqual(portfolio["avgPrice"], 71.23)
         self.assertEqual(portfolio["tValue"], 3.5)
+        self.assertEqual(portfolio["commissionRate"], 0.25)
 
     def test_build_v4_portfolio_includes_infinitystock_metadata(self):
         portfolio = bridge.build_v4_portfolio(
@@ -183,6 +217,37 @@ class FireGateBridgeTests(unittest.TestCase):
 
         self.assertEqual(updated["holdingQty"], 1)
         self.assertEqual(updated["tValue"], 0)
+
+    def test_add_transaction_uses_source_trade_id_as_document_id(self):
+        captured = {}
+
+        class _MemoryBridge(bridge.FireGateBridge):
+            def __init__(self):
+                pass
+
+            def create_transaction(self, tx, doc_id=None):
+                captured["doc_id"] = doc_id
+                return {**tx, "id": doc_id}
+
+            def update_portfolio(self, portfolio_id, changes):
+                return {**changes, "id": portfolio_id}
+
+        portfolio = bridge.build_v4_portfolio("TQQQ", 10000, division_count=20, target_profit=15)
+        portfolio["id"] = "portfolio-1"
+        remote = _MemoryBridge()
+
+        saved, _updated = remote.add_transaction_and_update_portfolio(portfolio, {
+            "type": "buy",
+            "ticker": "TQQQ",
+            "date": "2026. 06. 22",
+            "price": 82.58,
+            "size": 2,
+            "commission": 0,
+            "sourceTradeId": "local-trade-123",
+        })
+
+        self.assertEqual(captured["doc_id"], "local-trade-123")
+        self.assertEqual(saved["id"], "local-trade-123")
 
     def test_firestore_requests_include_api_key_header_and_query(self):
         captured = {}
@@ -324,6 +389,311 @@ class FireGateBridgeTests(unittest.TestCase):
         self.assertEqual(cycle["status"], "PAUSED")
         self.assertEqual(cycle["total_investment"], 15000.0)
         self.assertEqual(cycle["current_round"], 2)
+
+    def test_sync_portfolios_to_local_derives_cycle_state_from_firegate_transactions(self):
+        class _FakeDb:
+            def __init__(self, rows=None):
+                self.rows_data = [dict(row) for row in (rows or [])]
+
+            def get(self, **kwargs):
+                for row in self.rows_data:
+                    matched = True
+                    for key, value in kwargs.items():
+                        if row.get(key) != value:
+                            matched = False
+                            break
+                    if matched:
+                        return row
+                return None
+
+            def rows(self, **kwargs):
+                data = [dict(row) for row in self.rows_data]
+                symbol = kwargs.get("symbol")
+                if symbol is not None:
+                    data = [row for row in data if row.get("symbol") == symbol]
+                orderby = kwargs.get("orderby")
+                order = str(kwargs.get("order", "ASC") or "ASC").upper()
+                if orderby:
+                    data.sort(key=lambda row: row.get(orderby), reverse=(order == "DESC"))
+                dump = kwargs.get("dump")
+                if dump:
+                    data = data[:int(dump)]
+                return data
+
+            def update(self, data, id=None):
+                for row in self.rows_data:
+                    if row.get("id") == id:
+                        row.update(dict(data))
+                        return
+                raise AssertionError(f"missing row id={id}")
+
+            def insert(self, data):
+                payload = dict(data)
+                payload.setdefault("id", str(len(self.rows_data) + 1))
+                self.rows_data.append(payload)
+                return payload
+
+        class _FakeStruct:
+            def __init__(self):
+                self.dbs = {
+                    "etf_watchlist": _FakeDb([{
+                        "id": "wl-1",
+                        "symbol": "SOXL",
+                        "name": "Old SOXL",
+                        "total_investment": 15000.0,
+                        "division_count": 20,
+                        "target_profit": 18.0,
+                    }]),
+                    "trading_cycle": _FakeDb([{
+                        "id": "cy-1",
+                        "symbol": "SOXL",
+                        "status": "ACTIVE",
+                        "cycle_number": 1,
+                        "current_round": 0,
+                        "total_investment": 15000.0,
+                        "total_spent": 0.0,
+                        "total_qty": 0,
+                        "avg_price": 0.0,
+                        "created": 1,
+                    }]),
+                }
+
+            def db(self, name):
+                return self.dbs[name]
+
+        class _FakeRemoteBridge:
+            def list_portfolios(self):
+                return [{
+                    "id": "fg-soxl",
+                    "ticker": "SOXL",
+                    "nickname": "InfinityStock Auto | SOXL | Cycle 1",
+                    "source": "infinitystock",
+                    "sourceCycleId": "cy-1",
+                    "portfolioGroup": "InfinityStock Auto",
+                    "category": "infinite_buy",
+                    "seed": 15000,
+                    "divisionDate": 20,
+                    "targetProfit": 18,
+                    "isRunning": True,
+                    "holdingQty": 0,
+                    "avgPrice": 0,
+                    "totalBuy": 0,
+                    "totalSell": 0,
+                    "tValue": 0,
+                    "startDate": "2026-06-17",
+                }]
+
+            def list_transactions(self, portfolio_id):
+                if str(portfolio_id) != "fg-soxl":
+                    return []
+                return [
+                    {"id": "tx-1", "portfolioId": "fg-soxl", "type": "buy", "date": "2026. 06. 17", "price": 226.76, "size": 2, "commission": 0, "tDelta": 0.5},
+                    {"id": "tx-2", "portfolioId": "fg-soxl", "type": "buy", "date": "2026. 06. 17", "price": 226.76, "size": 1, "commission": 0, "tDelta": 0.5},
+                ]
+
+        original = bridge._bridge_call_from_config
+        bridge._bridge_call_from_config = lambda struct, fn: fn(_FakeRemoteBridge(), {"enabled": True})
+        try:
+            fake = _FakeStruct()
+            result = bridge.sync_portfolios_to_local(fake)
+        finally:
+            bridge._bridge_call_from_config = original
+
+        self.assertTrue(result["executed"])
+        self.assertEqual(result["transaction_derived_portfolios"], 1)
+        cycle = fake.db("trading_cycle").get(id="cy-1")
+        self.assertEqual(cycle["total_qty"], 3)
+        self.assertEqual(cycle["avg_price"], 226.76)
+        self.assertEqual(cycle["total_spent"], 680.28)
+        self.assertEqual(cycle["current_round"], 1)
+
+    def test_sync_portfolios_to_local_prefers_firegate_document_state_over_transactions(self):
+        class _FakeDb:
+            def __init__(self, rows=None):
+                self.rows_data = [dict(row) for row in (rows or [])]
+
+            def get(self, **kwargs):
+                for row in self.rows_data:
+                    if all(row.get(key) == value for key, value in kwargs.items()):
+                        return row
+                return None
+
+            def rows(self, **kwargs):
+                data = [dict(row) for row in self.rows_data]
+                symbol = kwargs.get("symbol")
+                if symbol is not None:
+                    data = [row for row in data if row.get("symbol") == symbol]
+                return data
+
+            def update(self, data, id=None):
+                for row in self.rows_data:
+                    if row.get("id") == id:
+                        row.update(dict(data))
+                        return
+                raise AssertionError(f"missing row id={id}")
+
+            def insert(self, data):
+                payload = dict(data)
+                payload.setdefault("id", str(len(self.rows_data) + 1))
+                self.rows_data.append(payload)
+                return payload
+
+        class _FakeStruct:
+            def __init__(self):
+                self.dbs = {
+                    "etf_watchlist": _FakeDb([{"id": "wl-1", "symbol": "TQQQ"}]),
+                    "trading_cycle": _FakeDb([{
+                        "id": "cy-1",
+                        "symbol": "TQQQ",
+                        "status": "ACTIVE",
+                        "cycle_number": 1,
+                        "created": 1,
+                    }]),
+                }
+
+            def db(self, name):
+                return self.dbs[name]
+
+        class _FakeRemoteBridge:
+            def list_portfolios(self):
+                return [{
+                    "id": "fg-tqqq",
+                    "ticker": "TQQQ",
+                    "source": "infinitystock",
+                    "sourceCycleId": "cy-1",
+                    "portfolioGroup": "InfinityStock Auto",
+                    "category": "infinite_buy",
+                    "seed": 10000,
+                    "divisionDate": 20,
+                    "targetProfit": 15,
+                    "isRunning": True,
+                    "holdingQty": 41,
+                    "avgPrice": 76.3085,
+                    "totalBuy": 3157.54,
+                    "totalSell": 0,
+                    "tValue": 8,
+                    "startDate": "2026-06-25",
+                }]
+
+            def list_transactions(self, portfolio_id):
+                return [
+                    {"id": "tx-old", "type": "buy", "date": "2026. 06. 24", "price": 82.58, "size": 41, "commission": 0}
+                ]
+
+        original = bridge._bridge_call_from_config
+        bridge._bridge_call_from_config = lambda struct, fn: fn(_FakeRemoteBridge(), {"enabled": True})
+        try:
+            fake = _FakeStruct()
+            result = bridge.sync_portfolios_to_local(fake)
+        finally:
+            bridge._bridge_call_from_config = original
+
+        self.assertEqual(result["transaction_derived_portfolios"], 0)
+        cycle = fake.db("trading_cycle").get(id="cy-1")
+        self.assertEqual(cycle["total_qty"], 41)
+        self.assertEqual(cycle["avg_price"], 76.3085)
+        self.assertEqual(cycle["current_round"], 8)
+
+    def test_sync_portfolios_to_local_uses_firegate_state_even_when_local_trades_look_newer(self):
+        class _FakeDb:
+            def __init__(self, rows=None):
+                self.rows_data = [dict(row) for row in (rows or [])]
+
+            def get(self, **kwargs):
+                for row in self.rows_data:
+                    if all(row.get(key) == value for key, value in kwargs.items()):
+                        return row
+                return None
+
+            def rows(self, **kwargs):
+                data = [dict(row) for row in self.rows_data]
+                for key, value in kwargs.items():
+                    if key in ("orderby", "order", "dump"):
+                        continue
+                    data = [row for row in data if row.get(key) == value]
+                orderby = kwargs.get("orderby")
+                order = str(kwargs.get("order", "ASC") or "ASC").upper()
+                if orderby:
+                    data.sort(key=lambda row: row.get(orderby), reverse=(order == "DESC"))
+                dump = kwargs.get("dump")
+                if dump:
+                    data = data[:int(dump)]
+                return data
+
+            def update(self, data, id=None):
+                for row in self.rows_data:
+                    if row.get("id") == id:
+                        row.update(dict(data))
+                        return
+                raise AssertionError(f"missing row id={id}")
+
+            def insert(self, data):
+                payload = dict(data)
+                payload.setdefault("id", str(len(self.rows_data) + 1))
+                self.rows_data.append(payload)
+                return payload
+
+        class _FakeStruct:
+            def __init__(self):
+                self.dbs = {
+                    "etf_watchlist": _FakeDb([{"id": "wl-1", "symbol": "TQQQ"}]),
+                    "trading_cycle": _FakeDb([{
+                        "id": "cy-1",
+                        "symbol": "TQQQ",
+                        "status": "ACTIVE",
+                        "cycle_number": 1,
+                        "current_round": 3,
+                        "total_qty": 18,
+                        "avg_price": 79.61,
+                        "total_spent": 1432.98,
+                        "created": 1,
+                    }]),
+                    "cycle_trade": _FakeDb([
+                        {"cycle_id": "cy-1", "status": "FILLED", "action": "BUY", "filled_qty": 40, "filled_amount": 3000, "commission": 0, "created": 1},
+                    ]),
+                }
+
+            def db(self, name):
+                return self.dbs[name]
+
+        class _FakeRemoteBridge:
+            def list_portfolios(self):
+                return [{
+                    "id": "fg-tqqq",
+                    "ticker": "TQQQ",
+                    "nickname": "InfinityStock Auto | TQQQ | Cycle 1",
+                    "source": "infinitystock",
+                    "sourceCycleId": "cy-1",
+                    "portfolioGroup": "InfinityStock Auto",
+                    "category": "infinite_buy",
+                    "seed": 10000,
+                    "divisionDate": 20,
+                    "targetProfit": 15,
+                    "isRunning": True,
+                    "holdingQty": 33,
+                    "avgPrice": 76.64,
+                    "totalBuy": 2529.12,
+                    "totalSell": 0,
+                    "tValue": 6,
+                    "startDate": "2026-06-25",
+                }]
+
+            def list_transactions(self, portfolio_id):
+                return []
+
+        original = bridge._bridge_call_from_config
+        bridge._bridge_call_from_config = lambda struct, fn: fn(_FakeRemoteBridge(), {"enabled": True})
+        try:
+            fake = _FakeStruct()
+            result = bridge.sync_portfolios_to_local(fake)
+        finally:
+            bridge._bridge_call_from_config = original
+
+        self.assertEqual(result["cycles_updated"], 1)
+        cycle = fake.db("trading_cycle").get(id="cy-1")
+        self.assertEqual(cycle["total_qty"], 33)
+        self.assertEqual(cycle["avg_price"], 76.64)
+        self.assertEqual(cycle["current_round"], 6)
 
     def test_sync_portfolios_to_local_ignores_manual_firegate_portfolios(self):
         class _FakeDb:

@@ -1,0 +1,43 @@
+{
+    "selected": {
+        "symbol": "035420",
+        "market": "KS",
+        "name": "NAVER",
+        "strategy_id": "vrev",
+        "strategy_name": "V-REV \uc5ed\ucd94\uc138",
+        "reason": "\ud559\uc2b5 \uc2e4\ud328\ub85c \uae30\ubcf8 \uc885\ubaa9\uc744 \uc720\uc9c0\ud569\ub2c8\ub2e4: Daytrade.auto_train() got an unexpected keyword argument 'requested_seed'"
+    },
+    "aggregate": {
+        "tested_count": 0,
+        "success_rate": 0.0,
+        "avg_total_return": 0.0,
+        "avg_win_rate": 0.0,
+        "avg_score": 0.0,
+        "avg_day_range_pct": 0.0,
+        "strategies_tested": [
+            "vrev"
+        ]
+    },
+    "leaderboard": [],
+    "latest": null,
+    "cross_validation": [],
+    "training_skipped": true,
+    "fallback_reason": "\ud559\uc2b5 \uc2e4\ud328\ub85c \uae30\ubcf8 \uc885\ubaa9\uc744 \uc720\uc9c0\ud569\ub2c8\ub2e4: Daytrade.auto_train() got an unexpected keyword argument 'requested_seed'",
+    "cache_key": {
+        "strategy_catalog": "us_breakout|us_premarket|us_pullback|us_vwap|volume_breakout|vrev",
+        "requested_seed": 2000000.0,
+        "market_scope": "KS",
+        "strategy_scope": "all",
+        "price_cap_krw": 1244449.0,
+        "training_period": "10d",
+        "training_interval": "5m",
+        "min_session_count": 6,
+        "min_validation_sessions": 3
+    },
+    "requested_seed": 2000000.0,
+    "training_seed": 2000000.0,
+    "price_cap_krw": 1244449.0,
+    "market": "KS",
+    "generated_date": "2026-05-06",
+    "generated_at": "2026-05-06 09:32:48"
+}

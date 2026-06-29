@@ -21,7 +21,7 @@ DEFAULT_PARTIAL_SELL_STAGES = [
 # ─── 기본 파라미터 (경험적 최적값) ────────────────────────────────
 DEFAULT_PARAMS = {
     # 분할 매도
-    "sell_strategy": "full",                     # "full" | "partial"
+    "sell_strategy": "firegate",                 # "firegate" | "full" | "partial"
     "partial_sell_stages": DEFAULT_PARTIAL_SELL_STAGES,
     "partial_sell_remaining_full_exit": True,     # 잔량이 다시 목표 도달 시 전량 매도
 
@@ -255,7 +255,7 @@ def backtest_strategy(daily_prices, investment, division_count, target_profit,
         buy_commission_rate: 매수 수수료율 (소수)
         sell_commission_rate: 매도 수수료율 (소수)
         tax_rate: 세금률 (소수)
-        sell_strategy: "full" | "partial"
+        sell_strategy: "firegate" | "full" | "partial"
         strategy_params: 전략 파라미터 dict (PartialSellStrategy / CrashBuyStrategy용)
         allow_extension: 분할 소진 시 자동 연장
 

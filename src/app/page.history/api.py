@@ -25,6 +25,41 @@ def _cache_set(key, value):
     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
     _HISTORY_CACHE[key] = (now, copy.deepcopy(value))
 
+def _cache_clear_history_records(scope=None):
+    scope = scope or _history_cache_scope()
+    prefix = f"{scope}:"
+    for key in list(_HISTORY_CACHE.keys()):
+        if isinstance(key, str) and key.startswith(prefix):
+            _HISTORY_CACHE.pop(key, None)
+
+def _history_cache_scope():
+    try:
+        session = wiz.model("portal/season/session").use()
+        user_id = str(session.get("id", "") or session.get("email", "") or "").strip()
+        return f"user:{user_id}" if user_id else "anon"
+    except Exception:
+        return "anon"
+
+def _sync_external_cycles_for_history(trading, force=False, symbol_filter=""):
+    scope = _history_cache_scope()
+    cache_key = (
+        "external_cycle_sync",
+        scope,
+        str(symbol_filter or "").upper().strip(),
+    )
+    if force is False:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+    try:
+        result = trading.engine.sync_external_cycle_trades(lookback_days=7, symbol_filter=symbol_filter) or {}
+    except Exception as e:
+        result = {"status": "error", "verified": False, "message": str(e), "synced_count": 0}
+    if force or int((result or {}).get("synced_count", 0) or 0) > 0 or int((result or {}).get("corrected_count", 0) or 0) > 0 or int((result or {}).get("audited_count", 0) or 0) > 0 or int((result or {}).get("reconciled_count", 0) or 0) > 0:
+        _cache_clear_history_records(scope=scope)
+    _cache_set(cache_key, result)
+    return result
+
 def _sanitize_user_log_message(message):
     """사용자 화면에서는 기술 상세 파라미터를 숨긴다."""
     if not message:
@@ -109,6 +144,9 @@ def _raw_json(value):
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+def _truthy(value):
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 def _first_nonzero_float(*values):
     for value in values:
@@ -461,30 +499,10 @@ def _collect_broker_daytrade_trades(trading):
         return []
 
     records = []
-    allowed_symbols = set()
-    try:
-        state_map = engine._load_state_map() or {}
-        for state_key, state in state_map.items():
-            symbol = str((state if isinstance(state, dict) else {}).get("symbol", "") or str(state_key).split(".")[0]).upper()
-            if symbol:
-                allowed_symbols.add(symbol)
-    except Exception:
-        allowed_symbols = set()
-    try:
-        log_db = trading.db("trade_log")
-        for row in log_db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []:
-            symbol = str((row or {}).get("symbol", "") or "").upper()
-            if symbol:
-                allowed_symbols.add(symbol)
-    except Exception:
-        pass
-
     for row in list(summary.get("logs", []) or []):
         if str((row or {}).get("verification", "") or "").lower() != "kis":
             continue
         symbol = str((row or {}).get("symbol", "") or "").upper()
-        if allowed_symbols and symbol not in allowed_symbols:
-            continue
         record = _daytrade_record_from_period_log(row)
         if record.get("action") in ("BUY", "SELL") and record.get("symbol"):
             records.append(record)
@@ -760,8 +778,9 @@ def _load_daytrade_state(trading):
     except Exception:
         return {}
 
-def _collect_daytrade_trades(trading, include_broker=False):
-    cache_key = f"daytrade_records:{'broker' if include_broker else 'local'}"
+def _collect_daytrade_trades(trading, include_broker=False, max_log_rows=1200):
+    max_log_rows = max(100, int(max_log_rows or 1200))
+    cache_key = f"{_history_cache_scope()}:daytrade_records:{'broker' if include_broker else 'local'}:{max_log_rows}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -769,7 +788,7 @@ def _collect_daytrade_trades(trading, include_broker=False):
     record_by_key = {}
     try:
         log_db = trading.db("trade_log")
-        rows = log_db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
+        rows = log_db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=max_log_rows) or []
     except Exception:
         rows = []
     for row in rows:
@@ -852,9 +871,120 @@ def _daytrade_record_to_log_row(record):
         "_sort": _daytrade_sort_key(record.get("timestamp", "")),
     }
 
-def _state_daytrade_log_rows(trading):
+def _cycle_trade_record_key(record):
+    order_no = str(record.get("order_no", "") or "").strip()
+    symbol = str(record.get("symbol", "") or "").strip()
+    action = _normalize_trade_action(record.get("action", ""))
+    if order_no:
+        return f"cycle:{symbol}:{action}:{order_no}"
+    return f"cycle:{symbol}:{action}:{record.get('cycle_id', '')}:{record.get('timestamp', '')}:{record.get('qty', 0)}:{record.get('price', 0)}"
+
+def _cycle_trade_record_from_row(row):
+    row = row if isinstance(row, dict) else {}
+    order_type = str(row.get("order_type", "") or "").upper().strip()
+    order_no = str(row.get("broker_order_no", "") or "").upper().strip()
+    if order_type in ("RECON", "AUDIT") or order_no.startswith("RECONCILE-"):
+        return None
+    action = _normalize_trade_action(row.get("action", ""))
+    if action not in ("BUY", "SELL"):
+        return None
+    symbol = str(row.get("symbol", "") or "").upper()
+    market = _daytrade_market("", symbol, "US")
+    price = _safe_float(row.get("filled_price", 0), 0) or _safe_float(row.get("order_price", 0), 0)
+    qty = _safe_int(row.get("filled_qty", 0), 0) or _safe_int(row.get("order_qty", 0), 0)
+    amount = _safe_float(row.get("filled_amount", 0), 0) or (price * qty)
+    if qty <= 0 or price <= 0:
+        return None
+
+    avg_buy_price = _safe_float(row.get("avg_buy_price", 0), 0)
+    commission = _safe_float(row.get("commission", 0), 0)
+    realized = 0.0
+    matched_buy_amount = 0.0
+    if action == "SELL":
+        matched_buy_amount = avg_buy_price * qty if avg_buy_price > 0 else 0.0
+        if matched_buy_amount > 0:
+            realized = amount - matched_buy_amount - max(0.0, commission)
+
+    trade_date = str(row.get("trade_date", "") or "").strip()
+    created = row.get("created", "")
+    if created:
+        timestamp = _to_kst_string(created, fmt="%Y-%m-%d %H:%M:%S")
+    elif trade_date:
+        timestamp = f"{trade_date[:10]} 00:00:00"
+    else:
+        timestamp = ""
+
+    order_type = str(row.get("order_type", "") or "")
+    memo = str(row.get("memo", "") or "")
+    message_parts = ["무한매수", f"{order_type} {action}".strip()]
+    if memo:
+        message_parts.append(memo)
+
+    return {
+        "id": f"cycle:{row.get('id', '') or row.get('broker_order_no', '') or symbol + ':' + timestamp}",
+        "timestamp": timestamp,
+        "market": market,
+        "market_label": "미장" if market == "US" else "국장",
+        "symbol": symbol,
+        "name": symbol,
+        "strategy": "무한매수",
+        "strategy_id": str(row.get("cycle_id", "") or ""),
+        "cycle_id": str(row.get("cycle_id", "") or ""),
+        "action": action,
+        "action_detail": "INFINITE_BUY" if action == "BUY" else "INFINITE_SELL",
+        "order_type": order_type,
+        "order_no": str(row.get("broker_order_no", "") or ""),
+        "price": round(price, 4),
+        "qty": qty,
+        "amount": round(amount, 2),
+        "realized": round(realized, 2),
+        "matched_buy_amount": round(matched_buy_amount, 2),
+        "fee": round(commission, 4),
+        "avg_buy_price": round(avg_buy_price if action == "SELL" else 0, 4),
+        "post_position_qty": _safe_int(row.get("total_qty_after", 0), 0),
+        "post_avg_price": round(_safe_float(row.get("avg_buy_price", 0), 0), 4),
+        "message": _sanitize_user_log_message(" | ".join([part for part in message_parts if part])),
+        "source": "cycle_trade",
+        "_sort": _daytrade_sort_key(timestamp),
+    }
+
+def _collect_cycle_trade_records(trading, max_rows=1200):
+    max_rows = max(100, int(max_rows or 1200))
+    cache_key = f"{_history_cache_scope()}:cycle_trade_records:{max_rows}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        trade_db = trading.db("cycle_trade")
+        rows = trade_db.rows(orderby="created", order="DESC", dump=max_rows) or []
+    except Exception:
+        rows = []
+    records = []
+    for row in rows:
+        record = _cycle_trade_record_from_row(row)
+        if record:
+            records.append(record)
+    records.sort(key=lambda x: x.get("_sort", ""), reverse=True)
+    _cache_set(cache_key, records)
+    return records
+
+def _collect_trade_history_records(trading, include_broker=False, max_log_rows=1200):
+    record_by_key = {}
+    for record in _collect_daytrade_trades(trading, include_broker=include_broker, max_log_rows=max_log_rows):
+        normalized = dict(record)
+        normalized.setdefault("strategy", "단타")
+        key = f"daytrade:{_daytrade_record_key(normalized)}"
+        record_by_key[key] = normalized
+    for record in _collect_cycle_trade_records(trading, max_rows=max_log_rows):
+        key = _cycle_trade_record_key(record)
+        record_by_key[key] = record
+    records = list(record_by_key.values())
+    records.sort(key=lambda x: x.get("_sort", ""), reverse=True)
+    return records
+
+def _state_daytrade_log_rows(trading, include_broker=False, max_log_rows=600):
     rows = []
-    for record in _collect_daytrade_trades(trading, include_broker=False):
+    for record in _collect_daytrade_trades(trading, include_broker=include_broker, max_log_rows=max_log_rows):
         source = str(record.get("source", "") or "")
         if "trade_log" in source:
             continue
@@ -873,11 +1003,14 @@ def _active_daytrade_positions(trading, market=""):
             continue
         item_market = str(state.get("market", "") or (str(state_key).split(".")[1] if "." in str(state_key) else "KS")).upper()
         item_market = "US" if item_market == "US" else "KS"
+        symbol = str(state.get("symbol", str(state_key).split(".")[0]) or "").upper()
+        if item_market == "US" and symbol in ("SOXL", "TQQQ"):
+            continue
         if market_filter and item_market != market_filter:
             continue
         avg_price = _safe_float(state.get("avg_price", 0), 0)
         result.append({
-            "symbol": state.get("symbol", str(state_key).split(".")[0]),
+            "symbol": symbol,
             "market": item_market,
             "name": state.get("name", ""),
             "position_qty": qty,
@@ -900,6 +1033,12 @@ def symbols():
             symbols.update([r.get("symbol") for r in logs if r.get("symbol")])
         except Exception:
             pass
+        try:
+            cycle_trade_db = trading.db("cycle_trade")
+            trades = cycle_trade_db.rows(orderby="created", order="DESC", dump=1000) or []
+            symbols.update([r.get("symbol") for r in trades if r.get("symbol")])
+        except Exception:
+            pass
         for state in (_load_daytrade_state(trading) or {}).values():
             if isinstance(state, dict) and state.get("symbol"):
                 symbols.add(state.get("symbol"))
@@ -909,7 +1048,7 @@ def symbols():
     wiz.response.status(200, data=symbols)
 
 def daytrade_trades():
-    """단타 체결 이력: 사용자에게 필요한 핵심 체결 정보만 반환"""
+    """전체 체결 이력: 단타와 무한매수 cycle_trade를 함께 반환한다."""
     trading = struct.trading
     page = max(1, int(wiz.request.query("page", 1)))
     dump = 20
@@ -917,9 +1056,15 @@ def daytrade_trades():
     action = _normalize_trade_action(wiz.request.query("action", ""))
     symbol = str(wiz.request.query("symbol", "") or "").upper()
     search = str(wiz.request.query("search", "") or "").strip().lower()
-    sync_broker = str(wiz.request.query("sync_broker", "false") or "").strip().lower() in ("1", "true", "yes", "y")
+    sync_default = "true" if page == 1 else "false"
+    sync_broker = str(wiz.request.query("sync_broker", sync_default) or "").strip().lower() in ("1", "true", "yes", "y")
+    include_old = _truthy(wiz.request.query("include_old", "false"))
+    max_log_rows = 5000 if (include_old or search or page > 3) else 900
 
-    rows = _collect_daytrade_trades(trading, include_broker=sync_broker)
+    external_cycle_sync = None
+    if page == 1:
+        external_cycle_sync = _sync_external_cycles_for_history(trading, force=sync_broker, symbol_filter=symbol)
+    rows = _collect_trade_history_records(trading, include_broker=sync_broker, max_log_rows=max_log_rows)
     filtered = []
     for row in rows:
         if market and row.get("market") != market:
@@ -934,6 +1079,7 @@ def daytrade_trades():
                 str(row.get("name", "")),
                 str(row.get("message", "")),
                 str(row.get("action_detail", "")),
+                str(row.get("strategy", "")),
             ]).lower()
             if search not in haystack:
                 continue
@@ -943,6 +1089,7 @@ def daytrade_trades():
     total_pages = max(1, math.ceil(total / dump))
     start = (page - 1) * dump
     page_rows = filtered[start:start + dump]
+    has_more = page < total_pages or (not include_old and len(rows) >= max_log_rows)
     for row in page_rows:
         row.pop("_sort", None)
 
@@ -950,6 +1097,8 @@ def daytrade_trades():
     sell_rows = [r for r in filtered if r.get("action") == "SELL"]
     closed_sells, unmatched_sells = _daytrade_closed_sell_components(sell_rows)
     positions = _active_daytrade_positions(trading, market=market)
+    cycle_rows = [r for r in filtered if str(r.get("source", "") or "") == "cycle_trade"]
+    daytrade_rows = [r for r in filtered if str(r.get("source", "") or "") != "cycle_trade"]
     total_buy_amount = sum(_safe_float(r.get("amount", 0), 0) for r in buy_rows)
     gross_sell_amount = sum(_daytrade_sell_amount(r) for r in sell_rows)
     total_sell_amount = sum(item["amount"] for item in closed_sells)
@@ -976,6 +1125,9 @@ def daytrade_trades():
         "unmatched_sell_amount": round(unmatched_sell_amount, 2),
         "record_realized": round(record_realized_total, 2),
         "realized": round(realized_total, 2),
+        "trade_count": len(filtered),
+        "cycle_trade_count": len(cycle_rows),
+        "daytrade_trade_count": len(daytrade_rows),
         "open_position_count": len(positions),
         "open_cost_amount": round(sum(_safe_float(p.get("cost_amount", 0), 0) for p in positions), 2),
         "positions": positions[:8],
@@ -987,8 +1139,17 @@ def daytrade_trades():
         total=total,
         total_pages=total_pages,
         page=page,
+        has_more=has_more,
+        next_page=page + 1 if has_more else page,
+        loaded_count=min(total, start + len(page_rows)),
+        older_summary={
+            "loaded_count": min(total, start + len(page_rows)),
+            "remaining_count": max(0, total - (start + len(page_rows))),
+            "archive_limited": (not include_old and len(rows) >= max_log_rows),
+        },
         summary=summary,
         broker_sync_deferred=(not sync_broker),
+        external_cycle_sync=external_cycle_sync,
     )
 
 def cycles():
@@ -998,6 +1159,9 @@ def cycles():
     dump = 15
     status = wiz.request.query("status", "")
     symbol = wiz.request.query("symbol", "")
+    force_sync = _truthy(wiz.request.query("sync", "true" if page == 1 else "false"))
+    if page == 1:
+        _sync_external_cycles_for_history(trading, force=force_sync, symbol_filter=symbol)
 
     cycle_db = trading.db("trading_cycle")
 
@@ -1030,6 +1194,7 @@ def cycle_detail():
     """사이클 상세 + 거래 내역"""
     trading = struct.trading
     cycle_id = wiz.request.query("cycle_id", True)
+    _sync_external_cycles_for_history(trading, force=_truthy(wiz.request.query("sync", "true")))
 
     cycle_db = trading.db("trading_cycle")
     trade_db = trading.db("cycle_trade")
@@ -1058,41 +1223,65 @@ def trade_logs():
     symbol = wiz.request.query("symbol", "")
     action = wiz.request.query("action", "")
     search = wiz.request.query("search", "")
+    sync_broker = _truthy(wiz.request.query("sync_broker", "true" if page == 1 else "false"))
+    include_old = _truthy(wiz.request.query("include_old", "false"))
+    if page == 1:
+        _sync_external_cycles_for_history(trading, force=sync_broker, symbol_filter=symbol)
 
     log_db = trading.db("trade_log")
-
-    try:
-        rows = log_db.rows(orderby="created", order="DESC", dump=5000) or []
-    except Exception:
-        rows = []
-    rows = list(rows) + _state_daytrade_log_rows(trading)
-
-    filtered = []
     symbol_filter = str(symbol or "").upper()
     action_filter = _normalize_trade_action(action)
     search_text = str(search or "").strip().lower()
-    for row in rows:
-        if symbol_filter and str(row.get("symbol", "") or "").upper() != symbol_filter:
-            continue
-        if action_filter and _normalize_trade_action(row.get("action", "")) != action_filter:
-            continue
-        if search_text:
-            haystack = " ".join([
-                str(row.get("symbol", "")),
-                str(row.get("event_type", "")),
-                str(row.get("action", "")),
-                str(row.get("message", "")),
-            ]).lower()
-            if search_text not in haystack:
-                continue
-        row["_sort"] = _daytrade_sort_key(row.get("created", ""))
-        filtered.append(row)
+    fast_path = not symbol_filter and not action_filter and not search_text and sync_broker is False
+    archive_limited = False
 
-    filtered.sort(key=lambda x: x.get("_sort", ""), reverse=True)
-    total = len(filtered)
-    total_pages = max(1, math.ceil(total / dump))
-    start = (page - 1) * dump
-    page_rows = filtered[start:start + dump]
+    if fast_path:
+        try:
+            rows = log_db.rows(page=page, dump=dump, orderby="created", order="DESC") or []
+            total = int(log_db.count() or 0)
+        except Exception:
+            rows = []
+            total = 0
+        synthetic_rows = _state_daytrade_log_rows(trading, include_broker=False, max_log_rows=300) if page == 1 else []
+        filtered = list(rows) + synthetic_rows
+        for row in filtered:
+            row["_sort"] = _daytrade_sort_key(row.get("created", ""))
+        filtered.sort(key=lambda x: x.get("_sort", ""), reverse=True)
+        page_rows = filtered[:dump]
+        total = total + len(synthetic_rows)
+        total_pages = max(1, math.ceil(total / dump))
+    else:
+        max_rows = 5000 if (include_old or search_text or page > 3) else 1200
+        try:
+            rows = log_db.rows(orderby="created", order="DESC", dump=max_rows) or []
+        except Exception:
+            rows = []
+        rows = list(rows) + _state_daytrade_log_rows(trading, include_broker=sync_broker, max_log_rows=600 if not include_old else 5000)
+
+        filtered = []
+        for row in rows:
+            if symbol_filter and str(row.get("symbol", "") or "").upper() != symbol_filter:
+                continue
+            if action_filter and _normalize_trade_action(row.get("action", "")) != action_filter:
+                continue
+            if search_text:
+                haystack = " ".join([
+                    str(row.get("symbol", "")),
+                    str(row.get("event_type", "")),
+                    str(row.get("action", "")),
+                    str(row.get("message", "")),
+                ]).lower()
+                if search_text not in haystack:
+                    continue
+            row["_sort"] = _daytrade_sort_key(row.get("created", ""))
+            filtered.append(row)
+
+        filtered.sort(key=lambda x: x.get("_sort", ""), reverse=True)
+        total = len(filtered)
+        archive_limited = not include_old and len(rows) >= max_rows
+        total_pages = max(1, math.ceil(total / dump))
+        start = (page - 1) * dump
+        page_rows = filtered[start:start + dump]
 
     for r in page_rows:
         if r.get("created"):
@@ -1102,7 +1291,24 @@ def trade_logs():
         r["message"] = _sanitize_user_log_message(r.get("message", ""))
         r.pop("_sort", None)
 
-    wiz.response.status(200, rows=page_rows, total=total, total_pages=total_pages, page=page)
+    start = (page - 1) * dump
+    loaded_count = min(total, start + len(page_rows))
+    has_more = page < total_pages or archive_limited
+    wiz.response.status(
+        200,
+        rows=page_rows,
+        total=total,
+        total_pages=total_pages,
+        page=page,
+        has_more=has_more,
+        next_page=page + 1 if has_more else page,
+        loaded_count=loaded_count,
+        older_summary={
+            "loaded_count": loaded_count,
+            "remaining_count": max(0, total - loaded_count),
+            "archive_limited": archive_limited,
+        },
+    )
 
 def snapshots():
     """일별 자산 스냅샷 (페이징)"""

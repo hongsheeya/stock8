@@ -61,13 +61,17 @@ def _cycle(**overrides):
 
 
 class InfiniteBuyFireGateV4Tests(unittest.TestCase):
-    def test_initial_buy_uses_firegate_v4_previous_close_plus_12_percent(self):
+    def test_initial_buy_uses_firegate_v4_twelve_percent_start(self):
         decision = _engine().calculate_buy_decision(_cycle(), prev_close=100)
 
         self.assertTrue(decision["should_buy"])
         self.assertEqual(decision["algorithm"], "firegate_v4")
         self.assertEqual(decision["loc_price"], 112.0)
+        self.assertEqual(decision["order_type"], "LIMIT")
         self.assertEqual(decision["order_qty"], 2)
+        self.assertEqual(decision["star_percent"], 12.0)
+        self.assertEqual(decision["buy_orders"][0]["label"], "지정가")
+        self.assertEqual(decision["buy_orders"][0]["order_type"], "LIMIT")
         self.assertEqual(decision["buy_orders"][0]["loc_price"], 112.0)
         self.assertEqual(decision["buy_orders"][0]["order_qty"], 2)
 
@@ -79,6 +83,7 @@ class InfiniteBuyFireGateV4Tests(unittest.TestCase):
 
         self.assertTrue(decision["should_buy"])
         self.assertEqual(decision["loc_price"], 112.0)
+        self.assertEqual(decision["order_type"], "LIMIT")
         self.assertEqual(decision["order_qty"], 1)
 
     def test_first_half_uses_firegate_v4_star_point_loc_price(self):
@@ -95,9 +100,12 @@ class InfiniteBuyFireGateV4Tests(unittest.TestCase):
         )
 
         self.assertTrue(decision["should_buy"])
-        self.assertEqual(decision["loc_price"], 11.19)
+        self.assertEqual(decision["loc_price"], 10.0)
+        self.assertEqual(decision["star_percent"], 12.0)
         self.assertEqual(decision["star_price"], 11.2)
-        self.assertEqual(decision["order_qty"], 4)
+        self.assertEqual(decision["order_qty"], 6)
+        self.assertEqual(decision["buy_orders"][1]["loc_price"], 11.19)
+        self.assertEqual(decision["buy_orders"][1]["order_qty"], 4)
 
     def test_firegate_v4_initial_plan_matches_firegate_extra_buy_ladder(self):
         decision = _engine().calculate_buy_decision(
@@ -116,6 +124,8 @@ class InfiniteBuyFireGateV4Tests(unittest.TestCase):
             (93.75, 1),
             (83.33, 1),
         ])
+        self.assertEqual(orders[0]["order_type"], "LIMIT")
+        self.assertTrue(all(order["order_type"] == "LOC" for order in orders[1:]))
 
     def test_firegate_v4_first_half_plan_matches_tqqq_screenshot_ladder(self):
         decision = _engine().calculate_buy_decision(

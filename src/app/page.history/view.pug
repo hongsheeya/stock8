@@ -43,32 +43,31 @@ div(class="flex flex-col gap-4")
                 path(class="opacity-75", fill="currentColor", d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z")
             span {{t('hist.loading')}}
 
-    //- ═══════════════ DAYTRADE TAB ═══════════════
+    //- ═══════════════ TRADE HISTORY TAB ═══════════════
     div(*ngIf="tab === 'daytrade' && !loading")
 
         div(class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4")
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") {{t('hist.open_positions')}}
-                div(class="text-xl font-semibold text-white") {{daytradeSummary.open_position_count || 0}}
-                div(class="text-xs text-slate-500 mt-1") {{formatKRW(daytradeSummary.open_cost_amount || 0)}}
+                div(class="text-xs text-slate-400 mb-1") 전체 거래
+                div(class="text-xl font-semibold text-white") {{daytradeSummary.trade_count || daytradeTotal || 0}}
+                div(class="text-xs text-slate-500 mt-1") 단타 + 무한매수 체결
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 청산 매수원금
-                div(class="text-xl font-semibold text-blue-300") {{formatKRW(daytradeSummary.closed_buy_amount || 0)}}
-                div(class="text-xs text-slate-500 mt-1") 전체 매수누계 {{formatKRW(daytradeSummary.total_buy_amount || 0)}}
+                div(class="text-xs text-slate-400 mb-1") 무한매수
+                div(class="text-xl font-semibold text-blue-300") {{daytradeSummary.cycle_trade_count || 0}}
+                div(class="text-xs text-slate-500 mt-1") cycle_trade 반영
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") {{t('hist.sell_amount')}}
-                div(class="text-xl font-semibold text-rose-300") {{formatKRW(daytradeSummary.total_sell_amount || 0)}}
-                div(class="text-xs text-slate-500 mt-1") 청산 반영 {{daytradeSummary.closed_sell_count || daytradeSummary.sell_count || 0}}건
+                div(class="text-xs text-slate-400 mb-1") 단타
+                div(class="text-xl font-semibold text-rose-300") {{daytradeSummary.daytrade_trade_count || 0}}
+                div(class="text-xs text-slate-500 mt-1") 단타 체결/동기화 기록
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") {{t('hist.realized')}}
-                div(class="text-xl font-semibold", [class]="profitClass(daytradeSummary.realized)")
-                    | {{formatKRW(daytradeSummary.realized || 0)}}
-                div(class="text-xs text-slate-500 mt-1") 매도 - 청산원금 - 비용 기준
+                div(class="text-xs text-slate-400 mb-1") 매수 / 매도
+                div(class="text-xl font-semibold text-white") {{daytradeSummary.buy_count || 0}} / {{daytradeSummary.total_sell_count || 0}}
+                div(class="text-xs text-slate-500 mt-1") 현재 필터 기준
 
         div(class="rounded-lg border border-blue-400/15 bg-blue-500/5 px-3 py-2 mb-4 text-[11px] text-blue-100/80")
-            | 매수누계는 아직 보유 중인 물량 원금까지 포함합니다. 손익 비교는 청산 매수원금 {{formatKRW(daytradeSummary.closed_buy_amount || 0)}}과 매도금액 {{formatKRW(daytradeSummary.total_sell_amount || 0)}} 기준으로 봅니다.
+            | 사이트 체결 기록, 단타 런타임 기록, 무한매수 cycle_trade 기록을 함께 표시합니다. 무한매수 SOXL/TQQQ 체결도 여기에서 확인할 수 있습니다.
             span(*ngIf="(daytradeSummary.unmatched_sell_count || 0) > 0", class="text-amber-300")
-                |  매수원금을 확인할 수 없는 매도 {{daytradeSummary.unmatched_sell_count}}건({{formatKRW(daytradeSummary.unmatched_sell_amount || 0)}})은 손익 카드에서 제외했습니다.
+                |  매수원금을 확인할 수 없는 매도 {{daytradeSummary.unmatched_sell_count}}건은 실현손익 계산에서 제외했습니다.
 
         div(*ngIf="daytradeSummary.positions?.length",
             class="glass-card p-4 mb-4")
@@ -134,6 +133,7 @@ div(class="flex flex-col gap-4")
                     tr(class="border-b border-white/10 bg-white/5")
                         th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.time')}}
                         th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.market')}}
+                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") 전략
                         th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.symbol')}}
                         th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.action')}}
                         th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.price')}}
@@ -147,6 +147,7 @@ div(class="flex flex-col gap-4")
                         td(class="py-2.5 px-4 text-xs text-slate-400 whitespace-nowrap") {{d.timestamp}}
                         td(class="py-2.5 px-4")
                             span([class]="marketBadge(d.market)") {{d.market_label}}
+                        td(class="py-2.5 px-4 text-xs text-slate-300") {{d.strategy || '단타'}}
                         td(class="py-2.5 px-4")
                             div(class="text-sm font-medium text-white") {{d.name || d.symbol}}
                             div(class="text-xs text-slate-500") {{d.symbol}}
@@ -159,20 +160,17 @@ div(class="flex flex-col gap-4")
                             | {{d.action === 'SELL' && hasRealizedValue(d.realized) ? formatMarketMoney(d.realized, d.market) : '-'}}
                         td(class="py-2.5 px-4 text-slate-400 text-xs max-w-sm truncate") {{d.message || '-'}}
 
-        //- Pagination
-        div(*ngIf="daytradeTotalPages > 1",
-            class="flex items-center justify-center gap-1 mt-4")
-            button((click)="goDaytradePage(daytradePage - 1)",
-                [disabled]="daytradePage <= 1",
-                class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.prev')}}
-            button(*ngFor="let p of pageArray(daytradeTotalPages)",
-                (click)="goDaytradePage(p)",
-                class="px-3 py-1.5 rounded text-xs transition-colors",
-                [class]="p === daytradePage ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                | {{p}}
-            button((click)="goDaytradePage(daytradePage + 1)",
-                [disabled]="daytradePage >= daytradeTotalPages",
-                class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.next')}}
+        div(*ngIf="daytradeHasMore || daytradeTrades.length > 0",
+            class="flex flex-col items-center gap-2 mt-4")
+            div(class="text-xs text-slate-500")
+                | {{daytradeTrades.length}}건 표시
+                span(*ngIf="daytradeOlderSummary.remaining_count > 0")  · 남은 기록 {{daytradeOlderSummary.remaining_count}}건
+                span(*ngIf="daytradeOlderSummary.archive_limited")  · 오래된 기록은 더보기로 추가 조회
+            button(*ngIf="daytradeHasMore",
+                (click)="loadMoreDaytradeTrades()",
+                [disabled]="daytradeLoadingMore",
+                class="px-4 py-2 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40 transition-colors")
+                | {{daytradeLoadingMore ? '불러오는 중...' : '더보기'}}
 
     //- ═══════════════ CYCLES TAB ═══════════════
     div(*ngIf="tab === 'cycles' && !loading")
@@ -421,17 +419,14 @@ div(class="flex flex-col gap-4")
                             [class]="expandedLogIdx.has(i) ? 'whitespace-pre-wrap break-all' : 'truncate'")
                             | {{l.message}}
 
-        //- Pagination
-        div(*ngIf="logTotalPages > 1",
-            class="flex items-center justify-center gap-1 mt-4")
-            button((click)="goLogPage(logPage - 1)",
-                [disabled]="logPage <= 1",
-                class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.prev')}}
-            button(*ngFor="let p of pageArray(logTotalPages)",
-                (click)="goLogPage(p)",
-                class="px-3 py-1.5 rounded text-xs transition-colors",
-                [class]="p === logPage ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                | {{p}}
-            button((click)="goLogPage(logPage + 1)",
-                [disabled]="logPage >= logTotalPages",
-                class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.next')}}
+        div(*ngIf="logHasMore || logs.length > 0",
+            class="flex flex-col items-center gap-2 mt-4")
+            div(class="text-xs text-slate-500")
+                | {{logs.length}}건 표시
+                span(*ngIf="logOlderSummary.remaining_count > 0")  · 남은 로그 {{logOlderSummary.remaining_count}}건
+                span(*ngIf="logOlderSummary.archive_limited")  · 오래된 로그는 더보기로 추가 조회
+            button(*ngIf="logHasMore",
+                (click)="loadMoreLogs()",
+                [disabled]="logLoadingMore",
+                class="px-4 py-2 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40 transition-colors")
+                | {{logLoadingMore ? '불러오는 중...' : '더보기'}}

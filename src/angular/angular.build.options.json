@@ -2,6 +2,11 @@
     "assets": [
         {
             "glob": "**/*",
+            "input": "src/assets",
+            "output": "/assets"
+        },
+        {
+            "glob": "**/*",
             "input": "node_modules/monaco-editor/min/vs",
             "output": "/lib/vs"
         },

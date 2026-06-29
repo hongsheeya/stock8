@@ -2,6 +2,8 @@
 import builtins
 import datetime
 import importlib.util
+import json
+import os
 import pathlib
 import sys
 import unittest
@@ -25,6 +27,16 @@ class _TimeStub:
         return "2026-05-26T10:00:00+09:00" if with_offset else "2026-05-26T10:00:00"
 
 
+class _SessionStub:
+    current_user_id = ""
+
+    @classmethod
+    def use(cls):
+        if cls.current_user_id:
+            return {"id": cls.current_user_id}
+        return {}
+
+
 class _LoggerStub:
     def info(self, _message):
         pass
@@ -39,6 +51,8 @@ class _LoggerStub:
 class _WizStub:
     @staticmethod
     def model(name):
+        if name == "portal/season/session":
+            return _SessionStub
         if name == "portal/trading/kst":
             return _TimeStub
         if name == "struct":
@@ -68,6 +82,69 @@ history_api_spec.loader.exec_module(history_api)
 
 
 class DashboardAccountingRegressionTests(unittest.TestCase):
+    def setUp(self):
+        _SessionStub.current_user_id = ""
+
+    def test_broker_setup_blocks_missing_session(self):
+        class _Trading:
+            @staticmethod
+            def get_config(key, default=""):
+                if key == "broker_provider":
+                    return "kis"
+                return "configured"
+
+        state = dashboard_api._broker_setup_state(_Trading(), require_connection=False)
+
+        self.assertFalse(state["allowed"])
+        self.assertFalse(state["configured"])
+        self.assertEqual(state["user_id"], "")
+
+    def test_broker_setup_blocks_missing_user_credentials(self):
+        _SessionStub.current_user_id = "new-user"
+
+        class _Trading:
+            @staticmethod
+            def get_config(key, default=""):
+                if key == "broker_provider":
+                    return "kis"
+                return ""
+
+        state = dashboard_api._broker_setup_state(_Trading(), require_connection=False)
+
+        self.assertFalse(state["allowed"])
+        self.assertFalse(state["configured"])
+        self.assertIn("한국투자증권 App Key", state["message"])
+
+    def test_broker_setup_rejects_sticky_connection_success(self):
+        _SessionStub.current_user_id = "user-with-old-success"
+        original = dashboard_api._kis_connection_status
+        dashboard_api._kis_connection_status = lambda _trading, ttl_sec=None: {
+            "success": True,
+            "raw_success": False,
+            "sticky": True,
+            "message": "최근 성공 캐시",
+        }
+
+        class _Trading:
+            @staticmethod
+            def get_config(key, default=""):
+                values = {
+                    "broker_provider": "kis",
+                    "kis_app_key": "app-key",
+                    "kis_app_secret": "app-secret",
+                    "kis_account_no": "12345678-01",
+                }
+                return values.get(key, default)
+
+        try:
+            state = dashboard_api._broker_setup_state(_Trading(), require_connection=True)
+        finally:
+            dashboard_api._kis_connection_status = original
+
+        self.assertFalse(state["allowed"])
+        self.assertTrue(state["configured"])
+        self.assertFalse(state["connected"])
+
     def test_extract_firegate_authoritative_symbols_ignores_manual_portfolios(self):
         symbols = dashboard_api._extract_firegate_authoritative_symbols([
             {"ticker": "TQQQ", "source": "infinitystock"},
@@ -119,6 +196,166 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
 
         self.assertEqual(count, 2)
         self.assertEqual(total, 320_500)
+
+    def test_holding_eval_sum_dedupes_same_us_symbol_across_exchanges(self):
+        total, count = dashboard_api._holding_eval_sum([
+            {"symbol": "SOXL", "qty": 3, "eval_amount": 678.57, "exchange": "NASD"},
+            {"symbol": "SOXL", "qty": 3, "eval_amount": 678.57, "exchange": "AMEX"},
+            {"symbol": "TQQQ", "qty": 1, "eval_amount": 50.25, "exchange": "NASD"},
+        ])
+
+        self.assertEqual(count, 2)
+        self.assertEqual(total, 728.82)
+
+    def test_live_us_price_refresh_updates_cycle_unrealized_fields(self):
+        original = dashboard_api._display_us_price
+        dashboard_api._display_us_price = lambda _trading, symbol, exchange="NAS", refresh=False: {
+            "price": 228.0002,
+            "source": "yahoo_chart:1m_prepost",
+            "timestamp": "2026-06-16T23:59:00+00:00",
+            "timestamp_kst": "2026-06-17 08:59:00 KST",
+        }
+
+        class _Engine:
+            def __init__(self):
+                self.calls = []
+
+            def update_cycle_price(self, cycle_id, price):
+                self.calls.append((cycle_id, price))
+
+        class _Trading:
+            engine = _Engine()
+
+        try:
+            rows = dashboard_api._refresh_cycle_prices_for_display(_Trading(), [{
+                "id": "cycle-soxl",
+                "symbol": "SOXL",
+                "total_qty": 3,
+                "total_spent": 678.57,
+                "current_price": 226.19,
+            }])
+        finally:
+            dashboard_api._display_us_price = original
+
+        self.assertEqual(_Trading.engine.calls, [("cycle-soxl", 228.0002)])
+        self.assertEqual(rows[0]["current_price"], 228.0002)
+        self.assertEqual(rows[0]["current_eval"], 684.0)
+        self.assertEqual(rows[0]["price_source"], "yahoo_chart:1m_prepost")
+        self.assertEqual(rows[0]["price_timestamp_kst"], "2026-06-17 08:59:00 KST")
+        self.assertAlmostEqual(rows[0]["profit_rate"], 0.8)
+
+    def test_alpaca_overnight_price_uses_quote_midpoint_and_metadata(self):
+        original_urlopen = dashboard_api.urllib.request.urlopen
+        original_time = dashboard_api.time.time
+        dashboard_api._US_LIVE_PRICE_CACHE.clear()
+        requested_urls = []
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "quotes": {
+                        "SOXL": {
+                            "bp": 239.8,
+                            "ap": 240.2,
+                            "t": "2026-06-17T06:45:02.123456789Z",
+                        }
+                    }
+                }).encode("utf-8")
+
+        env_backup = {key: os.environ.get(key) for key in [
+            "ALPACA_API_KEY",
+            "ALPACA_API_SECRET",
+            "ALPACA_DATA_FEED",
+            "ALPACA_OVERNIGHT_MAX_AGE_SEC",
+        ]}
+
+        def _fake_urlopen(req, timeout=0):
+            requested_urls.append(req.full_url)
+            return _Response()
+
+        try:
+            os.environ["ALPACA_API_KEY"] = "test-key"
+            os.environ["ALPACA_API_SECRET"] = "test-secret"
+            os.environ["ALPACA_DATA_FEED"] = "overnight"
+            os.environ["ALPACA_OVERNIGHT_MAX_AGE_SEC"] = "7200"
+            dashboard_api.urllib.request.urlopen = _fake_urlopen
+            dashboard_api.time.time = lambda: datetime.datetime(2026, 6, 17, 6, 50, 2, tzinfo=datetime.timezone.utc).timestamp()
+            result = dashboard_api._alpaca_overnight_price(object(), "SOXL", refresh=True)
+        finally:
+            for key, value in env_backup.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            dashboard_api.urllib.request.urlopen = original_urlopen
+            dashboard_api.time.time = original_time
+            dashboard_api._US_LIVE_PRICE_CACHE.clear()
+
+        self.assertEqual(result["price"], 240.0)
+        self.assertEqual(result["source"], "alpaca:overnight_quote")
+        self.assertEqual(result["timestamp_kst"], "2026-06-17 15:45:02 KST")
+        self.assertEqual(result["age_sec"], 300.0)
+        self.assertEqual(result["bid_price"], 239.8)
+        self.assertEqual(result["ask_price"], 240.2)
+        self.assertIn("symbols=SOXL", requested_urls[0])
+        self.assertIn("feed=overnight", requested_urls[0])
+
+    def test_display_us_price_prefers_fresh_alpaca_overnight_quote(self):
+        original_alpaca = dashboard_api._alpaca_overnight_price
+        original_yahoo = dashboard_api._yahoo_chart_extended_price
+        dashboard_api._alpaca_overnight_price = lambda _trading, symbol, refresh=False: {
+            "price": 240.0,
+            "source": "alpaca:overnight_quote",
+            "timestamp_kst": "2026-06-17 15:45:02 KST",
+        }
+        dashboard_api._yahoo_chart_extended_price = lambda symbol, refresh=False: {
+            "price": 228.0,
+            "source": "yahoo_chart:1m_prepost",
+        }
+
+        class _Kis:
+            def get_current_price(self, symbol, exchange="NAS"):
+                return {"price": 226.19, "exchange": exchange}
+
+        class _Trading:
+            kis_api = _Kis()
+
+        try:
+            result = dashboard_api._display_us_price(_Trading(), "SOXL", exchange="AMS", refresh=True)
+        finally:
+            dashboard_api._alpaca_overnight_price = original_alpaca
+            dashboard_api._yahoo_chart_extended_price = original_yahoo
+
+        self.assertEqual(result["price"], 240.0)
+        self.assertEqual(result["source"], "alpaca:overnight_quote")
+
+    def test_live_us_price_refresh_dedupes_holdings_before_portfolio_sum(self):
+        original = dashboard_api._display_us_price
+        dashboard_api._display_us_price = lambda _trading, symbol, exchange="NAS", refresh=False: {
+            "price": 228.0002,
+            "source": "yahoo_chart:1m_prepost",
+            "timestamp": "2026-06-16T23:59:00+00:00",
+            "timestamp_kst": "2026-06-17 08:59:00 KST",
+        }
+
+        try:
+            holdings = dashboard_api._apply_live_us_prices_to_holdings(None, [
+                {"symbol": "SOXL", "qty": 3, "avg_price": 226.19, "current_price": 226.19, "eval_amount": 678.57, "exchange": "NASD"},
+                {"symbol": "SOXL", "qty": 3, "avg_price": 226.19, "current_price": 226.19, "eval_amount": 678.57, "exchange": "AMEX"},
+            ])
+        finally:
+            dashboard_api._display_us_price = original
+
+        total, count = dashboard_api._holding_eval_sum(holdings)
+        self.assertEqual(len(holdings), 1)
+        self.assertEqual(count, 1)
+        self.assertEqual(total, 684.0)
 
     def test_total_asset_prefers_summary_field_over_direct_sum(self):
         total, source = dashboard_api._select_total_asset_krw(
@@ -205,11 +442,99 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
             "amount": 27570,
         }))
 
+    def test_cycle_trade_row_is_visible_as_infinite_buy_history(self):
+        record = history_api._cycle_trade_record_from_row({
+            "id": "trade-soxl-buy",
+            "cycle_id": "cycle-soxl",
+            "symbol": "SOXL",
+            "trade_date": "2026-06-23",
+            "action": "BUY",
+            "order_type": "LOC",
+            "order_price": 226.76,
+            "order_qty": 2,
+            "filled_price": 226.76,
+            "filled_qty": 2,
+            "filled_amount": 453.52,
+            "commission": 0.15,
+            "avg_buy_price": 226.76,
+            "total_qty_after": 3,
+            "broker_order_no": "0031033779",
+            "memo": "FireGate 반영",
+        })
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record["strategy"], "무한매수")
+        self.assertEqual(record["source"], "cycle_trade")
+        self.assertEqual(record["market"], "US")
+        self.assertEqual(record["symbol"], "SOXL")
+        self.assertEqual(record["action"], "BUY")
+        self.assertEqual(record["action_detail"], "INFINITE_BUY")
+        self.assertEqual(record["qty"], 2)
+        self.assertEqual(record["amount"], 453.52)
+
+    def test_cycle_trade_history_hides_synthetic_reconciliation_rows(self):
+        record = history_api._cycle_trade_record_from_row({
+            "id": "recon-tqqq",
+            "cycle_id": "cycle-tqqq",
+            "symbol": "TQQQ",
+            "trade_date": "2026-06-25",
+            "action": "BUY",
+            "order_type": "RECON",
+            "filled_price": 78.0,
+            "filled_qty": 19,
+            "filled_amount": 1482.0,
+            "broker_order_no": "RECONCILE-TQQQ-20260625-41",
+        })
+
+        self.assertIsNone(record)
+
+    def test_trade_history_collects_cycle_trades_without_daytrade_logs(self):
+        history_api._HISTORY_CACHE.clear()
+
+        class _CycleTradeDb:
+            @staticmethod
+            def rows(**_kwargs):
+                return [{
+                    "id": "trade-tqqq-buy",
+                    "cycle_id": "cycle-tqqq",
+                    "symbol": "TQQQ",
+                    "trade_date": "2026-06-23",
+                    "action": "BUY",
+                    "order_type": "LOC",
+                    "filled_price": 86.84,
+                    "filled_qty": 6,
+                    "filled_amount": 521.04,
+                    "total_qty_after": 14,
+                    "broker_order_no": "0031033780",
+                }]
+
+        class _Trading:
+            @staticmethod
+            def db(name):
+                if name == "cycle_trade":
+                    return _CycleTradeDb()
+                raise RuntimeError(name)
+
+        try:
+            records = history_api._collect_trade_history_records(_Trading(), max_log_rows=100)
+        finally:
+            history_api._HISTORY_CACHE.clear()
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["symbol"], "TQQQ")
+        self.assertEqual(records[0]["strategy"], "무한매수")
+        self.assertEqual(records[0]["source"], "cycle_trade")
+        self.assertEqual(records[0]["action_detail"], "INFINITE_BUY")
+
     def test_attach_loc_buy_status_marks_existing_reservation(self):
         class _Db:
             @staticmethod
             def rows(**_kwargs):
                 return [{"symbol": "TQQQ", "exchange": "NASD"}]
+
+            @staticmethod
+            def get(**_kwargs):
+                return {"symbol": "TQQQ", "exchange": "NASD"}
 
         class _Kis:
             @staticmethod
@@ -224,8 +549,42 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
                     "status_name": "접수",
                 }]
 
+            @staticmethod
+            def get_current_price(symbol, exchange="NAS"):
+                return {"price": 54.25, "prev_close": 50.0}
+
+        class _Engine:
+            @staticmethod
+            def _reservation_order_symbol_key(symbol="", exchange=""):
+                return f"{str(symbol or '').upper()}:{str(exchange or 'NASD').upper()}"
+
+            @staticmethod
+            def _reservation_order_line_key(symbol="", exchange="", price=0):
+                return f"{str(symbol or '').upper()}:{str(exchange or 'NASD').upper()}:{float(price or 0):.4f}"
+
+            @staticmethod
+            def _reservation_order_is_active(order):
+                return True
+
+            @staticmethod
+            def _reservation_order_remaining_qty(order):
+                return int(float((order or {}).get("qty", 0) or 0)) - int(float((order or {}).get("filled_qty", 0) or 0))
+
+            @staticmethod
+            def _price_exchange(exchange):
+                return "NAS"
+
+            @staticmethod
+            def calculate_buy_decision(cycle, prev_close):
+                return {
+                    "should_buy": True,
+                    "order_type": "LOC",
+                    "buy_orders": [{"label": "LOC", "loc_price": 54.25, "order_qty": 3}],
+                }
+
         class _Trading:
             kis_api = _Kis()
+            engine = _Engine()
 
             @staticmethod
             def get_config(key, default=""):
@@ -244,6 +603,86 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(rows[0]["loc_buy_status"], "scheduled")
         self.assertEqual(rows[0]["loc_buy_order_no"], "0031033779")
         self.assertEqual(rows[0]["loc_buy_qty"], 3)
+
+    def test_attach_loc_buy_status_resolves_soxl_stale_watchlist_exchange(self):
+        class _Db:
+            @staticmethod
+            def get(**_kwargs):
+                return {"symbol": "SOXL", "exchange": "NASD"}
+
+        class _Kis:
+            @staticmethod
+            def get_overseas_reservation_orders(start_date=None):
+                return [{
+                    "symbol": "SOXL",
+                    "exchange": "AMEX",
+                    "side": "BUY",
+                    "qty": 1,
+                    "price": 193.22,
+                    "order_no": "0031595580",
+                    "status_name": "접수",
+                }]
+
+            @staticmethod
+            def get_current_price(symbol, exchange="NAS"):
+                return {"price": 229.4, "prev_close": 229.4, "exchange": exchange}
+
+        class _Engine:
+            @staticmethod
+            def _resolve_order_exchange(symbol, exchange=""):
+                if str(symbol or "").upper() == "SOXL" and str(exchange or "").upper() in ("", "NASD"):
+                    return "AMEX"
+                return str(exchange or "NASD").upper()
+
+            @staticmethod
+            def _reservation_order_symbol_key(symbol="", exchange=""):
+                return f"{str(symbol or '').upper()}:{str(exchange or 'NASD').upper()}"
+
+            @staticmethod
+            def _reservation_order_line_key(symbol="", exchange="", price=0):
+                return f"{str(symbol or '').upper()}:{str(exchange or 'NASD').upper()}:{float(price or 0):.4f}"
+
+            @staticmethod
+            def _reservation_order_is_active(order):
+                return True
+
+            @staticmethod
+            def _reservation_order_remaining_qty(order):
+                return int(float((order or {}).get("qty", 0) or 0)) - int(float((order or {}).get("filled_qty", 0) or 0))
+
+            @staticmethod
+            def _price_exchange(exchange):
+                return {"AMEX": "AMS", "NASD": "NAS"}.get(exchange, "NAS")
+
+            @staticmethod
+            def calculate_buy_decision(cycle, prev_close):
+                return {
+                    "should_buy": True,
+                    "order_type": "LOC",
+                    "buy_orders": [{"label": "LOC", "loc_price": 193.22, "order_qty": 1}],
+                }
+
+        class _Trading:
+            kis_api = _Kis()
+            engine = _Engine()
+
+            @staticmethod
+            def get_config(key, default=""):
+                return "true"
+
+            @staticmethod
+            def db(name):
+                return _Db()
+
+        rows = dashboard_api._attach_loc_buy_status(_Trading(), [{
+            "symbol": "SOXL",
+            "status": "ACTIVE",
+            "current_round": 1,
+            "division_count": 10,
+        }])
+
+        self.assertEqual(rows[0]["loc_buy_status"], "scheduled")
+        self.assertEqual(rows[0]["loc_buy_order_no"], "0031595580")
 
     def test_completed_cycle_without_liquidation_is_excluded_from_realized(self):
         self.assertFalse(dashboard_api._include_completed_cycle_in_realized({

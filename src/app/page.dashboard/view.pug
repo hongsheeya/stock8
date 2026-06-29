@@ -418,7 +418,16 @@ div(class="flex items-center justify-between mb-4")
             span {{manualRefreshing ? '갱신 중' : '새로고침'}}
 
         //- Last Updated
-        span(class="text-[11px] text-slate-600") {{t('dash.last')}}: {{lastRefresh | date:'HH:mm:ss'}}
+        span(class="text-[11px] text-slate-600") {{t('dash.last')}}: {{lastRefreshKst ? lastRefreshKst.slice(11, 19) : (lastRefresh | date:'HH:mm:ss')}}
+
+div(*ngIf="privacyLocked || setupRequired",
+    class="mb-4 flex items-start gap-3 rounded-lg border border-sky-300/30 bg-sky-500/10 px-4 py-3 text-sky-100")
+    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
+        class="mt-0.5 size-5 shrink-0 text-sky-300")
+        path(stroke-linecap="round", stroke-linejoin="round", d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 0h10.5A1.5 1.5 0 0 1 18.75 12v6.75a1.5 1.5 0 0 1-1.5 1.5H6.75a1.5 1.5 0 0 1-1.5-1.5V12a1.5 1.5 0 0 1 1.5-1.5Z")
+    div
+        div(class="text-[13px] font-semibold") 개인정보 보호 잠금
+        div(class="mt-1 text-[12px] leading-5 text-sky-100/75") {{setupMessage || '증권사 API 연결 전에는 자산, 수익, 보유 종목을 표시하지 않습니다.'}}
 
 //- Profit Overview Section
 div(*ngIf="!legacyMode", class="glass-card p-5 mb-6 dash-profit-overview")
@@ -426,7 +435,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6 dash-profit-overview")
         h2(class="text-sm font-semibold text-white") {{t('profit.title')}}
         div(class="flex items-center gap-2")
             span(*ngIf="profitSyncMessage && !profitLoading", class="text-[11px] text-red-300") {{profitSyncMessage}}
-            span(*ngIf="profitLastRefresh && !profitLoading", class="text-[11px] text-slate-600") {{profitLastRefresh | date:'HH:mm:ss'}}
+            span(*ngIf="profitLastRefresh && !profitLoading", class="text-[11px] text-slate-600") {{profitLastRefreshKst ? profitLastRefreshKst.slice(11, 19) : (profitLastRefresh | date:'HH:mm:ss')}}
             span(*ngIf="profitLoading", class="text-[11px] text-slate-500") {{t('profit.loading')}}
     div(class="dash-profit-grid")
         div(class="dash-profit-cell dash-profit-split-card dash-profit-hero")
@@ -605,8 +614,6 @@ div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 g
                 | {{apiConnected ? t('dash.connected') : isMock ? t('dash.demo_mode') : t('dash.disconnected')}}
         div(class="text-xs text-slate-500 mt-1")
             | {{t('engine.active')}}: {{engineStatus.active_cycles}} | {{t('engine.holding')}}: {{engineStatus.holding_cycles}} | {{t('engine.pending')}}: {{engineStatus.pending_extension_cycles || 0}} | {{t('engine.paused')}}: {{engineStatus.paused_cycles || 0}}
-        div(class="text-xs mt-1", [class]="usDaytradeStatusClass()")
-            | 미장 단타 검증: {{usDaytradeStatusText()}} {{daytradeRuntime?.last_run_at ? '(' + daytradeRuntime.last_run_at + ')' : ''}}
 
 //- Infinite Buy Cycles
 div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
@@ -619,7 +626,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                 [disabled]="loading",
                 class="inline-flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[12px] font-semibold transition-colors border disabled:opacity-50",
                 [class]="engineStatus.auto_trade ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/20' : 'bg-slate-500/10 border-slate-400/20 text-slate-300 hover:bg-slate-500/20'")
-                span 무한매수 자동운영
+                span 무한매수 매매
                 span(class="rounded-full px-2 py-0.5 text-[10px]",
                     [class]="engineStatus.auto_trade ? 'bg-emerald-400/20 text-emerald-200' : 'bg-slate-400/15 text-slate-300'")
                     | {{engineStatus.auto_trade ? 'ON' : 'OFF'}}
@@ -685,7 +692,9 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{c.current_round || 0}}/{{c.division_count || 0}}
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{c.total_qty || 0}}
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") ${{c.avg_price | number:'1.2-4'}}
-                    td(class="py-3 pr-3 text-right text-[13px] text-slate-300") ${{c.current_price | number:'1.2-2'}}
+                    td(class="py-3 pr-3 text-right")
+                        div(class="text-[13px] text-slate-300") ${{c.current_price | number:'1.2-2'}}
+                        div(*ngIf="cyclePriceMeta(c)", class="mt-0.5 text-[10px] text-slate-500 whitespace-nowrap") {{cyclePriceMeta(c)}}
                     td(class="py-3 pr-3 text-right text-[13px] font-semibold", [class]="profitClass(c.profit_rate || 0)")
                         | {{(c.profit_rate || 0) > 0 ? '+' : ''}}{{(c.profit_rate || 0) | number:'1.2-2'}}%
                     td(class="py-3 pr-3 text-right")
@@ -703,13 +712,20 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                                 | {{c.loc_buy_qty || 0}}주 · ${{c.loc_buy_price | number:'1.2-2'}} · R{{c.loc_buy_round || '-'}}
                             div(*ngIf="c.loc_buy_status !== 'scheduled' && c.loc_buy_message", class="text-[11px] text-slate-500 max-w-[320px] truncate")
                                 | {{c.loc_buy_message}}
+                            button(*ngIf="c.loc_buy_status !== 'scheduled' && c.status === 'ACTIVE'",
+                                (click)="retryLocBuyReservation(c, $event)",
+                                [disabled]="automationSaving['loc_retry_' + (c.id || c.symbol)]",
+                                class="mt-1 inline-flex w-fit items-center gap-1 rounded-md border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/20 disabled:opacity-50")
+                                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
+                                    path(stroke-linecap="round", stroke-linejoin="round", d="M16.023 9.348h4.992V4.356m-.58 13.23a9 9 0 1 1-2.097-9.323")
+                                span {{automationSaving['loc_retry_' + (c.id || c.symbol)] ? '확인 중' : '예약 재시도'}}
 
 //- Daytrade Positions
 div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
     div(class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4")
         div
-            h2(class="text-sm font-semibold text-white") 단타 보유중
-            p(class="text-[12px] text-slate-400 mt-1") 국장·미장 단타가 현재 들고 있는 종목만 보여줍니다.
+            h2(class="text-sm font-semibold text-white") 보유 주식
+            p(class="text-[12px] text-slate-400 mt-1") 현재 보유 중인 주식만 보여줍니다. 무한매수 SOXL/TQQQ는 사이클 영역에서 따로 관리합니다.
         div(class="grid grid-cols-3 gap-2 min-w-full md:min-w-[420px]")
             div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
                 div(class="text-[10px] text-slate-500") 종목 수
@@ -722,7 +738,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                 div(class="text-sm font-bold mt-0.5", [class]="profitClass(daytradePositionSummary.pnl_krw || 0)") {{signedKRW(daytradePositionSummary.pnl_krw || 0)}}
 
     div(*ngIf="daytradePositions.length === 0", class="rounded-lg border border-white/5 bg-white/5 px-4 py-5 text-center")
-        div(class="text-[13px] text-slate-400") 현재 단타 보유 종목이 없습니다.
+        div(class="text-[13px] text-slate-400") 현재 표시할 보유 주식이 없습니다.
         div(class="text-[11px] text-slate-600 mt-1") 신규 진입이 체결되면 이 영역에 바로 표시됩니다.
 
     div(*ngIf="daytradePositions.length > 0", class="overflow-x-auto")
@@ -763,7 +779,7 @@ div(*ngIf="!legacyMode", [class]="quickNavGridClass()")
             div(class="flex items-center justify-center w-10 h-10 shrink-0 rounded-xl bg-sky-500/10 text-sky-300")
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-5")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M12 4.5v15m7.5-7.5h-15")
-    a(*ngIf="showAdminControls", routerLink="/daytrade", class="glass-card dash-quick-card hover:border-indigo-400/30 transition-colors")
+    a(*ngIf="showDaytradeQuickLink", routerLink="/daytrade", class="glass-card dash-quick-card hover:border-indigo-400/30 transition-colors")
         div(class="flex items-center justify-between gap-4 w-full")
             div(class="min-w-0")
                 div(class="text-[10px] text-slate-500 uppercase tracking-wider") Daytrade
