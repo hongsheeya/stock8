@@ -207,6 +207,7 @@ devlog/                        # 날짜별 작업 기록
 
 ## 함께 보면 좋은 문서
 
+- [docs/latest-state-2026-06-30.md](docs/latest-state-2026-06-30.md)
 - [src/portal/trading/README.md](src/portal/trading/README.md)
 - [docs/daytrade/architecture.md](docs/daytrade/architecture.md)
 - [docs/daytrade/live-trading-mechanism.md](docs/daytrade/live-trading-mechanism.md)

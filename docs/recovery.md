@@ -16,6 +16,17 @@ git clone git@github.com:hongsheeya/stock8.git
 cd stock8
 ```
 
+## Latest Public Recovery Point
+
+As of 2026-06-30, the most detailed public recovery point is documented in:
+
+- [latest-state-2026-06-30.md](latest-state-2026-06-30.md)
+
+Use the latest `main` branch first. The 2026-06-30 recovery tags are:
+
+- `recovery-2026-06-30`: code state after the history profit summary fixes
+- `recovery-2026-06-30-detailed`: code plus the detailed latest-state document
+
 The runtime server path used in production was:
 
 ```bash
