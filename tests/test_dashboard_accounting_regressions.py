@@ -415,6 +415,121 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(totals["unrealized_profit"], 44000)
         self.assertEqual(totals["total_profit"], 162000)
 
+    def test_infinite_buy_realized_1d_window_includes_previous_us_trade_date(self):
+        now = datetime.datetime(2026, 6, 30, 10, 0, 0, tzinfo=dashboard_api.KST)
+
+        date_from, date_to = dashboard_api._infinite_buy_realized_date_window(
+            "1D",
+            filter_from="2026-06-30",
+            filter_to="2026-06-30",
+            now=now,
+        )
+
+        self.assertEqual(date_from, "2026-06-29")
+        self.assertEqual(date_to, "2026-06-30")
+
+    def test_infinite_buy_realized_window_keeps_explicit_dates(self):
+        now = datetime.datetime(2026, 6, 30, 10, 0, 0, tzinfo=dashboard_api.KST)
+
+        date_from, date_to = dashboard_api._infinite_buy_realized_date_window(
+            "1D",
+            filter_from="2026-06-30",
+            filter_to="2026-06-30",
+            now=now,
+            explicit_dates=True,
+        )
+
+        self.assertEqual(date_from, "2026-06-30")
+        self.assertEqual(date_to, "2026-06-30")
+
+    def test_cycle_partial_sell_realized_summary_includes_active_partial_sells(self):
+        class _TradeDb:
+            @staticmethod
+            def rows(**_kwargs):
+                return [
+                    {
+                        "trade_date": "2026-06-29",
+                        "action": "SELL",
+                        "status": "FILLED",
+                        "filled_price": 77.19,
+                        "filled_qty": 12,
+                        "filled_amount": 926.28,
+                        "commission": 2.32,
+                        "avg_buy_price": 75.9814,
+                        "total_qty_after": 36,
+                        "strategy_type": "PARTIAL_SELL",
+                    },
+                    {
+                        "trade_date": "2026-06-29",
+                        "action": "SELL",
+                        "status": "FILLED",
+                        "filled_price": 77.19,
+                        "filled_qty": 36,
+                        "filled_amount": 2778.84,
+                        "commission": 6.95,
+                        "avg_buy_price": 75.9814,
+                        "total_qty_after": 0,
+                        "strategy_type": "FULL_SELL",
+                    },
+                    {
+                        "trade_date": "2026-06-29",
+                        "action": "BUY",
+                        "status": "FILLED",
+                        "filled_price": 76.0,
+                        "filled_qty": 1,
+                    },
+                ]
+
+        summary = dashboard_api._cycle_partial_sell_realized_summary(
+            _TradeDb(),
+            date_from="2026-06-29",
+            date_to="2026-06-29",
+        )
+
+        self.assertEqual(summary["count"], 1)
+        self.assertAlmostEqual(summary["cost"], 911.7768, places=4)
+        self.assertAlmostEqual(summary["realized"], 12.1832, places=4)
+        self.assertAlmostEqual(summary["by_date"]["2026-06-29"], 12.1832, places=4)
+
+    def test_cycle_partial_sell_realized_summary_applies_date_filter(self):
+        class _TradeDb:
+            @staticmethod
+            def rows(**_kwargs):
+                return [
+                    {
+                        "trade_date": "2026-06-28",
+                        "action": "SELL",
+                        "status": "FILLED",
+                        "filled_price": 100,
+                        "filled_qty": 1,
+                        "filled_amount": 100,
+                        "commission": 1,
+                        "avg_buy_price": 90,
+                        "total_qty_after": 2,
+                    },
+                    {
+                        "trade_date": "2026-06-29",
+                        "action": "SELL",
+                        "status": "FILLED",
+                        "filled_price": 110,
+                        "filled_qty": 1,
+                        "filled_amount": 110,
+                        "commission": 1,
+                        "avg_buy_price": 100,
+                        "total_qty_after": 2,
+                    },
+                ]
+
+        summary = dashboard_api._cycle_partial_sell_realized_summary(
+            _TradeDb(),
+            date_from="2026-06-29",
+            date_to="2026-06-29",
+        )
+
+        self.assertEqual(summary["count"], 1)
+        self.assertEqual(summary["realized"], 9)
+        self.assertEqual(summary["by_date"], {"2026-06-29": 9.0})
+
     def test_daytrade_history_excludes_pre_sell_reservations(self):
         self.assertFalse(history_api._is_executable_daytrade_record({
             "action": "SELL",
@@ -525,6 +640,64 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(records[0]["strategy"], "무한매수")
         self.assertEqual(records[0]["source"], "cycle_trade")
         self.assertEqual(records[0]["action_detail"], "INFINITE_BUY")
+
+    def test_history_active_daytrade_positions_include_unrealized_profit(self):
+        class _Engine:
+            @staticmethod
+            def _load_state_map():
+                return {
+                    "AAA.KS": {
+                        "symbol": "AAA",
+                        "market": "KS",
+                        "name": "테스트",
+                        "position_qty": 3,
+                        "avg_price": 10000,
+                        "last_price": 11000,
+                    },
+                    "SOXL.US": {
+                        "symbol": "SOXL",
+                        "market": "US",
+                        "position_qty": 2,
+                        "avg_price": 200,
+                        "last_price": 220,
+                    },
+                }
+
+        class _Trading:
+            daytrade_engine = _Engine()
+
+        positions = history_api._active_daytrade_positions(_Trading())
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["symbol"], "AAA")
+        self.assertEqual(positions[0]["current_price"], 11000)
+        self.assertEqual(positions[0]["eval_amount"], 33000)
+        self.assertEqual(positions[0]["unrealized"], 3000)
+
+    def test_history_active_cycle_positions_include_unrealized_profit(self):
+        class _Engine:
+            @staticmethod
+            def get_active_cycles():
+                return [{
+                    "id": "cycle-tqqq",
+                    "symbol": "TQQQ",
+                    "total_qty": 10,
+                    "total_spent": 750,
+                    "current_price": 80,
+                    "current_eval": 800,
+                }]
+
+        class _Trading:
+            engine = _Engine()
+
+        positions = history_api._active_cycle_positions(_Trading())
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["strategy"], "무한매수")
+        self.assertEqual(positions[0]["market"], "US")
+        self.assertEqual(positions[0]["cost_amount"], 750)
+        self.assertEqual(positions[0]["eval_amount"], 800)
+        self.assertEqual(positions[0]["unrealized"], 50)
 
     def test_attach_loc_buy_status_marks_existing_reservation(self):
         class _Db:

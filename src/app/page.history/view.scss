@@ -17,6 +17,8 @@
     --hist-text: var(--bn-body, #eaecef);
     --hist-soft-text: #d5deeb;
     --hist-shadow: none;
+    --hist-profit-up: #f6465d;
+    --hist-profit-down: #60a5fa;
 }
 
 :host-context(.theme-light) {
@@ -35,6 +37,8 @@
     --hist-text: #0f172a;
     --hist-soft-text: #1e293b;
     --hist-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    --hist-profit-up: #dc2626;
+    --hist-profit-down: #2563eb;
 }
 
 .glass-card,
@@ -135,6 +139,14 @@
 [class*="text-slate-500"],
 [class*="text-slate-600"] {
     color: var(--hist-muted-strong) !important;
+}
+
+.hist-profit-up {
+    color: var(--hist-profit-up) !important;
+}
+
+.hist-profit-down {
+    color: var(--hist-profit-down) !important;
 }
 
 [class*="text-slate-400"] {

@@ -46,23 +46,28 @@ div(class="flex flex-col gap-4")
     //- ═══════════════ TRADE HISTORY TAB ═══════════════
     div(*ngIf="tab === 'daytrade' && !loading")
 
-        div(class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4")
+        div(class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4")
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 전체 거래
-                div(class="text-xl font-semibold text-white") {{daytradeSummary.trade_count || daytradeTotal || 0}}
-                div(class="text-xs text-slate-500 mt-1") 단타 + 무한매수 체결
+                div(class="text-xs text-slate-400 mb-1") 실현손익
+                div(class="space-y-0.5")
+                    div(*ngFor="let line of summaryProfitLines('realized')", class="text-lg font-semibold leading-tight")
+                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
+                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
+                div(class="text-xs text-slate-500 mt-1") 매도 체결 기준
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 무한매수
-                div(class="text-xl font-semibold text-blue-300") {{daytradeSummary.cycle_trade_count || 0}}
-                div(class="text-xs text-slate-500 mt-1") cycle_trade 반영
+                div(class="text-xs text-slate-400 mb-1") 보유 평가손익
+                div(class="space-y-0.5")
+                    div(*ngFor="let line of summaryProfitLines('unrealized')", class="text-lg font-semibold leading-tight")
+                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
+                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
+                div(class="text-xs text-slate-500 mt-1") 보유 {{daytradeSummary.open_position_count || 0}}건
             div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 단타
-                div(class="text-xl font-semibold text-rose-300") {{daytradeSummary.daytrade_trade_count || 0}}
-                div(class="text-xs text-slate-500 mt-1") 단타 체결/동기화 기록
-            div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 매수 / 매도
-                div(class="text-xl font-semibold text-white") {{daytradeSummary.buy_count || 0}} / {{daytradeSummary.total_sell_count || 0}}
-                div(class="text-xs text-slate-500 mt-1") 현재 필터 기준
+                div(class="text-xs text-slate-400 mb-1") 현재까지 손익
+                div(class="space-y-0.5")
+                    div(*ngFor="let line of summaryProfitLines('current_profit')", class="text-lg font-semibold leading-tight")
+                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
+                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
+                div(class="text-xs text-slate-500 mt-1") 실현 + 보유 평가
 
         div(class="rounded-lg border border-blue-400/15 bg-blue-500/5 px-3 py-2 mb-4 text-[11px] text-blue-100/80")
             | 사이트 체결 기록, 단타 런타임 기록, 무한매수 cycle_trade 기록을 함께 표시합니다. 무한매수 SOXL/TQQQ 체결도 여기에서 확인할 수 있습니다.
@@ -78,11 +83,17 @@ div(class="flex flex-col gap-4")
                     div(class="flex items-center justify-between gap-2")
                         div
                             div(class="text-sm font-semibold text-white") {{p.name || p.symbol}}
-                            div(class="text-xs text-slate-500") {{p.symbol}} · {{p.position_qty}}주
+                            div(class="text-xs text-slate-500") {{p.symbol}} · {{p.strategy || '단타'}} · {{p.position_qty}}주
                         span([class]="marketBadge(p.market)") {{p.market === 'US' ? '미장' : '국장'}}
                     div(class="mt-2 flex items-center justify-between text-xs")
                         span(class="text-slate-400") {{t('hist.avg_price')}}
                         span(class="text-slate-200") {{formatMarketMoney(p.avg_price, p.market)}}
+                    div(class="mt-1 flex items-center justify-between text-xs")
+                        span(class="text-slate-400") 현재가
+                        span(class="text-slate-200") {{formatMarketMoney(p.current_price, p.market)}}
+                    div(class="mt-1 flex items-center justify-between text-xs")
+                        span(class="text-slate-400") 평가손익
+                        span([class]="profitClass(p.unrealized)") {{formatMarketMoney(p.unrealized, p.market)}}
 
         //- Filters
         div(class="glass-card p-4 mb-4")

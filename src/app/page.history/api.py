@@ -991,10 +991,58 @@ def _state_daytrade_log_rows(trading, include_broker=False, max_log_rows=600):
         rows.append(_daytrade_record_to_log_row(record))
     return rows
 
-def _active_daytrade_positions(trading, market=""):
+def _history_empty_market_bucket():
+    return {
+        "buy_count": 0,
+        "sell_count": 0,
+        "trade_count": 0,
+        "realized": 0.0,
+        "unrealized": 0.0,
+        "current_profit": 0.0,
+        "total_buy_amount": 0.0,
+        "total_sell_amount": 0.0,
+        "matched_buy_amount": 0.0,
+        "fee_total": 0.0,
+        "open_position_count": 0,
+        "open_cost_amount": 0.0,
+        "open_eval_amount": 0.0,
+    }
+
+def _round_history_bucket(bucket):
+    result = dict(bucket or {})
+    for key in (
+        "realized",
+        "unrealized",
+        "current_profit",
+        "total_buy_amount",
+        "total_sell_amount",
+        "matched_buy_amount",
+        "fee_total",
+        "open_cost_amount",
+        "open_eval_amount",
+    ):
+        result[key] = round(_safe_float(result.get(key, 0), 0), 4 if key == "fee_total" else 2)
+    return result
+
+def _history_position_matches(symbol, name, symbol_filter="", search_text=""):
+    symbol = str(symbol or "").upper()
+    name = str(name or "")
+    symbol_filter = str(symbol_filter or "").upper()
+    if symbol_filter and symbol != symbol_filter:
+        return False
+    search_text = str(search_text or "").strip().lower()
+    if search_text:
+        haystack = f"{symbol} {name}".lower()
+        if search_text not in haystack:
+            return False
+    return True
+
+def _active_daytrade_positions(trading, market="", symbol="", search=""):
     state_map = _load_daytrade_state(trading)
     result = []
     market_filter = str(market or "").upper()
+    symbol_filter = str(symbol or "").upper()
+    search_text = str(search or "").strip().lower()
     for state_key, state in (state_map or {}).items():
         if not isinstance(state, dict):
             continue
@@ -1008,15 +1056,76 @@ def _active_daytrade_positions(trading, market=""):
             continue
         if market_filter and item_market != market_filter:
             continue
+        name = state.get("name", "") or symbol
+        if _history_position_matches(symbol, name, symbol_filter=symbol_filter, search_text=search_text) is False:
+            continue
         avg_price = _safe_float(state.get("avg_price", 0), 0)
+        current_price = (
+            _safe_float(state.get("current_price", 0), 0)
+            or _safe_float(state.get("last_price", 0), 0)
+            or avg_price
+        )
+        cost_amount = avg_price * qty
+        eval_amount = current_price * qty if current_price > 0 else cost_amount
+        unrealized = eval_amount - cost_amount
         result.append({
             "symbol": symbol,
             "market": item_market,
-            "name": state.get("name", ""),
+            "name": name,
+            "strategy": "단타",
             "position_qty": qty,
             "avg_price": round(avg_price, 4),
-            "cost_amount": round(avg_price * qty, 2),
+            "current_price": round(current_price, 4),
+            "cost_amount": round(cost_amount, 2),
+            "eval_amount": round(eval_amount, 2),
+            "unrealized": round(unrealized, 2),
             "updated_at": _to_kst_string(state.get("updated_at", ""), fmt="%Y-%m-%d %H:%M:%S"),
+        })
+    return result
+
+def _active_cycle_positions(trading, market="", symbol="", search=""):
+    market_filter = str(market or "").upper()
+    if market_filter and market_filter != "US":
+        return []
+    symbol_filter = str(symbol or "").upper()
+    search_text = str(search or "").strip().lower()
+    try:
+        cycles = trading.engine.get_active_cycles() or []
+    except Exception:
+        cycles = []
+    result = []
+    for cycle in cycles:
+        if not isinstance(cycle, dict):
+            continue
+        sym = str(cycle.get("symbol", "") or "").upper()
+        if _history_position_matches(sym, sym, symbol_filter=symbol_filter, search_text=search_text) is False:
+            continue
+        qty = _safe_int(cycle.get("total_qty", 0), 0)
+        if qty <= 0:
+            continue
+        spent = _safe_float(cycle.get("total_spent", 0), 0)
+        avg_price = _safe_float(cycle.get("avg_price", 0), 0) or (spent / qty if spent > 0 and qty > 0 else 0.0)
+        current_price = _safe_float(cycle.get("current_price", 0), 0)
+        eval_amount = _safe_float(cycle.get("current_eval", 0), 0)
+        if eval_amount <= 0 and current_price > 0:
+            eval_amount = current_price * qty
+        if current_price <= 0 and eval_amount > 0 and qty > 0:
+            current_price = eval_amount / qty
+        if eval_amount <= 0:
+            eval_amount = spent
+        result.append({
+            "symbol": sym,
+            "market": "US",
+            "name": sym,
+            "strategy": "무한매수",
+            "cycle_id": str(cycle.get("id", "") or ""),
+            "position_qty": qty,
+            "avg_price": round(avg_price, 4),
+            "current_price": round(current_price, 4),
+            "cost_amount": round(spent, 2),
+            "eval_amount": round(eval_amount, 2),
+            "unrealized": round(eval_amount - spent, 2),
+            "updated_at": _to_kst_string(cycle.get("updated", "") or cycle.get("updated_at", ""), fmt="%Y-%m-%d %H:%M:%S"),
         })
     return result
 
@@ -1056,13 +1165,13 @@ def daytrade_trades():
     action = _normalize_trade_action(wiz.request.query("action", ""))
     symbol = str(wiz.request.query("symbol", "") or "").upper()
     search = str(wiz.request.query("search", "") or "").strip().lower()
-    sync_default = "true" if page == 1 else "false"
+    sync_default = "false"
     sync_broker = str(wiz.request.query("sync_broker", sync_default) or "").strip().lower() in ("1", "true", "yes", "y")
     include_old = _truthy(wiz.request.query("include_old", "false"))
     max_log_rows = 5000 if (include_old or search or page > 3) else 900
 
     external_cycle_sync = None
-    if page == 1:
+    if page == 1 and sync_broker:
         external_cycle_sync = _sync_external_cycles_for_history(trading, force=sync_broker, symbol_filter=symbol)
     rows = _collect_trade_history_records(trading, include_broker=sync_broker, max_log_rows=max_log_rows)
     filtered = []
@@ -1096,7 +1205,9 @@ def daytrade_trades():
     buy_rows = [r for r in filtered if r.get("action") == "BUY"]
     sell_rows = [r for r in filtered if r.get("action") == "SELL"]
     closed_sells, unmatched_sells = _daytrade_closed_sell_components(sell_rows)
-    positions = _active_daytrade_positions(trading, market=market)
+    daytrade_positions = _active_daytrade_positions(trading, market=market, symbol=symbol, search=search)
+    cycle_positions = _active_cycle_positions(trading, market=market, symbol=symbol, search=search)
+    positions = daytrade_positions + cycle_positions
     cycle_rows = [r for r in filtered if str(r.get("source", "") or "") == "cycle_trade"]
     daytrade_rows = [r for r in filtered if str(r.get("source", "") or "") != "cycle_trade"]
     total_buy_amount = sum(_safe_float(r.get("amount", 0), 0) for r in buy_rows)
@@ -1107,6 +1218,38 @@ def daytrade_trades():
     realized_total = sum(item["realized"] for item in closed_sells)
     record_realized_total = sum(_safe_float(r.get("realized", 0), 0) for r in sell_rows)
     unmatched_sell_amount = sum(_daytrade_sell_amount(r) for r in unmatched_sells)
+    unrealized_total = sum(_safe_float(p.get("unrealized", 0), 0) for p in positions)
+    open_eval_amount = sum(_safe_float(p.get("eval_amount", 0), 0) for p in positions)
+    by_market = {}
+    for key in ("KS", "US"):
+        by_market[key] = _history_empty_market_bucket()
+    for row in filtered:
+        row_market = "US" if str(row.get("market", "") or "").upper() == "US" else "KS"
+        bucket = by_market[row_market]
+        bucket["trade_count"] += 1
+        if row.get("action") == "BUY":
+            bucket["buy_count"] += 1
+            bucket["total_buy_amount"] += _safe_float(row.get("amount", 0), 0)
+    for item in closed_sells:
+        row_market = "US" if str((item.get("row") or {}).get("market", "") or "").upper() == "US" else "KS"
+        bucket = by_market[row_market]
+        bucket["sell_count"] += 1
+        bucket["total_sell_amount"] += _safe_float(item.get("amount", 0), 0)
+        bucket["matched_buy_amount"] += _safe_float(item.get("cost", 0), 0)
+        bucket["fee_total"] += _safe_float(item.get("fee", 0), 0)
+        bucket["realized"] += _safe_float(item.get("realized", 0), 0)
+    for position in positions:
+        row_market = "US" if str(position.get("market", "") or "").upper() == "US" else "KS"
+        bucket = by_market[row_market]
+        bucket["open_position_count"] += 1
+        bucket["open_cost_amount"] += _safe_float(position.get("cost_amount", 0), 0)
+        bucket["open_eval_amount"] += _safe_float(position.get("eval_amount", 0), 0)
+        bucket["unrealized"] += _safe_float(position.get("unrealized", 0), 0)
+    rounded_by_market = {}
+    for key, bucket in by_market.items():
+        bucket["current_profit"] = _safe_float(bucket.get("realized", 0), 0) + _safe_float(bucket.get("unrealized", 0), 0)
+        if any(abs(_safe_float(bucket.get(k, 0), 0)) > 1e-9 for k in ("realized", "unrealized", "current_profit", "total_buy_amount", "total_sell_amount", "open_cost_amount")) or int(bucket.get("trade_count", 0) or 0) > 0 or int(bucket.get("open_position_count", 0) or 0) > 0:
+            rounded_by_market[key] = _round_history_bucket(bucket)
     summary = {
         "buy_count": len(buy_rows),
         "sell_count": len(closed_sells),
@@ -1125,12 +1268,16 @@ def daytrade_trades():
         "unmatched_sell_amount": round(unmatched_sell_amount, 2),
         "record_realized": round(record_realized_total, 2),
         "realized": round(realized_total, 2),
+        "unrealized": round(unrealized_total, 2),
+        "current_profit": round(realized_total + unrealized_total, 2),
         "trade_count": len(filtered),
         "cycle_trade_count": len(cycle_rows),
         "daytrade_trade_count": len(daytrade_rows),
         "open_position_count": len(positions),
         "open_cost_amount": round(sum(_safe_float(p.get("cost_amount", 0), 0) for p in positions), 2),
+        "open_eval_amount": round(open_eval_amount, 2),
         "positions": positions[:8],
+        "by_market": rounded_by_market,
     }
 
     wiz.response.status(
@@ -1159,8 +1306,8 @@ def cycles():
     dump = 15
     status = wiz.request.query("status", "")
     symbol = wiz.request.query("symbol", "")
-    force_sync = _truthy(wiz.request.query("sync", "true" if page == 1 else "false"))
-    if page == 1:
+    force_sync = _truthy(wiz.request.query("sync", "false"))
+    if page == 1 and force_sync:
         _sync_external_cycles_for_history(trading, force=force_sync, symbol_filter=symbol)
 
     cycle_db = trading.db("trading_cycle")
@@ -1194,7 +1341,8 @@ def cycle_detail():
     """사이클 상세 + 거래 내역"""
     trading = struct.trading
     cycle_id = wiz.request.query("cycle_id", True)
-    _sync_external_cycles_for_history(trading, force=_truthy(wiz.request.query("sync", "true")))
+    if _truthy(wiz.request.query("sync", "false")):
+        _sync_external_cycles_for_history(trading, force=True)
 
     cycle_db = trading.db("trading_cycle")
     trade_db = trading.db("cycle_trade")
@@ -1223,9 +1371,9 @@ def trade_logs():
     symbol = wiz.request.query("symbol", "")
     action = wiz.request.query("action", "")
     search = wiz.request.query("search", "")
-    sync_broker = _truthy(wiz.request.query("sync_broker", "true" if page == 1 else "false"))
+    sync_broker = _truthy(wiz.request.query("sync_broker", "false"))
     include_old = _truthy(wiz.request.query("include_old", "false"))
-    if page == 1:
+    if page == 1 and sync_broker:
         _sync_external_cycles_for_history(trading, force=sync_broker, symbol_filter=symbol)
 
     log_db = trading.db("trade_log")

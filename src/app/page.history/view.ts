@@ -92,7 +92,7 @@ export class Component implements OnInit {
             page: this.cyclePage,
             status: this.cycleFilter,
             symbol: this.cycleSymbolFilter,
-            sync: this.cyclePage === 1 ? 'true' : 'false',
+            sync: 'false',
         });
         if (res.code === 200) {
             this.cycles = res.data.rows || [];
@@ -124,7 +124,7 @@ export class Component implements OnInit {
     public async viewCycleDetail(cycle: any) {
         this.loading = true;
         await this.service.render();
-        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id, sync: 'true' });
+        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id, sync: 'false' });
         if (res.code === 200) {
             this.selectedCycle = res.data.cycle;
             this.cycleTrades = res.data.trades || [];
@@ -149,7 +149,7 @@ export class Component implements OnInit {
             action: this.daytradeActionFilter,
             symbol: this.daytradeSymbolFilter,
             search: this.daytradeSearchText,
-            sync_broker: this.daytradePage === 1 && !append ? 'true' : 'false',
+            sync_broker: 'false',
             include_old: this.daytradePage > 3 ? 'true' : 'false',
         });
         if (res.code === 200) {
@@ -236,7 +236,7 @@ export class Component implements OnInit {
             symbol: this.logSymbolFilter,
             action: this.logActionFilter,
             search: this.logSearchText,
-            sync_broker: this.logPage === 1 && !append ? 'true' : 'false',
+            sync_broker: 'false',
             include_old: this.logPage > 3 ? 'true' : 'false',
         });
         if (res.code === 200) {
@@ -308,10 +308,58 @@ export class Component implements OnInit {
         return !Number.isNaN(Number(val));
     }
 
+    public summaryProfitLines(key: string): any[] {
+        const byMarket = this.daytradeSummary?.by_market || {};
+        const preferred = (this.daytradeMarketFilter || '').toUpperCase();
+        const markets = preferred ? [preferred] : ['KS', 'US'];
+        const lines = markets
+            .map((market: string) => {
+                const bucket = byMarket?.[market] || null;
+                if (!bucket) return null;
+                const value = Number(bucket?.[key]) || 0;
+                const hasData = Number(bucket?.trade_count || 0) > 0
+                    || Number(bucket?.open_position_count || 0) > 0
+                    || Math.abs(value) > 0;
+                if (!hasData) return null;
+                return {
+                    market,
+                    label: market === 'US' ? '미장' : '국장',
+                    value,
+                    text: this.formatMarketMoney(value, market),
+                };
+            })
+            .filter((item: any) => item !== null);
+        if (lines.length > 0) return lines;
+        const fallbackMarket = preferred || 'KS';
+        const value = Number(this.daytradeSummary?.[key]) || 0;
+        return [{
+            market: fallbackMarket,
+            label: fallbackMarket === 'US' ? '미장' : '국장',
+            value,
+            text: this.formatMarketMoney(value, fallbackMarket),
+        }];
+    }
+
+    public summaryProfitClass(key: string): string {
+        const lines = this.summaryProfitLines(key);
+        const values = lines.map((line: any) => Number(line.value) || 0).filter((value: number) => Math.abs(value) > 0);
+        if (values.length === 0) return 'bn-muted-text';
+        if (values.every((value: number) => value > 0)) return 'hist-profit-up';
+        if (values.every((value: number) => value < 0)) return 'hist-profit-down';
+        return 'bn-muted-text';
+    }
+
+    public summaryProfitValueClass(value: any): string {
+        const n = Number(value) || 0;
+        if (n > 0) return 'hist-profit-up';
+        if (n < 0) return 'hist-profit-down';
+        return 'bn-muted-text';
+    }
+
     public profitClass(rate: any): string {
         const r = parseFloat(rate) || 0;
-        if (r > 0) return 'bn-up';
-        if (r < 0) return 'bn-down';
+        if (r > 0) return 'hist-profit-up';
+        if (r < 0) return 'hist-profit-down';
         return 'bn-muted-text';
     }
 

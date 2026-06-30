@@ -883,6 +883,109 @@ def _include_active_cycle_in_unrealized(cycle, trade_db=None):
     return True
 
 
+def _cycle_trade_date_key(row):
+    row = row if isinstance(row, dict) else {}
+    trade_date = str(row.get("trade_date", "") or "").strip()
+    if len(trade_date) >= 10:
+        return trade_date[:10]
+    created = row.get("created", "")
+    if created:
+        return str(created)[:10]
+    return ""
+
+
+def _is_cycle_partial_sell_trade(row):
+    row = row if isinstance(row, dict) else {}
+    if str(row.get("action", "") or "").upper() != "SELL":
+        return False
+    status = str(row.get("status", "") or "").upper()
+    if status and status not in ("FILLED", "PARTIAL"):
+        return False
+    if _safe_float(row.get("filled_qty", row.get("order_qty", 0)), 0) <= 0:
+        return False
+    strategy_type = str(row.get("strategy_type", "") or "").upper()
+    total_qty_after = _safe_float(row.get("total_qty_after", 0), 0)
+    return strategy_type == "PARTIAL_SELL" or total_qty_after > 0
+
+
+def _cycle_sell_trade_realized_components(row):
+    row = row if isinstance(row, dict) else {}
+    qty = _safe_float(row.get("filled_qty", row.get("order_qty", 0)), 0)
+    price = _safe_float(row.get("filled_price", row.get("order_price", 0)), 0)
+    amount = _safe_float(row.get("filled_amount", 0), 0)
+    if amount <= 0 and qty > 0 and price > 0:
+        amount = qty * price
+    avg_buy_price = _safe_float(row.get("avg_buy_price", 0), 0)
+    commission = max(0.0, _safe_float(row.get("commission", 0), 0))
+    if qty <= 0 or amount <= 0 or avg_buy_price <= 0:
+        return None
+    cost = avg_buy_price * qty
+    realized = amount - cost - commission
+    return {
+        "date": _cycle_trade_date_key(row),
+        "realized": realized,
+        "cost": cost,
+        "amount": amount,
+        "commission": commission,
+    }
+
+
+def _cycle_partial_sell_realized_summary(trade_db=None, date_from="", date_to=""):
+    if trade_db is None:
+        return {"realized": 0.0, "cost": 0.0, "count": 0, "by_date": {}}
+    try:
+        rows = trade_db.rows(orderby="created", order="DESC", dump=5000) or []
+    except TypeError:
+        rows = trade_db.rows() or []
+    except Exception:
+        rows = []
+
+    total_realized = 0.0
+    total_cost = 0.0
+    count = 0
+    by_date = {}
+    date_from = str(date_from or "")
+    date_to = str(date_to or "")
+
+    for row in rows:
+        if _is_cycle_partial_sell_trade(row) is False:
+            continue
+        components = _cycle_sell_trade_realized_components(row)
+        if components is None:
+            continue
+        date_key = str(components.get("date", "") or "")
+        if date_from and date_key and date_key < date_from:
+            continue
+        if date_to and date_key and date_key > date_to:
+            continue
+        realized = float(components.get("realized", 0) or 0)
+        cost = float(components.get("cost", 0) or 0)
+        total_realized += realized
+        total_cost += cost
+        count += 1
+        if date_key:
+            by_date[date_key] = by_date.get(date_key, 0.0) + realized
+
+    return {
+        "realized": total_realized,
+        "cost": total_cost,
+        "count": count,
+        "by_date": by_date,
+    }
+
+
+def _infinite_buy_realized_date_window(period, filter_from="", filter_to="", now=None, explicit_dates=False):
+    if explicit_dates or str(period or "").upper() != "1D":
+        return str(filter_from or ""), str(filter_to or "")
+    now = now or _TIME.aware_now()
+    if getattr(now, "tzinfo", None) is None:
+        now = now.replace(tzinfo=KST)
+    today = now.strftime("%Y-%m-%d")
+    # KIS 미국장 체결은 전일 US 거래일로 저장될 수 있어 KST 1D 실현손익에 같이 포함한다.
+    previous_trade_date = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    return previous_trade_date, str(filter_to or today)
+
+
 def _daytrade_state_realized_total(trading, session_date=None):
     try:
         engine = trading.daytrade_engine
@@ -2356,14 +2459,21 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     else:
         filter_from = ""
         filter_to = today_str
+    ib_filter_from, ib_filter_to = _infinite_buy_realized_date_window(
+        period,
+        filter_from=filter_from,
+        filter_to=filter_to,
+        now=now,
+        explicit_dates=bool(date_from or date_to),
+    )
 
     # 실현 수익 (완료 사이클)
     try:
-        if filter_from:
+        if ib_filter_from:
             completed = cycle_db.rows(status="COMPLETED", orderby="completed_at", order="DESC") or []
-            completed = [c for c in completed if str(c.get("completed_at", ""))[:10] >= filter_from]
-            if filter_to:
-                completed = [c for c in completed if str(c.get("completed_at", ""))[:10] <= filter_to]
+            completed = [c for c in completed if str(c.get("completed_at", ""))[:10] >= ib_filter_from]
+            if ib_filter_to:
+                completed = [c for c in completed if str(c.get("completed_at", ""))[:10] <= ib_filter_to]
         else:
             completed = cycle_db.rows(status="COMPLETED", orderby="completed_at", order="DESC") or []
     except Exception:
@@ -2378,6 +2488,11 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
         cycle_trade_db = trading.db("cycle_trade")
     except Exception:
         cycle_trade_db = None
+    partial_sell_realized = _cycle_partial_sell_realized_summary(
+        cycle_trade_db,
+        date_from=ib_filter_from,
+        date_to=ib_filter_to,
+    )
 
     for c in completed:
         if _include_completed_cycle_in_realized(c, trade_db=cycle_trade_db) is False:
@@ -2392,6 +2507,9 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
         total_invested += c_spent_krw
         c_rate = (c_profit / c_spent_krw * 100) if c_spent_krw > 0 else 0
         cycle_returns.append(round(c_rate, 2))
+
+    cycle_realized_profit += usd_to_krw(partial_sell_realized.get("realized", 0))
+    total_invested += usd_to_krw(partial_sell_realized.get("cost", 0))
 
     # 미실현 수익 (활성 사이클)
     active_cycles = _refresh_cycle_prices_for_display(trading, trading.engine.get_active_cycles(), refresh=force_refresh)
@@ -2456,6 +2574,9 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
         _log("error", f"daytrade period summary failed: {e}")
 
     # 무한매수 완료사이클 실현손익 일별 집계
+    for key, value in (partial_sell_realized.get("by_date", {}) or {}).items():
+        ib_daily_realized_breakdown[key] = ib_daily_realized_breakdown.get(key, 0.0) + usd_to_krw(value)
+
     for c in completed:
         try:
             if _include_completed_cycle_in_realized(c, trade_db=cycle_trade_db) is False:
