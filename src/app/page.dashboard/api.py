@@ -1756,8 +1756,11 @@ def _build_overview_payload(force_refresh=False):
                 if domestic_portfolio_value_krw <= 0:
                     for h in domestic_holdings_data:
                         qty = int(float(h.get("qty", 0) or 0))
+                        eval_amount = float(h.get("eval_amount", 0) or 0)
                         current_price = float(h.get("current_price", 0) or 0)
-                        if qty > 0 and current_price > 0:
+                        if eval_amount > 0:
+                            domestic_portfolio_value_krw += eval_amount
+                        elif qty > 0 and current_price > 0:
                             domestic_portfolio_value_krw += (qty * current_price)
 
                 raw_domestic = domestic_balance.get("raw", {}) or {}
@@ -2043,9 +2046,13 @@ def _build_overview_payload(force_refresh=False):
             continue
         avg_price = float(row.get("avg_price", 0) or 0)
         current_price = float(row.get("current_price", 0) or 0)
-        eval_amount = current_price * qty if current_price > 0 else avg_price * qty
+        eval_amount = float(row.get("eval_amount", 0) or 0)
+        if eval_amount <= 0:
+            eval_amount = current_price * qty if current_price > 0 else avg_price * qty
         pnl_amount = float(row.get("pnl", 0) or 0)
-        cost_amount = avg_price * qty
+        cost_amount = float(row.get("cost_amount", 0) or 0)
+        if cost_amount <= 0:
+            cost_amount = avg_price * qty
         if cost_amount <= 0 and eval_amount > 0:
             cost_amount = max(0.0, eval_amount - pnl_amount)
         multiplier = fx_rate if market == "US" and fx_rate > 0 else 1.0
@@ -2652,8 +2659,11 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
             domestic_total_asset_krw = 0.0
             for h in (domestic_balance.get("holdings", []) or []):
                 qty = int(float(h.get("qty", 0) or 0))
+                eval_amount = float(h.get("eval_amount", 0) or 0)
                 current_price = float(h.get("current_price", 0) or 0)
-                if qty > 0 and current_price > 0:
+                if eval_amount > 0:
+                    domestic_eval_krw += eval_amount
+                elif qty > 0 and current_price > 0:
                     domestic_eval_krw += (qty * current_price)
                 broker_unrealized_profit += float(h.get("profit_loss", 0) or 0)
             domestic_eval_krw = max(domestic_eval_krw, float(domestic_balance.get("portfolio_eval_krw", 0) or 0))

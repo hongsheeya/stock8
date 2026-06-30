@@ -718,6 +718,8 @@ class KisApi:
                 "qty": qty,
                 "avg_price": self._safe_float(item.get("pchs_avg_pric", 0), 0),
                 "current_price": self._safe_float(item.get("prpr", 0), 0),
+                "purchase_amount": self._safe_float(item.get("pchs_amt", 0), 0),
+                "eval_amount": self._safe_float(item.get("evlu_amt", 0), 0),
                 "profit_loss": self._safe_float(item.get("evlu_pfls_amt", 0), 0),
                 "profit_rate": self._safe_float(item.get("evlu_pfls_rt", 0), 0),
             })

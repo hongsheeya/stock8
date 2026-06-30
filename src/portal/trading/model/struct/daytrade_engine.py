@@ -789,6 +789,9 @@ class DomesticDaytradeEngine:
             prev_qty = self._safe_int(state.get("position_qty", 0), 0)
             prev_avg = self._safe_float(state.get("avg_price", 0), 0)
             broker_avg = self._safe_float(item.get("avg_price", 0), 0)
+            purchase_amount = self._safe_float(item.get("purchase_amount", 0), 0)
+            if qty > 0 and purchase_amount > 0 and (broker_avg <= 0 or abs((broker_avg * qty) - purchase_amount) > max(1.0, purchase_amount * 0.2)):
+                broker_avg = purchase_amount / qty
             rebuilt = self._state_order_open_position(state)
             rebuilt_qty = self._safe_int(rebuilt.get("qty", 0), 0)
             rebuilt_avg = self._safe_float(rebuilt.get("avg_price", 0), 0)
@@ -4743,9 +4746,25 @@ class DomesticDaytradeEngine:
             state = state_map.get(key, {}) or {}
             avg_price = self._safe_float(item.get("avg_price", state.get("avg_price", 0)), 0)
             current_price = self._safe_float(item.get("current_price", 0), 0)
+            eval_amount = self._safe_float(item.get("eval_amount", 0), 0)
+            purchase_amount = self._safe_float(item.get("purchase_amount", 0), 0)
+            profit_loss = self._safe_float(item.get("profit_loss", 0), 0)
+            if qty > 0 and eval_amount > 0 and (current_price <= 0 or abs((current_price * qty) - eval_amount) > max(1.0, eval_amount * 0.2)):
+                current_price = eval_amount / qty
+            if qty > 0 and purchase_amount > 0 and (avg_price <= 0 or abs((avg_price * qty) - purchase_amount) > max(1.0, purchase_amount * 0.2)):
+                avg_price = purchase_amount / qty
+            elif qty > 0 and eval_amount > 0 and abs(profit_loss) > 1e-9:
+                inferred_cost = max(0.0, eval_amount - profit_loss)
+                if inferred_cost > 0 and (avg_price <= 0 or abs((avg_price * qty) - inferred_cost) > max(1.0, inferred_cost * 0.2)):
+                    avg_price = inferred_cost / qty
             if current_price <= 0:
                 current_price = avg_price
-            pnl = ((current_price - avg_price) * qty) if avg_price > 0 else 0.0
+            if eval_amount <= 0 and current_price > 0:
+                eval_amount = current_price * qty
+            cost_amount = purchase_amount if purchase_amount > 0 else (avg_price * qty if avg_price > 0 else 0.0)
+            if cost_amount <= 0 and eval_amount > 0 and abs(profit_loss) > 1e-9:
+                cost_amount = max(0.0, eval_amount - profit_loss)
+            pnl = profit_loss if abs(profit_loss) > 1e-9 else (((current_price - avg_price) * qty) if avg_price > 0 else 0.0)
             pnl_pct = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
             rows_map[key] = {
                 "symbol": symbol,
@@ -4758,6 +4777,8 @@ class DomesticDaytradeEngine:
                 "position_qty": qty,
                 "avg_price": round(avg_price, 4),
                 "current_price": round(current_price, 4),
+                "eval_amount": round(eval_amount, 2),
+                "cost_amount": round(cost_amount, 2),
                 "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl_pct, 2),
                 "updated_at": state.get("updated_at", "") or self._timestamp(),

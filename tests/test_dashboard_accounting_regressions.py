@@ -688,7 +688,7 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
                         "strategy_id": "vrev",
                         "position_qty": 1,
                         "avg_price": 2_050_000,
-                        "last_price": 2_312_000,
+                        "last_price": 2_600_000,
                     }
                 }
 
@@ -700,9 +700,10 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
                         "symbol": "000660",
                         "market": "KS",
                         "name": "SK하이닉스",
-                        "qty": 2,
+                        "qty": 10,
                         "avg_price": 2_050_000,
-                        "current_price": 2_312_000,
+                        "current_price": 2_600_000,
+                        "eval_amount": 2_600_000,
                         "profit_loss": 524_000,
                     }]
                 }
@@ -719,10 +720,11 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0]["symbol"], "000660")
         self.assertEqual(positions[0]["source"], "broker")
-        self.assertEqual(positions[0]["position_qty"], 2)
-        self.assertEqual(positions[0]["current_price"], 2_312_000)
-        self.assertEqual(positions[0]["eval_amount"], 4_624_000)
-        self.assertEqual(positions[0]["cost_amount"], 4_100_000)
+        self.assertEqual(positions[0]["position_qty"], 10)
+        self.assertEqual(positions[0]["current_price"], 260_000)
+        self.assertEqual(positions[0]["eval_amount"], 2_600_000)
+        self.assertEqual(positions[0]["cost_amount"], 2_076_000)
+        self.assertEqual(positions[0]["avg_price"], 207_600)
         self.assertEqual(positions[0]["unrealized"], 524_000)
 
     def test_history_active_cycle_positions_include_unrealized_profit(self):

@@ -244,6 +244,31 @@ FireGate 포트폴리오 동기화 계층이다.
 - 활성 사이클 부분 매도 실현손익 집계를 검증한다.
 - 거래이력의 단타/무한매수 보유 평가손익 집계를 검증한다.
 - 국장/미장 bucket과 현재까지 손익 계산을 검증한다.
+- 국장 보유에서 KIS 현재가/평균가 필드가 평가금액과 맞지 않을 때 `evlu_amt`와 `evlu_pfls_amt`를 기준으로 표시 금액을 보정하는지 검증한다.
+
+## 2026-06-30 하이닉스 국장 평가손익 보정
+
+거래이력의 국장 보유 평가손익은 로컬 `live_state`나 단가 곱셈을 절대 기준으로 삼으면 안 된다.
+
+원인:
+
+- `get_domestic_balance()`가 KIS의 `pchs_amt`와 `evlu_amt`를 holdings에 보존하지 않았다.
+- 거래이력과 대시보드가 보유 평가액을 `current_price * qty`로 다시 계산하는 경로가 있었다.
+- 로컬 단타 상태에 남은 오염된 현재가/평균가가 브로커 보유 수량과 섞이면 SK하이닉스 같은 국장 보유 평가금액이 크게 틀어질 수 있었다.
+
+수정:
+
+- `src/portal/trading/model/struct/kis_api.py`에서 국장 잔고의 `purchase_amount=pchs_amt`, `eval_amount=evlu_amt`를 함께 반환한다.
+- `src/app/page.history/api.py`는 브로커 국장 holdings가 있으면 그 수량과 평가금액/평가손익을 기준으로 보유 평가손익을 만든다.
+- `src/portal/trading/model/struct/daytrade_engine.py`는 국장 active position을 만들 때 `eval_amount`와 `purchase_amount`를 보존하고, 단가 곱셈이 브로커 금액과 크게 다르면 브로커 금액에서 단가를 역산한다.
+- `src/app/page.dashboard/api.py`는 국내 포트폴리오와 단타 보유 요약에서 `eval_amount`/`cost_amount`가 있으면 먼저 사용한다.
+
+운영 원칙:
+
+- 국장 보유 평가금액은 KIS `evlu_amt`가 있으면 그 값을 우선한다.
+- 국장 보유 평가손익은 KIS `evlu_pfls_amt`가 있으면 그 값을 우선한다.
+- 단가 필드는 화면 표시용 보조값이다. 평가금액과 20% 이상 어긋나면 `평가금액 / 수량`, `매입금액 / 수량`으로 보정한다.
+- 로컬 상태 파일의 현재가/평균가는 브로커 잔고가 있을 때 기준값으로 쓰지 않는다.
 
 ## 검증한 테스트
 
@@ -261,7 +286,7 @@ python -m unittest \
 결과:
 
 ```text
-Ran 121 tests
+Ran 122 tests
 OK
 ```
 

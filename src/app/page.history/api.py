@@ -1059,6 +1059,52 @@ def _cached_domestic_history_holdings(trading, force=False):
     except Exception:
         return None
 
+def _history_position_amounts(qty, avg_price=0, current_price=0, profit_loss=None, eval_amount=0, purchase_amount=0):
+    qty = _safe_int(qty, 0)
+    avg_price = _safe_float(avg_price, 0)
+    current_price = _safe_float(current_price, 0)
+    eval_amount = _safe_float(eval_amount, 0)
+    purchase_amount = _safe_float(purchase_amount, 0)
+    profit_known = profit_loss is not None
+    profit = _safe_float(profit_loss, 0) if profit_known else 0.0
+
+    if qty > 0 and eval_amount > 0:
+        derived_current = eval_amount / qty
+        if current_price <= 0 or abs((current_price * qty) - eval_amount) > max(1.0, abs(eval_amount) * 0.2):
+            current_price = derived_current
+
+    cost_amount = purchase_amount if purchase_amount > 0 else 0.0
+    if qty > 0 and cost_amount > 0:
+        derived_avg = cost_amount / qty
+        if avg_price <= 0 or abs((avg_price * qty) - cost_amount) > max(1.0, abs(cost_amount) * 0.2):
+            avg_price = derived_avg
+
+    if profit_known:
+        if eval_amount <= 0 and cost_amount > 0:
+            eval_amount = max(0.0, cost_amount + profit)
+        if cost_amount <= 0 and eval_amount > 0:
+            cost_amount = max(0.0, eval_amount - profit)
+        if qty > 0 and eval_amount > 0:
+            current_price = eval_amount / qty
+        if qty > 0 and cost_amount > 0:
+            avg_price = cost_amount / qty
+
+    if eval_amount <= 0 and qty > 0 and current_price > 0:
+        eval_amount = current_price * qty
+    if cost_amount <= 0 and qty > 0 and avg_price > 0:
+        cost_amount = avg_price * qty
+
+    if profit_known is False and qty > 0 and avg_price > 0 and current_price > 0:
+        profit = eval_amount - cost_amount
+
+    return {
+        "avg_price": round(avg_price, 4),
+        "current_price": round(current_price, 4),
+        "cost_amount": round(cost_amount, 2),
+        "eval_amount": round(eval_amount, 2),
+        "unrealized": round(profit, 2),
+    }
+
 def _active_daytrade_positions(trading, market="", symbol="", search="", use_broker_holdings=True, force_broker=False):
     state_map = _load_daytrade_state(trading)
     positions_by_key = {}
@@ -1124,23 +1170,15 @@ def _active_daytrade_positions(trading, market="", symbol="", search="", use_bro
             qty = _safe_int(item.get("qty", item.get("holding_qty", 0)), 0)
             if qty <= 0:
                 continue
-            avg_price = _safe_float(item.get("avg_price", state.get("avg_price", 0)), 0)
-            current_price = _safe_float(item.get("current_price", 0), 0)
             profit_loss = _safe_float(item.get("profit_loss", ""), None)
-            if current_price <= 0 and avg_price > 0 and profit_loss is not None and qty > 0:
-                current_price = avg_price + (profit_loss / qty)
-            if current_price <= 0:
-                current_price = avg_price
-            eval_amount = current_price * qty if current_price > 0 else 0.0
-            cost_amount = avg_price * qty if avg_price > 0 else 0.0
-            if profit_loss is not None:
-                unrealized = profit_loss
-                if eval_amount <= 0 and cost_amount > 0:
-                    eval_amount = cost_amount + unrealized
-                if cost_amount <= 0 and eval_amount > 0:
-                    cost_amount = max(0.0, eval_amount - unrealized)
-            else:
-                unrealized = eval_amount - cost_amount
+            amounts = _history_position_amounts(
+                qty,
+                avg_price=item.get("avg_price", state.get("avg_price", 0)),
+                current_price=item.get("current_price", 0),
+                profit_loss=profit_loss,
+                eval_amount=item.get("eval_amount", 0),
+                purchase_amount=item.get("purchase_amount", 0),
+            )
             key = _history_position_key(sym, item_market)
             broker_keys.add(key)
             positions_by_key[key] = {
@@ -1149,11 +1187,11 @@ def _active_daytrade_positions(trading, market="", symbol="", search="", use_bro
                 "name": name,
                 "strategy": state.get("strategy_name") or state.get("strategy_id") or "단타",
                 "position_qty": qty,
-                "avg_price": round(avg_price, 4),
-                "current_price": round(current_price, 4),
-                "cost_amount": round(cost_amount, 2),
-                "eval_amount": round(eval_amount, 2),
-                "unrealized": round(unrealized, 2),
+                "avg_price": amounts["avg_price"],
+                "current_price": amounts["current_price"],
+                "cost_amount": amounts["cost_amount"],
+                "eval_amount": amounts["eval_amount"],
+                "unrealized": amounts["unrealized"],
                 "updated_at": _to_kst_string(state.get("updated_at", ""), fmt="%Y-%m-%d %H:%M:%S"),
                 "source": "broker",
             }
