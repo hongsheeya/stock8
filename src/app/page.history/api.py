@@ -1037,9 +1037,31 @@ def _history_position_matches(symbol, name, symbol_filter="", search_text=""):
             return False
     return True
 
-def _active_daytrade_positions(trading, market="", symbol="", search=""):
+def _history_market(value):
+    text = str(value or "").upper().strip()
+    return "US" if text in ("US", "NYSE", "NASD", "AMEX", "NYS") else "KS"
+
+def _history_position_key(symbol, market):
+    return f"{str(symbol or '').upper().strip()}.{_history_market(market)}"
+
+def _cached_domestic_history_holdings(trading, force=False):
+    scope = _history_cache_scope()
+    cache_key = ("domestic_history_holdings", scope)
+    if force is False:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+    try:
+        holdings = (trading.kis_api.get_domestic_balance() or {}).get("holdings", []) or []
+        result = [dict(item or {}) for item in holdings if _safe_int((item or {}).get("qty", 0), 0) > 0]
+        _cache_set(cache_key, result)
+        return result
+    except Exception:
+        return None
+
+def _active_daytrade_positions(trading, market="", symbol="", search="", use_broker_holdings=True, force_broker=False):
     state_map = _load_daytrade_state(trading)
-    result = []
+    positions_by_key = {}
     market_filter = str(market or "").upper()
     symbol_filter = str(symbol or "").upper()
     search_text = str(search or "").strip().lower()
@@ -1049,8 +1071,7 @@ def _active_daytrade_positions(trading, market="", symbol="", search=""):
         qty = _safe_int(state.get("position_qty", 0), 0)
         if qty <= 0:
             continue
-        item_market = str(state.get("market", "") or (str(state_key).split(".")[1] if "." in str(state_key) else "KS")).upper()
-        item_market = "US" if item_market == "US" else "KS"
+        item_market = _history_market(state.get("market", "") or (str(state_key).split(".")[1] if "." in str(state_key) else "KS"))
         symbol = str(state.get("symbol", str(state_key).split(".")[0]) or "").upper()
         if item_market == "US" and symbol in ("SOXL", "TQQQ"):
             continue
@@ -1068,7 +1089,7 @@ def _active_daytrade_positions(trading, market="", symbol="", search=""):
         cost_amount = avg_price * qty
         eval_amount = current_price * qty if current_price > 0 else cost_amount
         unrealized = eval_amount - cost_amount
-        result.append({
+        positions_by_key[_history_position_key(symbol, item_market)] = {
             "symbol": symbol,
             "market": item_market,
             "name": name,
@@ -1080,8 +1101,67 @@ def _active_daytrade_positions(trading, market="", symbol="", search=""):
             "eval_amount": round(eval_amount, 2),
             "unrealized": round(unrealized, 2),
             "updated_at": _to_kst_string(state.get("updated_at", ""), fmt="%Y-%m-%d %H:%M:%S"),
-        })
-    return result
+            "source": "state",
+        }
+
+    domestic_holdings = None
+    if use_broker_holdings and (market_filter in ("", "KS")):
+        domestic_holdings = _cached_domestic_history_holdings(trading, force=force_broker)
+
+    if domestic_holdings is not None:
+        broker_keys = set()
+        for item in domestic_holdings:
+            sym = str(item.get("symbol", "") or "").upper().strip()
+            if not sym:
+                continue
+            item_market = _history_market(item.get("market", "KS"))
+            if market_filter and item_market != market_filter:
+                continue
+            state = (state_map or {}).get(_history_position_key(sym, item_market), {}) or {}
+            name = item.get("name", "") or state.get("name", "") or sym
+            if _history_position_matches(sym, name, symbol_filter=symbol_filter, search_text=search_text) is False:
+                continue
+            qty = _safe_int(item.get("qty", item.get("holding_qty", 0)), 0)
+            if qty <= 0:
+                continue
+            avg_price = _safe_float(item.get("avg_price", state.get("avg_price", 0)), 0)
+            current_price = _safe_float(item.get("current_price", 0), 0)
+            profit_loss = _safe_float(item.get("profit_loss", ""), None)
+            if current_price <= 0 and avg_price > 0 and profit_loss is not None and qty > 0:
+                current_price = avg_price + (profit_loss / qty)
+            if current_price <= 0:
+                current_price = avg_price
+            eval_amount = current_price * qty if current_price > 0 else 0.0
+            cost_amount = avg_price * qty if avg_price > 0 else 0.0
+            if profit_loss is not None:
+                unrealized = profit_loss
+                if eval_amount <= 0 and cost_amount > 0:
+                    eval_amount = cost_amount + unrealized
+                if cost_amount <= 0 and eval_amount > 0:
+                    cost_amount = max(0.0, eval_amount - unrealized)
+            else:
+                unrealized = eval_amount - cost_amount
+            key = _history_position_key(sym, item_market)
+            broker_keys.add(key)
+            positions_by_key[key] = {
+                "symbol": sym,
+                "market": item_market,
+                "name": name,
+                "strategy": state.get("strategy_name") or state.get("strategy_id") or "단타",
+                "position_qty": qty,
+                "avg_price": round(avg_price, 4),
+                "current_price": round(current_price, 4),
+                "cost_amount": round(cost_amount, 2),
+                "eval_amount": round(eval_amount, 2),
+                "unrealized": round(unrealized, 2),
+                "updated_at": _to_kst_string(state.get("updated_at", ""), fmt="%Y-%m-%d %H:%M:%S"),
+                "source": "broker",
+            }
+        for key in list(positions_by_key.keys()):
+            if key.endswith(".KS") and key not in broker_keys:
+                positions_by_key.pop(key, None)
+
+    return sorted(positions_by_key.values(), key=lambda item: (0 if item.get("market") == "KS" else 1, item.get("symbol", "")))
 
 def _active_cycle_positions(trading, market="", symbol="", search=""):
     market_filter = str(market or "").upper()
@@ -1205,7 +1285,7 @@ def daytrade_trades():
     buy_rows = [r for r in filtered if r.get("action") == "BUY"]
     sell_rows = [r for r in filtered if r.get("action") == "SELL"]
     closed_sells, unmatched_sells = _daytrade_closed_sell_components(sell_rows)
-    daytrade_positions = _active_daytrade_positions(trading, market=market, symbol=symbol, search=search)
+    daytrade_positions = _active_daytrade_positions(trading, market=market, symbol=symbol, search=search, force_broker=sync_broker)
     cycle_positions = _active_cycle_positions(trading, market=market, symbol=symbol, search=search)
     positions = daytrade_positions + cycle_positions
     cycle_rows = [r for r in filtered if str(r.get("source", "") or "") == "cycle_trade"]

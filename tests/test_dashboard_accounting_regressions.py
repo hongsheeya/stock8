@@ -674,6 +674,57 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertEqual(positions[0]["eval_amount"], 33000)
         self.assertEqual(positions[0]["unrealized"], 3000)
 
+    def test_history_active_daytrade_positions_prefer_broker_domestic_holding_qty(self):
+        history_api._HISTORY_CACHE.clear()
+
+        class _Engine:
+            @staticmethod
+            def _load_state_map():
+                return {
+                    "000660.KS": {
+                        "symbol": "000660",
+                        "market": "KS",
+                        "name": "SK하이닉스",
+                        "strategy_id": "vrev",
+                        "position_qty": 1,
+                        "avg_price": 2_050_000,
+                        "last_price": 2_312_000,
+                    }
+                }
+
+        class _Kis:
+            @staticmethod
+            def get_domestic_balance():
+                return {
+                    "holdings": [{
+                        "symbol": "000660",
+                        "market": "KS",
+                        "name": "SK하이닉스",
+                        "qty": 2,
+                        "avg_price": 2_050_000,
+                        "current_price": 2_312_000,
+                        "profit_loss": 524_000,
+                    }]
+                }
+
+        class _Trading:
+            daytrade_engine = _Engine()
+            kis_api = _Kis()
+
+        try:
+            positions = history_api._active_daytrade_positions(_Trading(), force_broker=True)
+        finally:
+            history_api._HISTORY_CACHE.clear()
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["symbol"], "000660")
+        self.assertEqual(positions[0]["source"], "broker")
+        self.assertEqual(positions[0]["position_qty"], 2)
+        self.assertEqual(positions[0]["current_price"], 2_312_000)
+        self.assertEqual(positions[0]["eval_amount"], 4_624_000)
+        self.assertEqual(positions[0]["cost_amount"], 4_100_000)
+        self.assertEqual(positions[0]["unrealized"], 524_000)
+
     def test_history_active_cycle_positions_include_unrealized_profit(self):
         class _Engine:
             @staticmethod
