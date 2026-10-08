@@ -1,219 +1,94 @@
 # Stock8
 
-Stock8은 한국투자증권(KIS) 연동을 기반으로 국내·미국 주식 자동매매를 운영하는 WIZ 프로젝트다. 이 저장소의 중심은 프레임워크 소개가 아니라, 실제 매매 전략을 실행·관찰·검증하는 주식 자동화 시스템 자체에 있다.
+한국투자증권(KIS) 계좌와 FireGate를 연결하는 주식 자동화 시스템입니다. 일반 사용자는 무한매수를 사용하고, 국내·미국 단타는 관리자 중심으로 운영합니다. WIZ/Season 서버와 Angular 화면으로 구성됩니다.
 
-## 한눈에 보는 프로젝트
+문서 기준: **2026-10-08**. [현재 구현·검증 상태](docs/latest-state-2026-10-08.md)에 완료된 항목과 남은 문제를 함께 기록합니다. 기능 구현이나 테스트 통과가 실거래 수익 또는 모든 주문 경로의 검증 완료를 의미하지 않습니다.
 
-- 국내 단타 자동매매 운영
-- 미국 단타 자동매매 운영
-- 레버리지 ETF 무한매수 사이클 운영
-- 대시보드 기반 실계좌/전략 상태 모니터링
-- 거래 이력, 시뮬레이션, 설정, 유지보수 도구 제공
-- FireGate 동기화 및 한국투자증권 API 연동
+## 계정과 권한
 
-## 핵심 기능
+- 실투자(LIVE)가 기본입니다. 모의투자(PAPER)는 설정에서 별도로 신청하고 전환합니다.
+- 투자 모드와 사용자/계좌별 설정, 잔고, 기록, 사이클, 캐시를 분리합니다. 화면 전환은 자동매매 ON/OFF 명령이 아닙니다.
+- 일반 사용자: 개인 KIS API 연결, FireGate 연결, 무한매수, 대시보드, 거래 이력.
+- 관리자: 국내·미국 단타와 분석 기능을 추가합니다. 단타 API도 권한을 검사합니다.
+- 무한매수·국장 단타·미장 단타 스위치는 독립적입니다. 실투자 활성화에는 별도 허용과 경고 확인이 필요합니다.
 
-### 1. 대시보드
+## 주요 화면
 
-대시보드는 전체 운용 현황을 한 화면에서 보는 운영 콘솔이다.
+| 화면 | 경로 | 역할 |
+|---|---|---|
+| 대시보드 | `/dashboard` | 자산, 기간별 실현손익, 현재 미실현손익, 사이클·자동매매 상태 |
+| 무한매수 | `/infinite-buy` | FireGate 연결, 사이클·주문 계획 동기화, LOC 운용 |
+| 거래 이력 | `/history` | 브로커 체결 대조, 실현손익, 복기 |
+| 설정 | `/settings` | 계정 전환, API 및 운용 설정 |
+| 국내 단타 | `/daytrade` | 관리자용 추천·예산·진입·청산 감시 |
+| 미국 단타 | `/daytrade/us` | 관리자용 미국장 후보·시장시간·USD 예산 |
+| 시뮬레이션 | `/simulation` | 전략 연구·백테스트 |
+| 로그인 | `/access` | 사용자 인증 |
 
-- 총자산, 실현손익, 미실현손익, 오늘 손익 요약
-- 국내/미국 단타 상태 카드
-- 무한매수 진행 사이클과 예약 주문 현황
-- FireGate 기준 포트폴리오 동기화 상태 확인
-- 자동매매 ON/OFF, 즉시 실행, 수동 제어 진입점 제공
+## 데이터와 주문의 기준
 
-관련 화면:
-- [src/app/page.dashboard](src/app/page.dashboard)
+FireGate는 포트폴리오와 전략 **계획**의 입력입니다. 실제 보유 수량, 체결, 예약 접수 여부는 KIS 결과와 대조합니다. 계획이나 주문 요청 성공만으로 체결 기록을 만들지 않습니다.
 
-### 2. 국내 단타 자동매매
+- 사이클별 분할 매수·매도, LOC 예약 및 체결 동기화
+- 주문 조회 전체 페이지 확인과 중복 접수 방어
+- 조회 실패·불완전 조회·접수 여부 불명확을 “주문 없음”으로 취급하지 않음
+- 무한매수 대상 SOXL의 단타 중복 운용 방지
 
-국내 단타 모듈은 장중 추천, 진입, 재진입 쿨다운, 손절/익절, 실시간 상태 추적을 포함한다.
+## 손익 조회 최적화
 
-- 학습 기반 추천 종목 캐시
-- 자동 진입/자동 청산 감시
-- 수동 매도/보호가/목표가 보정
-- 일중 로그 및 거래일지 추적
-- OFF 시 매도 감시까지 중단하는 안전 가드 적용
+어제까지의 기간 집계와 오늘 체결 집계를 나누어 DB에 저장합니다. 과거 집계는 6시간, 오늘 집계는 30초 캐시를 사용하며 화면은 저장된 결과를 먼저 읽고 백그라운드 갱신합니다. 정정 체결과 지연 반영 가능성 때문에 과거 값도 영구 고정하지 않습니다.
 
-관련 화면/로직:
-- [src/app/page.daytrade](src/app/page.daytrade)
-- [src/portal/trading/model/struct/daytrade.py](src/portal/trading/model/struct/daytrade.py)
-- [src/portal/trading/model/struct/daytrade_engine.py](src/portal/trading/model/struct/daytrade_engine.py)
+캐시가 준비된 로컬 화면에서 기간 전환 172~176ms를 확인했습니다. **첫 집계·KIS 지연·전체 페이지까지 1초를 보장하는 수치는 아닙니다.** [구현](src/portal/trading/model/profit_cache.py)과 [운영 점검](docs/operations.md)을 참고하세요.
 
-### 3. 미국 단타 자동매매
+## 단타 재학습
 
-미국 단타는 국내 단타와 분리된 화면과 운용 설정을 가지며, 해외 주문가능금액·환전·시장시간 차이를 반영한다.
+V-REV와 거래량 돌파 전략의 후보·파라미터를 백테스트하고 검증 구간 및 품질 기준으로 걸러냅니다. “재학습”은 수익성 있는 모델이 자동으로 확보된다는 뜻이 아닙니다. 유효한 추천 캐시는 재사용하고 만료·누락 시 재계산합니다.
 
-- 미국장 전용 추천/랭킹
-- USD/KRW 예산 반영
-- 장 마감 정책 및 자동 청산 정책 분리
-- 국내 단타와 독립적인 ON/OFF 및 운영 로그
-
-관련 화면:
-- [src/app/page.daytrade.us](src/app/page.daytrade.us)
-
-### 4. 무한매수 엔진
-
-레버리지 ETF 중심의 사이클형 자동매매 엔진이다.
-
-- 분할 매수 사이클 관리
-- LOC 예약 매수/매도
-- 추가 매수 확장(PENDING_EXTENSION)
-- 분할 매도, 폭락장 추가매수, 수수료 반영
-- FireGate 포트폴리오와 정합성 유지
-
-관련 화면/로직:
-- [src/app/page.infinitebuy](src/app/page.infinitebuy)
-- [src/portal/trading/model/struct/engine.py](src/portal/trading/model/struct/engine.py)
-- [src/portal/trading/model/struct/firegate_bridge.py](src/portal/trading/model/struct/firegate_bridge.py)
-
-### 5. 시뮬레이션과 연구
-
-실매매 전 전략 검증을 위해 시뮬레이션과 알고리즘 연구 문서를 함께 유지한다.
-
-- 전략별 백테스트 실행
-- 시뮬레이션 결과 저장 및 비교
-- 추천 필터, 품질 게이트, V-REV/볼륨 전략 검증
-
-관련 화면/문서:
-- [src/app/page.simulation](src/app/page.simulation)
-- [docs/daytrade](docs/daytrade)
-- [tests](tests)
-
-### 6. 거래 이력과 운영 추적
-
-거래 이력 화면은 단순 로그 모음이 아니라 운영 복기 도구다.
-
-- 사이클 단위 거래 조회
-- 일별/종목별 거래 로그 확인
-- 계좌 스냅샷과 실현손익 검증
-- 브로커 동기화 결과 추적
-
-관련 화면:
-- [src/app/page.history](src/app/page.history)
-
-### 7. 설정/운영 관리
-
-설정 화면에서 API 연결, 감시 종목, 예산, 자동매매 옵션, 데이터 유지보수 작업을 관리한다.
-
-- KIS 연결 정보 관리
-- 종목/워치리스트 관리
-- 단타·무한매수 파라미터 설정
-- DB 정리 및 요약 재생성 도구
-- 위험한 자동매매 활성화 시 경고 모달 제공
-
-관련 화면:
-- [src/app/page.settings](src/app/page.settings)
-
-## 주요 라우트
-
-| 경로 | 용도 |
-|------|------|
-| `/dashboard` | 통합 운용 대시보드 |
-| `/daytrade` | 국내 단타 운영 |
-| `/daytrade/us` | 미국 단타 운영 |
-| `/infinite-buy` | 무한매수 운영 |
-| `/history` | 거래 이력/로그/스냅샷 |
-| `/simulation` | 전략 시뮬레이션 |
-| `/settings` | API/예산/감시종목/유지보수 설정 |
-| `/access` | 로그인 |
-
-## 저장소 구조
-
-이 프로젝트에서 중요한 디렉토리는 다음과 같다.
-
-```text
-src/
-├── app/
-│   ├── page.dashboard/        # 통합 대시보드
-│   ├── page.daytrade/         # 국내 단타
-│   ├── page.daytrade.us/      # 미국 단타
-│   ├── page.infinitebuy/      # 무한매수
-│   ├── page.history/          # 거래 이력
-│   ├── page.simulation/       # 시뮬레이션
-│   ├── page.settings/         # 설정/유지보수
-│   └── component.nav.trading/ # 트레이딩 전용 네비게이션
-│
-├── model/
-│   └── struct.py              # 프로젝트 루트 모델 진입점
-│
-├── portal/
-│   ├── season/                # 공통 프레임워크/세션/서비스
-│   └── trading/               # 실질적인 자동매매 도메인 패키지
-│       ├── model/db/          # 거래 DB 스키마
-│       ├── model/struct/      # 엔진, 브로커 연동, 전략
-│       ├── route/scheduler/   # 스케줄 실행 엔드포인트
-│       └── README.md          # trading 패키지 상세 설명
-│
-├── assets/                    # 아이콘/정적 자산
-└── types/                     # 프런트엔드 타입 선언
-
-tests/                         # 회귀 테스트
-docs/daytrade/                 # 단타 알고리즘/운영 문서
-devlog/                        # 날짜별 작업 기록
-```
-
-## 아키텍처 요약
-
-### 운영 흐름
-
-1. 화면에서 설정/실행 요청
-2. 페이지 `api.py` 또는 스케줄 route 호출
-3. `portal/trading` 모델이 브로커/KIS/FireGate/DB와 상호작용
-4. 엔진이 주문 계획·진입·청산·로그를 처리
-5. 결과가 대시보드/이력/설정 화면에 반영
-
-### 핵심 도메인 계층
-
-- `kis_api.py`: 한국투자증권 API 인증, 잔고, 주문, 시세
-- `engine.py`: 무한매수 엔진
-- `daytrade.py`: 단타 운용 설정·상태 진입점
-- `daytrade_engine.py`: 단타 매수/매도 트리거 실행기
-- `firegate_bridge.py`: FireGate 포트폴리오 동기화
-- `strategy.py`: 전략 규칙/랭킹 계산 보조
-
-## 데이터 저장
-
-주요 테이블:
-
-- `trading_config`: 전역 운용 설정
-- `etf_watchlist`: 감시 종목 목록
-- `trading_cycle`: 무한매수 사이클
-- `cycle_trade`: 사이클 단위 체결 기록
-- `trade_log`: 단타/무한매수 통합 거래 이벤트 로그
-- `account_snapshot`: 계좌 스냅샷
-- `daily_trade_summary`: 일일 요약
-- `simulation_run`, `simulation_trade`: 시뮬레이션 기록
-
-데이터 정리 정책은 [DATABASE_CLEANUP_GUIDE.md](DATABASE_CLEANUP_GUIDE.md)에 정리되어 있다.
+2026-10-08 13:52 결과: **60개 평가 조합, 진입 기준 통과 0개, 데이터 조회 실패 2종목**. 거래를 만들기 위해 품질 기준을 임의로 낮추지 않았습니다. 수치와 재학습 화면 타임아웃 문제는 [현재 상태](docs/latest-state-2026-10-08.md)에 기록했습니다.
 
 ## 안전 원칙
 
-- 자동매매 `OFF`는 “아무것도 하지 않음”이 원칙이다.
-- 단타 ON 전환은 경고 모달을 통해 명시적으로 확인한다.
-- 실계좌 상태는 브로커/KIS/FireGate 기준과 지속적으로 대조한다.
-- 런타임 산출물과 실거래 상태 파일은 `data/` 아래에 쌓이며, Git 커밋 대상에서 제외하는 것을 기본으로 한다.
+- OFF 상태에서 자동 진입·청산·정정·취소를 실행하지 않습니다. 이미 증권사에 접수된 주문은 OFF만으로 취소되지 않습니다.
+- 개인 종목 잠금과 전략 소유권을 주문 경로에서 확인합니다. 잠금 해제만으로 모든 주문 조건을 통과하는 것은 아닙니다.
+- 주문가능금액, 미체결, 무한매수 확보금, 시장시간, 전략 품질을 함께 검사합니다. 원화 잔고를 확인 없이 달러 주문가능금액으로 간주하지 않습니다.
+- 백테스트·모의 검증과 실계좌 주문·부분체결·취소·결제 검증을 구분합니다. 자동매매에는 손실 위험이 있습니다.
 
-## 테스트
+## 개발·검증
 
-주요 회귀 테스트:
+저장소 루트 기준 명령입니다. Python 가상환경과 `requirements.txt` 의존성, Node.js, 연결된 WIZ 런타임이 필요합니다. 새 PC에서 저장소 복제만으로 실행되는 구성은 아닙니다.
 
-- [tests/test_daytrade_engine_regressions.py](tests/test_daytrade_engine_regressions.py)
-- [tests/test_dashboard_accounting_regressions.py](tests/test_dashboard_accounting_regressions.py)
-- [tests/test_firegate_bridge.py](tests/test_firegate_bridge.py)
-- [tests/test_kis_api_buying_power.py](tests/test_kis_api_buying_power.py)
-- [tests/test_infinitebuy_loc_schedule_regressions.py](tests/test_infinitebuy_loc_schedule_regressions.py)
+```powershell
+# 주문을 보내지 않는 회귀 테스트
+.\.venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -q
 
-## 함께 보면 좋은 문서
+# 기존 WIZ 런타임의 프런트엔드 및 Python bundle 재생성
+powershell -NoProfile -File scripts/rebuild-stock8-frontend.ps1 -RuntimeRoot C:\stock8-runtime2\app
+```
 
-- [docs/latest-state-2026-06-30.md](docs/latest-state-2026-06-30.md)
-- [src/portal/trading/README.md](src/portal/trading/README.md)
-- [docs/daytrade/architecture.md](docs/daytrade/architecture.md)
-- [docs/daytrade/live-trading-mechanism.md](docs/daytrade/live-trading-mechanism.md)
-- [docs/daytrade/strategy-playbook.md](docs/daytrade/strategy-playbook.md)
-- [devlog.md](devlog.md)
+서버는 원본 `src`가 아닌 배포된 `bundle/src`, `bundle/www`를 사용합니다. 수정 후 빌드 산출물과 실행 프로세스 버전을 확인해야 합니다. [운영 점검 순서](docs/operations.md)를 따르세요. 서버 시작 스크립트는 저장된 ON 상태를 재개할 수 있으므로 검증 목적으로 무심코 실행하지 마세요.
 
-## 주의
+## 코드와 데이터
 
-이 저장소는 게시판/회원관리 샘플 페이지를 일부 포함하지만, 현재 프로젝트의 본체는 주식 자동화 도메인이다. 문서와 변경 설명은 반드시 자동매매 시스템 관점에서 작성한다.
+```text
+src/app/                  화면별 view.ts / view.pug / api.py
+src/portal/trading/model/ 계정 컨텍스트, 주문 정책, 손익 저장, 스케줄러
+  struct/                 KIS, FireGate, 무한매수·단타 엔진
+  db/                     사이클, 체결, 설정, 스냅샷 스키마
+tests/                    회귀 테스트
+scripts/                  빌드, 읽기 전용 감사, 연구 도구
+docs/                     운영 및 전략 문서
+data/                     로컬 실행 데이터·계좌 DB·로그 (새 커밋에서 제외)
+```
+
+`trading_config`는 계정 범위 설정과 손익 스냅샷 등을 저장하며 단일 전역 설정으로 취급하면 안 됩니다. `trading_cycle`, `cycle_trade`, `trade_log`, `account_snapshot`, `daily_trade_summary`가 주요 기록 모델입니다.
+
+API 키, 토큰, 계좌번호, 실거래 원장, 개인 스크린샷·감사 보고서를 Git에 넣지 않습니다. 과거에 추적된 런타임 파일은 `.gitignore`만으로 제거되지 않으므로 커밋 파일을 명시적으로 검토합니다.
+
+## 문서
+
+- [현재 상태 및 검증 한계](docs/latest-state-2026-10-08.md)
+- [운영·배포·재학습 점검](docs/operations.md)
+- [트레이딩 패키지](src/portal/trading/README.md)
+- [문서 색인](docs/README.md)
+- [단타 아키텍처](docs/daytrade/architecture.md), [전략 플레이북](docs/daytrade/strategy-playbook.md)
+- [DB 정리 가이드](DATABASE_CLEANUP_GUIDE.md) — 실행 전 계정 범위와 백업 확인 필수

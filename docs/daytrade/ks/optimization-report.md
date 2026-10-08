@@ -1,6 +1,6 @@
 # Domestic Daytrade Optimization Report
 
-- Generated: 2026-10-08 09:21:52
+- Generated: 2026-10-08 13:52:17
 - Symbol: 252670
 - Market: KS
 - Strategy: V-REV 역추세
