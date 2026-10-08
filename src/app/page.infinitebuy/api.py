@@ -220,19 +220,46 @@ def _normalize_exchange(exchange):
 
 def _watchlist_rows(watchlist_db):
     try:
-        return watchlist_db.rows(is_active=True, orderby="created", order="ASC", dump=200) or []
+        rows = watchlist_db.rows(is_active=True, orderby="created", order="ASC", dump=200) or []
     except Exception:
         try:
-            return watchlist_db.rows(orderby="created", order="ASC", dump=200) or []
+            rows = watchlist_db.rows(orderby="created", order="ASC", dump=200) or []
         except Exception:
             return []
+
+    # Background broker reconciliation can legitimately create an unscoped
+    # legacy row before a signed-in user has a scoped row.  They are the same
+    # logical instrument and must never render as two portfolio cards.
+    by_symbol = {}
+    for row in rows:
+        symbol = _normalize_symbol((row or {}).get("symbol"))
+        if not symbol:
+            continue
+        current = by_symbol.get(symbol)
+        row_stamp = str((row or {}).get("updated") or (row or {}).get("created") or "")
+        current_stamp = str((current or {}).get("updated") or (current or {}).get("created") or "")
+        if current is None or row_stamp >= current_stamp:
+            by_symbol[symbol] = row
+    return list(by_symbol.values())
 
 
 def _active_cycle(cycle_db, symbol):
     for status in _ACTIVE_STATUSES:
-        row = cycle_db.get(symbol=symbol, status=status)
-        if row:
-            return row
+        try:
+            rows = cycle_db.rows(symbol=symbol, status=status, orderby="updated", order="DESC", dump=200) or []
+        except Exception:
+            row = cycle_db.get(symbol=symbol, status=status)
+            rows = [row] if row else []
+        if rows:
+            # Prefer the row that represents the real broker holding.  This
+            # prevents a newer but empty user-scoped shell cycle from hiding a
+            # legacy cycle that owns the actual quantity and cost basis.
+            return max(rows, key=lambda row: (
+                _safe_int((row or {}).get("total_qty"), 0) > 0,
+                _safe_float((row or {}).get("total_spent"), 0) > 0,
+                _safe_int((row or {}).get("current_round"), 0),
+                str((row or {}).get("updated") or (row or {}).get("created") or ""),
+            ))
     return None
 
 

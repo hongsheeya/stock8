@@ -4,7 +4,13 @@ import { i18n } from '@wiz/libs/portal/trading/i18n';
 
 export class Component implements OnInit {
     // Tab: 'daytrade' | 'cycles' | 'logs'
-    public tab: string = 'daytrade';
+    public tab: string = 'cycles';
+    public get showDaytrade(): boolean {
+        const user: any = this.service?.auth?.session || {};
+        return (String(user.role || user.user?.role || '').toLowerCase() === 'admin'
+            || String(user.email || user.user?.email || '').toLowerCase() === 'gigukbyun@gmail.com')
+            && window.localStorage.getItem('admin_preview_user_mode') !== 'true';
+    }
     public t = (key: string) => i18n.t(key);
 
     // Cycles
@@ -27,6 +33,7 @@ export class Component implements OnInit {
     public daytradeTotal: number = 0;
     public daytradeHasMore: boolean = false;
     public daytradeLoadingMore: boolean = false;
+    public daytradeSyncing: boolean = false;
     public daytradeOlderSummary: any = {};
     public daytradeMarketFilter: string = '';
     public daytradeActionFilter: string = '';
@@ -54,12 +61,15 @@ export class Component implements OnInit {
     public async ngOnInit() {
         await this.service.init(this);
         await this.service.auth.allow("/access");
-        await this.loadSymbols();
-        await this.loadDaytradeTrades();
+        await Promise.all([
+            this.loadSymbols(),
+            this.loadCycles(),
+        ]);
         await this.service.render();
     }
 
     public async switchTab(t: string) {
+        if (t === 'daytrade' && !this.showDaytrade) return;
         this.tab = t;
         this.selectedCycle = null;
         if (t === 'daytrade') await this.loadDaytradeTrades();
@@ -139,31 +149,60 @@ export class Component implements OnInit {
     }
 
     // ─── Daytrade ───
-    public async loadDaytradeTrades(append: boolean = false) {
+    public async loadDaytradeTrades(append: boolean = false, syncBroker: boolean = false) {
         if (append) this.daytradeLoadingMore = true;
-        else this.loading = true;
+        else if (!syncBroker) this.loading = true;
         await this.service.render();
-        const res = await wiz.call("daytrade_trades", {
-            page: this.daytradePage,
-            market: this.daytradeMarketFilter,
-            action: this.daytradeActionFilter,
-            symbol: this.daytradeSymbolFilter,
-            search: this.daytradeSearchText,
-            sync_broker: 'false',
-            include_old: this.daytradePage > 3 ? 'true' : 'false',
-        });
-        if (res.code === 200) {
-            const rows = res.data.rows || [];
-            this.daytradeTrades = append ? this.daytradeTrades.concat(rows) : rows;
-            this.daytradeSummary = res.data.summary || {};
-            this.daytradeTotalPages = res.data.total_pages || 1;
-            this.daytradeTotal = res.data.total || this.daytradeTrades.length;
-            this.daytradeHasMore = res.data.has_more === true;
-            this.daytradeOlderSummary = res.data.older_summary || {};
+        try {
+            const request = wiz.call("daytrade_trades", {
+                page: this.daytradePage,
+                market: this.daytradeMarketFilter,
+                action: this.daytradeActionFilter,
+                symbol: this.daytradeSymbolFilter,
+                search: this.daytradeSearchText,
+                sync_broker: syncBroker ? 'true' : 'false',
+                include_old: this.daytradePage > 3 ? 'true' : 'false',
+            });
+            const res: any = syncBroker
+                ? await Promise.race([
+                    request,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('KIS_SYNC_TIMEOUT')), 15000)),
+                ])
+                : await request;
+            if (res.code === 200) {
+                const rows = res.data.rows || [];
+                this.daytradeTrades = append ? this.daytradeTrades.concat(rows) : rows;
+                this.daytradeSummary = res.data.summary || {};
+                this.daytradeTotalPages = res.data.total_pages || 1;
+                this.daytradeTotal = res.data.total || this.daytradeTrades.length;
+                this.daytradeHasMore = res.data.has_more === true;
+                this.daytradeOlderSummary = res.data.older_summary || {};
+                this.loadError = '';
+            } else {
+                this.loadError = res.data?.message || '거래이력을 불러오지 못했습니다.';
+            }
+        } catch (e: any) {
+            console.error('daytrade history load failed:', e);
+            this.loadError = syncBroker && e?.message === 'KIS_SYNC_TIMEOUT'
+                ? 'KIS 과거 체결 조회가 15초를 초과했습니다. 기존 거래이력은 유지되며 백그라운드 조회 완료 후 다시 동기화할 수 있습니다.'
+                : '거래이력 응답이 지연되고 있습니다. 로컬 체결 로그를 다시 불러와주세요.';
+        } finally {
+            if (append) this.daytradeLoadingMore = false;
+            else if (!syncBroker) this.loading = false;
+            await this.service.render();
         }
-        if (append) this.daytradeLoadingMore = false;
-        else this.loading = false;
-        await this.service.render();
+    }
+
+    public async syncDaytradeBrokerHistory() {
+        if (this.daytradeSyncing) return;
+        this.daytradeSyncing = true;
+        this.daytradePage = 1;
+        try {
+            await this.loadDaytradeTrades(false, true);
+        } finally {
+            this.daytradeSyncing = false;
+            await this.service.render();
+        }
     }
 
     public async filterDaytradeMarket(market: string) {
@@ -378,6 +417,7 @@ export class Component implements OnInit {
         const a = (action || '').toUpperCase();
         if (a.startsWith('BUY')) return 'bn-chip action-buy';
         if (a.startsWith('SELL')) return 'bn-chip action-sell';
+        if (a === 'ERROR') return 'bn-chip action-error';
         if (a === 'SKIP') return 'bn-chip action-muted';
         return 'bn-chip action-muted';
     }
@@ -390,6 +430,9 @@ export class Component implements OnInit {
 
     public actionLabel(action: string, detail: string = ''): string {
         const d = (detail || action || '').toUpperCase();
+        if (d.includes('ERROR')) return '주문 거절';
+        if (d.includes('SKIP')) return '미체결/건너뜀';
+        if (d.includes('PENDING') || (action || '').toUpperCase() === 'PENDING') return '접수·체결대기';
         if (d === 'BUY1') return '1차 매수';
         if (d === 'BUY2') return '2차 매수';
         if (d.includes('RESERVED')) return '예약매수';

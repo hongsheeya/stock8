@@ -5,9 +5,13 @@
 # API 문서: https://apiportal.koreainvestment.com/apiservice
 # =============================================================================
 import json
+import copy
 import datetime
+import hashlib
+import os
 import time
 import threading
+import sys
 from contextlib import contextmanager
 
 _TIME = wiz.model("portal/trading/kst")
@@ -28,17 +32,41 @@ except ImportError:
 REAL_BASE_URL = "https://openapi.koreainvestment.com:9443"
 MOCK_BASE_URL = "https://openapivts.koreainvestment.com:29443"
 
+TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+if TRADING_MODE not in ("PAPER", "LIVE"):
+    raise RuntimeError("TRADING_MODE must be PAPER or LIVE")
+PAPER_MODE = TRADING_MODE == "PAPER"
+LIVE_UNLOCKED = os.environ.get("STOCK8_LIVE_TRADING_UNLOCK", "") == "I_UNDERSTAND_LIVE_TRADING"
+
 TOKEN_ISSUE_PATH = "/oauth2/tokenP"
 TOKEN_REVOKE_PATH = "/oauth2/revokeP"
 _REQUEST_OPTIONS = threading.local()
+# WIZ executes model source into fresh classes for different requests. Class
+# attributes alone are not a process-wide limiter. Keep coordination outside
+# the reloaded module so the worker and HTTP handlers share one request budget.
+_GATEWAY_STATE = sys.__dict__.setdefault("_stock8_kis_gateway_v1", {
+    "lock": threading.RLock(), "last": 0.0, "blocked_until": 0.0,
+    "token_lock": threading.RLock(), "cache_lock": threading.RLock(), "cache": {},
+})
 
 
 class KisApi:
     """한국투자증권 Open API 래퍼"""
 
-    # Rate limiting: 초당 최대 호출 수 제한 (KIS API 초당 20건 제한)
+    # PAPER gateway is considerably stricter than the production quotation API.
+    # Keep one shared limiter for every KisApi instance/process thread so balance,
+    # quote and order calls cannot burst into the mock gateway together.
     _last_request_time = 0
-    _min_request_interval = 0.12  # 초 (약 초당 8건)
+    # The paper gateway is materially stricter than production and returns
+    # EGW00201/"초당 거래건수" under bursts around one request per second.
+    # Keep every request (including balance checks immediately before orders)
+    # on the conservative side of that boundary.
+    _min_request_interval = 1.10 if PAPER_MODE else 0.06
+    _rate_limit_lock = threading.RLock()
+    _rate_limit_blocked_until = 0.0
+    _token_issue_lock = _GATEWAY_STATE["token_lock"]
+    _paper_get_cache = _GATEWAY_STATE["cache"]
+    _paper_get_cache_lock = _GATEWAY_STATE["cache_lock"]
     PRICE_EXCHANGE_CANDIDATES = ("NAS", "NYS", "AMS")
     ORDER_EXCHANGE_MAP = {"NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX"}
     US_MARKET_HOLIDAYS = {
@@ -79,6 +107,13 @@ class KisApi:
         self._token_expires = None
         self._token_scope = ""
         self._logger = None
+        self._session = requests.Session() if requests is not None else None
+        if self._session is not None:
+            try:
+                adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0)
+                self._session.mount("https://", adapter)
+            except Exception:
+                pass
 
     @property
     def logger(self):
@@ -168,16 +203,16 @@ class KisApi:
 
     @property
     def app_key(self):
-        return self._get_config("kis_app_key")
+        return self._get_config("kis_paper_app_key" if PAPER_MODE else "kis_live_app_key")
 
     @property
     def app_secret(self):
-        return self._get_config("kis_app_secret")
+        return self._get_config("kis_paper_app_secret" if PAPER_MODE else "kis_live_app_secret")
 
     @property
     def account_no(self):
         """계좌번호 (8자리-2자리 형태)"""
-        return self._get_config("kis_account_no")
+        return self._get_config("kis_paper_account_no" if PAPER_MODE else "kis_live_account_no")
 
     @property
     def account_prefix(self):
@@ -201,12 +236,18 @@ class KisApi:
     @property
     def is_real(self):
         """실전투자 여부"""
-        val = self._get_config("kis_is_real", "false")
-        return val.lower() == "true"
+        if PAPER_MODE:
+            return False
+        return True
 
     @property
     def base_url(self):
         return REAL_BASE_URL if self.is_real else MOCK_BASE_URL
+
+    @property
+    def token_config_keys(self):
+        prefix = "kis_paper" if PAPER_MODE else "kis_live"
+        return f"{prefix}_access_token", f"{prefix}_token_expires"
 
     # =========================================================================
     # OAuth 토큰 관리
@@ -217,32 +258,100 @@ class KisApi:
             user_id = self.struct._current_user_id()
         except Exception:
             user_id = ""
-        return f"{user_id}:{self.app_key}:{self.account_no}:{'real' if self.is_real else 'mock'}"
+        return f"{user_id}:{self.app_key}:{self.account_no}:{TRADING_MODE.lower()}"
 
-    def _issue_token(self):
+    def _readiness_scope(self):
+        return hashlib.sha256(self._credential_scope().encode("utf-8")).hexdigest()
+
+    def _safe_oauth_error(self, resp):
+        """Return a useful OAuth error without exposing submitted credentials."""
+        status = int(getattr(resp, "status_code", 0) or 0)
+        details = []
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                for key in ("error_code", "msg_cd", "error", "error_description", "msg1", "message"):
+                    value = data.get(key)
+                    if value not in (None, ""):
+                        details.append(str(value).strip())
+        except Exception:
+            pass
+
+        safe_details = []
+        for value in details:
+            for secret in (self.app_key, self.app_secret, self.account_no):
+                if secret:
+                    value = value.replace(str(secret), "[REDACTED]")
+            value = value[:300]
+            if value and value not in safe_details:
+                safe_details.append(value)
+
+        if PAPER_MODE and status == 403:
+            message = (
+                "KIS 모의 OAuth가 요청을 거부했습니다 (HTTP 403). "
+                "KIS Developers에서 발급한 모의투자 전용 App Key/App Secret인지 확인하세요. "
+                "토큰 발급을 연속으로 시도했다면 잠시 후 한 번만 다시 시도하세요."
+            )
+        else:
+            message = f"KIS OAuth 토큰 발급에 실패했습니다 (HTTP {status or 'unknown'})."
+        if safe_details:
+            message += " KIS 응답: " + " / ".join(safe_details)
+        return message
+
+    def _issue_token(self, rejected_token=None):
         """접근토큰 발급"""
-        scope = self._credential_scope()
-        url = f"{self.base_url}{TOKEN_ISSUE_PATH}"
-        body = {
-            "grant_type": "client_credentials",
-            "appkey": self.app_key,
-            "appsecret": self.app_secret,
-        }
-        resp = requests.post(url, json=body, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        with self._token_issue_lock:
+            scope = self._credential_scope()
+            token_key, expires_key = self.token_config_keys
 
-        self._token = data.get("access_token")
-        self._token_scope = scope
-        # 토큰 유효기간: 약 24시간, 1시간 마진
-        expires_in = int(data.get("expires_in", 86400))
-        self._token_expires = time.time() + expires_in - 3600
+            # A concurrent request must reuse the token issued by the first.
+            cached_token = self._get_config(token_key)
+            if rejected_token and cached_token == rejected_token:
+                # Broker rejection overrides our local expiry. Keep a newer
+                # token issued by another reader, but never reuse this one.
+                self._set_config(expires_key, "0", "KIS rejected token expiry")
+                self._token = None
+                self._token_expires = 0
+            try:
+                cached_expires = float(self._get_config(expires_key, "0") or 0)
+            except (ValueError, TypeError):
+                cached_expires = 0
+            if cached_token and time.time() < cached_expires:
+                self._token = cached_token
+                self._token_expires = cached_expires
+                self._token_scope = scope
+                return self._token
 
-        # DB에 캐시
-        self._set_config("kis_access_token", self._token, "접근토큰", True)
-        self._set_config("kis_token_expires", str(self._token_expires), "토큰 만료시각")
+            url = f"{self.base_url}{TOKEN_ISSUE_PATH}"
+            self._assert_safe_request("POST", TOKEN_ISSUE_PATH, "OAUTH", url=url)
+            if not self.app_key or not self.app_secret:
+                raise RuntimeError("KIS PAPER app key/app secret are not configured")
+            body = {
+                "grant_type": "client_credentials",
+                "appkey": self.app_key,
+                "appsecret": self.app_secret,
+            }
+            resp = requests.post(url, json=body, timeout=10)
+            if not 200 <= int(getattr(resp, "status_code", 0) or 0) < 300:
+                raise RuntimeError(self._safe_oauth_error(resp))
+            try:
+                data = resp.json()
+            except Exception as exc:
+                raise RuntimeError("KIS OAuth 응답을 JSON으로 해석할 수 없습니다.") from exc
 
-        return self._token
+            self._token = data.get("access_token")
+            if not self._token:
+                raise RuntimeError("KIS OAuth 응답에 access_token이 없습니다.")
+            self._token_scope = scope
+            # 토큰 유효기간: 약 24시간, 1시간 마진
+            expires_in = int(data.get("expires_in", 86400))
+            self._token_expires = time.time() + expires_in - 3600
+
+            # DB에 캐시
+            self._set_config(token_key, self._token, "KIS access token", True)
+            self._set_config(expires_key, str(self._token_expires), "KIS token expiry")
+
+            return self._token
 
     def get_token(self):
         """유효한 접근토큰 반환 (만료 시 자동 갱신)"""
@@ -251,8 +360,9 @@ class KisApi:
             return self._token
 
         # DB 캐시에서 복원 시도
-        cached_token = self._get_config("kis_access_token")
-        cached_expires = self._get_config("kis_token_expires", "0")
+        token_key, expires_key = self.token_config_keys
+        cached_token = self._get_config(token_key)
+        cached_expires = self._get_config(expires_key, "0")
         try:
             cached_expires = float(cached_expires)
         except (ValueError, TypeError):
@@ -266,6 +376,19 @@ class KisApi:
 
         # 신규 발급
         return self._issue_token()
+
+    def has_valid_cached_token(self, min_ttl_sec=60):
+        """Check local token readiness without issuing a network request."""
+        try:
+            scope = self._credential_scope()
+            if self._token and self._token_scope == scope and float(self._token_expires or 0) > time.time() + float(min_ttl_sec):
+                return True
+            token_key, expires_key = self.token_config_keys
+            token = self._get_config(token_key)
+            expires = float(self._get_config(expires_key, "0") or 0)
+            return bool(token) and expires > time.time() + float(min_ttl_sec)
+        except Exception:
+            return False
 
     # =========================================================================
     # HTTP 요청 공통 래퍼
@@ -282,26 +405,95 @@ class KisApi:
             "custtype": "P",
         }
 
+    def _assert_safe_request(self, method, path, tr_id, body=None, url=None):
+        """Fail closed immediately before every KIS network request."""
+        method = str(method or "GET").upper()
+        path = str(path or "")
+        tr_id = str(tr_id or "").upper()
+        url = str(url or f"{self.base_url}{path}")
+        if PAPER_MODE:
+            if url.startswith(MOCK_BASE_URL) is False or REAL_BASE_URL in url:
+                raise RuntimeError("PAPER safety guard blocked a non-mock KIS endpoint")
+            if method == "POST" and "/trading/" in path and not tr_id.startswith("V"):
+                raise RuntimeError(f"PAPER safety guard blocked live order TR ID: {tr_id}")
+        else:
+            if not url.startswith(REAL_BASE_URL) or MOCK_BASE_URL in url:
+                raise RuntimeError("LIVE safety guard blocked a non-live KIS endpoint")
+            if method != "GET" and "/trading/" in path:
+                if getattr(self.struct, 'broker_provider', 'kis') != 'kis':
+                    raise RuntimeError('현재 선택한 증권사와 주문 증권사가 다릅니다.')
+                policy = getattr(self.struct, 'order_policy', None)
+                if policy is None:
+                    raise RuntimeError('실투자 주문 권한을 확인할 수 없습니다.')
+                payload = body if isinstance(body, dict) else {}
+                policy.assert_order(payload.get('PDNO') or payload.get('OVRS_PDNO') or '')
+
+        if method == "POST" and "/trading/" in path:
+            payload = body if isinstance(body, dict) else {}
+            for qty_key in ("ORD_QTY", "OVRS_ORD_QTY", "FT_ORD_QTY"):
+                if qty_key not in payload:
+                    continue
+                try:
+                    qty = float(payload.get(qty_key, 0) or 0)
+                except Exception:
+                    qty = 0
+                if qty <= 0:
+                    raise ValueError(f"Order quantity must be greater than zero ({qty_key})")
     @contextmanager
     def request_options(self, timeout=None, retries=None):
         prev_timeout = getattr(_REQUEST_OPTIONS, "timeout", None)
         prev_retries = getattr(_REQUEST_OPTIONS, "retries", None)
+        prev_deadline = getattr(_REQUEST_OPTIONS, 'deadline', None)
         _REQUEST_OPTIONS.timeout = timeout
         _REQUEST_OPTIONS.retries = retries
+        if timeout is not None:
+            deadline = time.monotonic() + max(0.01, float(timeout))
+            _REQUEST_OPTIONS.deadline = min(prev_deadline, deadline) if prev_deadline is not None else deadline
         try:
             yield
         finally:
             _REQUEST_OPTIONS.timeout = prev_timeout
             _REQUEST_OPTIONS.retries = prev_retries
+            _REQUEST_OPTIONS.deadline = prev_deadline
 
     def _rate_limit_wait(self):
         """API 호출 간 최소 간격 보장 (초당 호출 수 제한)"""
-        now = time.time()
-        elapsed = now - KisApi._last_request_time
-        if elapsed < self._min_request_interval:
-            wait = self._min_request_interval - elapsed
-            time.sleep(wait)
-        KisApi._last_request_time = time.time()
+        deadline = getattr(_REQUEST_OPTIONS, 'deadline', None)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not _GATEWAY_STATE['lock'].acquire(timeout=max(0, remaining)):
+                raise TimeoutError('KIS 요청 대기 한도 초과: 다른 조회 작업 또는 호출 제한 대기 중입니다.')
+            try:
+                now = time.monotonic()
+                wait = max(float(_GATEWAY_STATE['last']) + float(self._min_request_interval),
+                           float(_GATEWAY_STATE['blocked_until'])) - now
+                if wait >= deadline - now:
+                    raise TimeoutError('KIS 호출 제한으로 검증을 완료하지 못했습니다. 잠시 후 다시 확인하세요.')
+                if wait > 0:
+                    time.sleep(wait)
+                _GATEWAY_STATE['last'] = time.monotonic()
+            finally:
+                _GATEWAY_STATE['lock'].release()
+            return
+        with _GATEWAY_STATE["lock"]:
+            now = time.monotonic()
+            next_allowed = max(
+                float(_GATEWAY_STATE["last"]) + float(self._min_request_interval),
+                float(_GATEWAY_STATE["blocked_until"]),
+            )
+            if next_allowed > now:
+                time.sleep(next_allowed - now)
+            _GATEWAY_STATE["last"] = time.monotonic()
+
+    def _apply_rate_limit_cooldown(self, attempt=0):
+        """Share KIS back-pressure across all API instances and worker threads."""
+        cooldown = min(5.0, 1.25 * (2 ** max(0, int(attempt))))
+        with _GATEWAY_STATE["lock"]:
+            _GATEWAY_STATE["blocked_until"] = max(
+                float(_GATEWAY_STATE["blocked_until"]),
+                time.monotonic() + cooldown,
+            )
+        return cooldown
 
     def _request(self, method, path, tr_id, params=None, body=None, retries=2, tr_cont=""):
         """
@@ -314,6 +506,15 @@ class KisApi:
         - retries: 재시도 횟수
         """
         url = f"{self.base_url}{path}"
+        self._assert_safe_request(method, path, tr_id, body=body, url=url)
+        cache_key = ""
+        if PAPER_MODE and str(method or "").upper() == "GET" and not tr_cont:
+            scope = self._readiness_scope()
+            cache_key = json.dumps([scope, path, tr_id, params or {}], ensure_ascii=False, sort_keys=True, default=str)
+            with KisApi._paper_get_cache_lock:
+                cached = KisApi._paper_get_cache.get(cache_key)
+                if isinstance(cached, dict) and (time.monotonic() - float(cached.get("ts", 0) or 0)) < 20.0:
+                    return copy.deepcopy(cached.get("data"))
         headers = self._headers(tr_id)
         if tr_cont:
             headers["tr_cont"] = str(tr_cont)
@@ -329,15 +530,27 @@ class KisApi:
             except Exception:
                 retries = 0
 
-        for attempt in range(retries + 1):
+        # A timeout after submission is an unknown result, not permission to
+        # submit the same order again. Reconcile its broker status separately.
+        if str(method).upper() != "GET" and "/trading/" in path:
+            retries = 0
+
+        attempt = 0
+        auth_refreshed = False
+        while attempt <= retries:
             try:
                 # Rate limiting 적용
                 self._rate_limit_wait()
 
                 if method.upper() == "GET":
-                    resp = requests.get(url, headers=headers, params=params, timeout=request_timeout)
+                    client = self._session or requests
+                    resp = client.get(url, headers=headers, params=params, timeout=request_timeout)
                 else:
-                    resp = requests.post(url, headers=headers, json=body, timeout=request_timeout)
+                    client = self._session or requests
+                    # Recheck after token refresh / rate-limit wait as OFF or
+                    # symbol locks may have changed while this request queued.
+                    self._assert_safe_request(method, path, tr_id, body=body, url=url)
+                    resp = client.post(url, headers=headers, json=body, timeout=request_timeout)
 
                 data = resp.json()
                 if isinstance(data, dict):
@@ -353,22 +566,44 @@ class KisApi:
                 # 토큰 만료 에러 시 갱신 후 재시도
                 rt_cd = data.get("rt_cd", "")
                 msg1 = data.get("msg1", "")
-                if rt_cd != "0" and "token" in msg1.lower():
-                    self._issue_token()
-                    headers = self._headers(tr_id)
+                token_message = f"{data.get('msg_cd', '')} {msg1}".lower()
+                if rt_cd != "0" and any(marker in token_message for marker in ("token", "egw00123", "만료", "expired")):
+                    # Authentication recovery is separate from transport
+                    # retries. Never replay a write/order, even on rejection.
+                    if method.upper() != "GET" or auth_refreshed:
+                        return data
+                    auth_refreshed = True
+                    rejected = str(headers.get("authorization", "")).removeprefix("Bearer ")
+                    self._issue_token(rejected_token=rejected)
+                    headers["authorization"] = "Bearer " + self.get_token()
                     continue
 
                 # 초당 거래 건수 초과 시 대기 후 재시도
-                if rt_cd != "0" and ("초과" in msg1 or "exceeded" in msg1.lower() or "EGW00201" in msg1):
-                    self._log("warning", f"Rate limit exceeded (tr_id={tr_id}), waiting 1s and retrying...")
-                    time.sleep(1)
+                rate_limited = (
+                    rt_cd != "0"
+                    and (
+                        "초당 거래건수" in str(msg1)
+                        or "초과" in str(msg1)
+                        or "exceeded" in str(msg1).lower()
+                        or "EGW00201" in str(msg1)
+                        or str(data.get("msg_cd", "")).upper() == "EGW00201"
+                    )
+                )
+                if rate_limited:
+                    cooldown = self._apply_rate_limit_cooldown(attempt)
+                    self._log("warning", f"Rate limit exceeded (tr_id={tr_id}), cooling down {cooldown:.2f}s...")
                     if attempt < retries:
+                        attempt += 1
                         continue
 
+                if cache_key and isinstance(data, dict) and str(data.get("rt_cd", "")) == "0":
+                    with KisApi._paper_get_cache_lock:
+                        KisApi._paper_get_cache[cache_key] = {"ts": time.monotonic(), "data": copy.deepcopy(data)}
                 return data
 
             except requests.exceptions.RequestException as e:
                 if attempt < retries:
+                    attempt += 1
                     time.sleep(1)
                     continue
                 raise Exception(f"KIS API request failed: {str(e)}")
@@ -379,15 +614,133 @@ class KisApi:
     # API 연결 테스트
     # =========================================================================
 
+    def get_us_momentum_rank(self, exchange='NAS'):
+        """KIS overseas-stock-038: five-minute gainers, >=100k shares.
+
+        One page only; callers cache and use the common request rate limiter.
+        """
+        if exchange not in ('NAS', 'NYS', 'AMS'):
+            raise ValueError('지원하지 않는 미국 거래소입니다.')
+        data = self._request('GET', '/uapi/overseas-stock/v1/ranking/price-fluct',
+                             'HHDFS76260000', params={
+                                 'EXCD': exchange, 'GUBN': '1', 'MINX': '3',
+                                 'VOL_RANG': '4', 'KEYB': '', 'AUTH': ''}, retries=0) or {}
+        if str(data.get('rt_cd', '')) != '0':
+            raise RuntimeError(data.get('msg1') or '미국 급등 종목 조회 실패')
+        return list(data.get('output2', []) or [])
+
+    def get_domestic_volume_rank(self, min_price=1000, max_price=300000, min_volume=300000):
+        """Return KRX ordinary shares ranked by trading value/liquidity."""
+        data = self._request(
+            "GET",
+            "/uapi/domestic-stock/v1/quotations/volume-rank",
+            "FHPST01710000",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "20171",
+                "FID_INPUT_ISCD": "0000",
+                "FID_DIV_CLS_CODE": "1",
+                "FID_BLNG_CLS_CODE": "3",
+                "FID_TRGT_CLS_CODE": "000000000",
+                "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+                "FID_INPUT_PRICE_1": str(max(0, int(min_price))),
+                "FID_INPUT_PRICE_2": str(max(0, int(max_price))),
+                "FID_VOL_CNT": str(max(0, int(min_volume))),
+                "FID_INPUT_DATE_1": "",
+            },
+        ) or {}
+        if str(data.get("rt_cd", "")) != "0":
+            raise RuntimeError(data.get("msg1") or "국내주식 거래대금 순위 조회 실패")
+        return list(data.get("output", []) or [])
+
+    def get_domestic_fluctuation_rank(self, min_price=1000, max_price=300000, min_volume=300000, min_change=2.0, max_change=29.4, count=30):
+        """Return liquid KRX gainers while excluding exact upper-limit chasing."""
+        data = self._request(
+            "GET",
+            "/uapi/domestic-stock/v1/ranking/fluctuation",
+            "FHPST01700000",
+            params={
+                "fid_cond_mrkt_div_code": "J",
+                "fid_cond_scr_div_code": "20170",
+                "fid_input_iscd": "0000",
+                "fid_rank_sort_cls_code": "0000",
+                "fid_input_cnt_1": str(max(1, min(int(count), 50))),
+                "fid_prc_cls_code": "0",
+                "fid_input_price_1": str(max(0, int(min_price))),
+                "fid_input_price_2": str(max(0, int(max_price))),
+                "fid_vol_cnt": str(max(0, int(min_volume))),
+                "fid_trgt_cls_code": "0",
+                "fid_trgt_exls_cls_code": "0",
+                "fid_div_cls_code": "1",
+                "fid_rsfl_rate1": str(float(min_change)),
+                "fid_rsfl_rate2": str(float(max_change)),
+            },
+        ) or {}
+        if str(data.get("rt_cd", "")) != "0":
+            raise RuntimeError(data.get("msg1") or "국내주식 등락률 순위 조회 실패")
+        return list(data.get("output", []) or [])
+
     def test_connection(self):
-        """API 연결 테스트 (토큰 발급 시도)"""
+        """LIVE token issuance alone does not validate the key's environment."""
         try:
             token = self.get_token()
             if token:
-                return {"success": True, "message": "API 연결 성공"}
+                if not PAPER_MODE:
+                    with self.request_options(timeout=5, retries=0):
+                        self.get_present_balance()
+                    return {"success": True, "message": "실투자 인증 및 계좌 잔고 조회 성공"}
+                return {"success": True, "message": "API 인증 성공"}
             return {"success": False, "message": "토큰 발급 실패"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    def validate_paper_readiness(self):
+        previous = getattr(_REQUEST_OPTIONS, 'deadline', None)
+        _REQUEST_OPTIONS.deadline = time.monotonic() + 35
+        try:
+            with self.request_options(timeout=5, retries=0):
+                return self._validate_paper_readiness()
+        finally:
+            _REQUEST_OPTIONS.deadline = previous
+
+    def _validate_paper_readiness(self):
+        """Run the mandatory read-only validation chain before PAPER orders."""
+        if not PAPER_MODE:
+            return {"success": False, "message": "This validation is available in PAPER mode only", "diagnostics": []}
+        diagnostics = []
+        try:
+            token = self.get_token()
+            if not token:
+                raise RuntimeError("token issuance returned no access token")
+            diagnostics.append({"step": "auth", "success": True, "message": "KIS PAPER token issued"})
+
+            domestic_balance = self.get_domestic_balance()
+            overseas_balance = self.get_balance()
+            diagnostics.append({
+                "step": "balance", "success": True,
+                "message": f"Domestic {len(domestic_balance.get('holdings', []))} / Overseas {len(overseas_balance.get('holdings', []))} holdings",
+            })
+
+            domestic_price = self.get_domestic_current_price("005930")
+            overseas_price = self.get_current_price("TQQQ", exchange="NAS")
+            if float(domestic_price.get("price", 0) or 0) <= 0 or float(overseas_price.get("price", 0) or 0) <= 0:
+                raise RuntimeError("price query returned a non-positive price")
+            diagnostics.append({"step": "price", "success": True, "message": "005930 and TQQQ quotes verified"})
+
+            domestic_power = self.get_domestic_buying_power_info("005930", order_type="MARKET")
+            overseas_power = self.get_buying_power_info("TQQQ", price=overseas_price.get("price", 0), exchange="NASD")
+            diagnostics.append({
+                "step": "buying_power", "success": True,
+                "message": f"KRW {float(domestic_power.get('amount', 0) or 0):,.0f} / USD {float(overseas_power.get('amount', 0) or 0):,.2f}",
+            })
+
+            self._set_config("kis_paper_readiness_scope", self._readiness_scope(), "Validated PAPER credential scope", True)
+            self._set_config("kis_paper_readiness_verified_at", _TIME.now().isoformat(), "PAPER read-only validation time")
+            return {"success": True, "message": "KIS PAPER READY", "diagnostics": diagnostics}
+        except Exception as e:
+            diagnostics.append({"step": "blocked", "success": False, "message": str(e)})
+            self._set_config("kis_paper_readiness_scope", "", "PAPER readiness invalidated", True)
+            return {"success": False, "message": f"KIS PAPER NEEDS FIX: {e}", "diagnostics": diagnostics}
 
     # =========================================================================
     # 설정 저장/조회 편의 메서드
@@ -395,10 +748,14 @@ class KisApi:
 
     def save_settings(self, app_key, app_secret, account_no, is_real=False):
         """API 설정 일괄 저장"""
-        self._set_config("kis_app_key", app_key, "앱 키", True)
-        self._set_config("kis_app_secret", app_secret, "앱 시크릿", True)
-        self._set_config("kis_account_no", account_no, "계좌번호", True)
-        self._set_config("kis_is_real", str(is_real).lower(), "실전투자 여부")
+        if PAPER_MODE and bool(is_real):
+            raise RuntimeError("PAPER mode cannot save live-trading settings")
+        prefix = "kis_paper" if PAPER_MODE else "kis_live"
+        self._set_config(f"{prefix}_app_key", app_key, "KIS environment-specific app key", True)
+        self._set_config(f"{prefix}_app_secret", app_secret, "KIS environment-specific app secret", True)
+        self._set_config(f"{prefix}_account_no", account_no, "KIS environment-specific account", True)
+        if PAPER_MODE:
+            self._set_config("kis_paper_readiness_scope", "", "PAPER readiness invalidated", True)
         # 토큰 초기화 (새 키로 재발급)
         self._token = None
         self._token_expires = None
@@ -535,12 +892,15 @@ class KisApi:
 
         raise Exception(f"현재가 조회 실패 [{symbol}]")
 
-    def get_domestic_current_price(self, symbol):
+    def get_domestic_current_price(self, symbol, exchange="KRX"):
         """국내주식 현재가 조회"""
+        quote_codes = {'KRX': 'J', 'NXT': 'NX', 'ALL': 'UN'}
+        if exchange not in quote_codes or (not self.is_real and exchange != 'KRX'):
+            raise ValueError('지원하지 않는 시세 시장')
         tr_id = "FHKST01010100"
         path = "/uapi/domestic-stock/v1/quotations/inquire-price"
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_MRKT_DIV_CODE": quote_codes[exchange],
             "FID_INPUT_ISCD": str(symbol),
         }
         data = self._request("GET", path, tr_id, params=params)
@@ -558,6 +918,7 @@ class KisApi:
             "prev_close": float(output.get("stck_sdpr", 0) or 0),
             "timestamp": _TIME.normalize(_TIME.now()),
             "source": "kis_domestic_quote",
+            "exchange": exchange,
             "raw": output,
         }
 
@@ -609,7 +970,27 @@ class KisApi:
     # 해외주식 매수 주문
     # =========================================================================
 
-    def _domestic_order(self, side, symbol, qty, price=0, order_type="MARKET"):
+    def domestic_order_plan(self, symbol, qty, price=0, order_type="MARKET", exchange="KRX", evidence=None):
+        """Pure preflight; no order, token issuance, or permission changes.
+
+        Evidence is reserved for the verified market-data adapter, not a user
+        checkbox. Existing engine calls remain KRX regular-session only.
+        """
+        rules = wiz.model('portal/trading/domestic_market')
+        now = _TIME.now().replace(tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+        phase = rules.session(now, exchange)
+        if not self.is_real and (exchange != 'KRX' or phase != 'REGULAR'):
+            raise ValueError('모의투자는 KRX 정규장만 지원합니다')
+        if exchange != 'KRX' or phase != 'REGULAR':
+            if not evidence or evidence.get('symbol') != str(symbol):
+                raise ValueError('주문 종목과 일치하는 시장 검증 정보가 필요합니다')
+            # Do not silently extend old callers into a different market.
+            if self._get_config('domestic_extended_orders_enabled', 'false') != 'true':
+                raise ValueError('연장장 주문은 검증 완료 후 별도 활성화가 필요합니다')
+        return rules.route(now, exchange, order_type, price, qty, evidence)
+
+    def _domestic_order(self, side, symbol, qty, price=0, order_type="MARKET", exchange="KRX", evidence=None):
+        plan = self.domestic_order_plan(symbol, qty, price, order_type, exchange, evidence)
         # Shadow Mode: 실제 주문 전송 건너뛰기
         is_shadow_mode = self._get_config("daytrade_shadow_mode", "false").lower() == "true"
         if is_shadow_mode:
@@ -630,17 +1011,14 @@ class KisApi:
             raise Exception("국내주식 주문 구분이 잘못되었습니다.")
 
         tr_id_map = {
-            "BUY": "TTTC0802U" if self.is_real else "VTTC0802U",
-            "SELL": "TTTC0801U" if self.is_real else "VTTC0801U",
+            "BUY": "TTTC0012U" if self.is_real else "VTTC0012U",
+            "SELL": "TTTC0011U" if self.is_real else "VTTC0011U",
         }
         tr_id = tr_id_map[side]
         path = "/uapi/domestic-stock/v1/trading/order-cash"
 
-        if order_type == "MARKET":
-            ord_dvsn = "01"
-            price = 0
-        else:
-            ord_dvsn = "00"
+        ord_dvsn = plan['ord_dvsn']
+        price = plan['price']
 
         cano = self.account_prefix
         acnt_cd = self.account_suffix
@@ -654,6 +1032,9 @@ class KisApi:
             "ORD_DVSN": ord_dvsn,
             "ORD_QTY": str(int(qty)),
             "ORD_UNPR": str(int(price)) if price else "0",
+            "EXCG_ID_DVSN_CD": plan['exchange'],
+            "SLL_TYPE": "01" if side == 'SELL' else "",
+            "CNDT_PRIC": "",
         }
 
         data = self._request("POST", path, tr_id, body=body, retries=0)
@@ -664,6 +1045,10 @@ class KisApi:
         output = data.get("output", {})
         return {
             "order_no": output.get("ODNO", ""),
+            "exchange": plan['exchange'],
+            "market_session": plan['session'],
+            "ord_dvsn": plan['ord_dvsn'],
+            "org_branch_no": output.get("KRX_FWDG_ORD_ORGNO", ""),
             "order_time": output.get("ORD_TMD", ""),
             "symbol": symbol,
             "qty": int(qty),
@@ -672,11 +1057,11 @@ class KisApi:
             "side": side,
         }
 
-    def buy_domestic_order(self, symbol, qty, price=0, order_type="MARKET"):
-        return self._domestic_order("BUY", symbol, qty, price=price, order_type=order_type)
+    def buy_domestic_order(self, symbol, qty, price=0, order_type="MARKET", exchange="KRX", evidence=None):
+        return self._domestic_order("BUY", symbol, qty, price=price, order_type=order_type, exchange=exchange, evidence=evidence)
 
-    def sell_domestic_order(self, symbol, qty, price=0, order_type="MARKET"):
-        return self._domestic_order("SELL", symbol, qty, price=price, order_type=order_type)
+    def sell_domestic_order(self, symbol, qty, price=0, order_type="MARKET", exchange="KRX", evidence=None):
+        return self._domestic_order("SELL", symbol, qty, price=price, order_type=order_type, exchange=exchange, evidence=evidence)
 
     def get_domestic_balance(self):
         """국내주식 잔고 조회"""
@@ -724,7 +1109,13 @@ class KisApi:
                 "profit_rate": self._safe_float(item.get("evlu_pfls_rt", 0), 0),
             })
 
-        portfolio_eval_info = self._pick_amount_info(summary, ["scts_evlu_amt", "evlu_amt_smtl_amt"])
+        # Stock exposure must exclude cash. A broker-reported zero is valid
+        # after liquidation/reset and must not fall through to account equity.
+        stock_eval_key = "evlu_amt_smtl_amt"
+        portfolio_eval_info = {
+            "value": self._safe_float(summary[stock_eval_key], 0) if stock_eval_key in summary else sum(item["eval_amount"] for item in holdings),
+            "key": stock_eval_key if stock_eval_key in summary else "holdings.eval_amount",
+        }
         total_asset_info = self._pick_amount_info(summary, ["tot_evlu_amt", "nass_amt", "bfdy_tot_asst_evlu_amt", "tot_asst_amt"])
         return {
             "holdings": holdings,
@@ -829,22 +1220,17 @@ class KisApi:
         if amount_info.get("value", 0) <= 0:
             amount_info = cash_info
         if amount_info.get("value", 0) <= 0:
-            amount_info = broker_info
-        if amount_info.get("value", 0) <= 0:
             amount_info = withdrawable_info
+        # PAPER day trading is cash-only. `max_buy_amt` is explicitly the
+        # receivable/margin-inclusive value and may reach 2.5x on a 40%
+        # margin account. Keep it for diagnostics, never for execution.
 
         positive_candidates = [(key, value) for key, value in amount_values.items() if value > 0]
         display_key = amount_info.get("key", "inquire-psbl-order")
         display_amount = float(amount_info.get("value", 0.0))
         if positive_candidates:
             display_key, display_amount = max(positive_candidates, key=lambda item: item[1])
-        qty_info = self._pick_amount_info(output, [
-            "nrcvb_buy_qty",
-            "ord_psbl_qty",
-            "psbl_qty",
-            "buy_psbl_qty",
-            "max_buy_qty",
-        ])
+        qty_info = self._pick_amount_info(output, ["nrcvb_buy_qty"])
         executable_amount = float(amount_info.get("value", 0.0))
         cash_amount = max(
             amount_values.get("ord_psbl_cash", 0),
@@ -879,7 +1265,7 @@ class KisApi:
             "broker_qty": picked_qty,
             "executable_qty": executable_qty,
             "ok": True,
-            "message": "",
+            "message": "" if executable_amount > 0 else "미수 없는 현금 매수가능금액을 확인하지 못해 신규매수를 차단했습니다.",
             "source": source,
             "qty_source": qty_info.get("key", ""),
             "symbol": symbol,
@@ -887,6 +1273,7 @@ class KisApi:
             "query_price": query_price,
             "order_type": order_type_upper,
             "ord_dvsn": ord_dvsn,
+            "cash_only": True,
             "debug_fields": {
                 "wdrw_psbl_tot_amt": amount_values.get("wdrw_psbl_tot_amt", 0),
                 "max_buy_amt": amount_values.get("max_buy_amt", 0),
@@ -1035,6 +1422,84 @@ class KisApi:
             "order_type": order_type,
         }
 
+    def inspect_pending_reservation(self):
+        """Read-only broker reconciliation. Absence is not proof of rejection."""
+        pending = json.loads(self.struct.get_config('kis_reservation_pending', '') or '{}')
+        if not pending:
+            return {'status': 'clear', 'message': '미확인 예약 없음'}
+        at = datetime.datetime.fromisoformat(pending['at'])
+        start = (at - datetime.timedelta(days=1)).strftime('%Y%m%d')
+        end = self._kst_now().strftime('%Y%m%d')
+        symbol = str(pending.get('symbol', '')).upper()
+        if not symbol:
+            raise RuntimeError('미확인 예약 종목 누락')
+        with self.request_options(timeout=15, retries=0):
+            reservations = self.get_overseas_reservation_orders(start_date=start, end_date=end)
+            history = self.get_overseas_order_history(start_date=start, end_date=end, symbol=symbol, strict=True)
+        candidates = []
+        for row in reservations + history:
+            if str(row.get('symbol', '')).upper() != symbol:
+                continue
+            qty = row.get('order_qty', row.get('qty', 0))
+            price = row.get('order_price', row.get('price', 0))
+            if int(float(qty or 0)) == int(float(pending.get('qty', 0))) and abs(float(price or 0) - float(pending.get('price', 0))) < .0001:
+                candidates.append({k: row.get(k) for k in ('order_no','status','status_name','side','action')})
+        return {'status': 'candidate_found' if candidates else 'not_found',
+                'candidates': candidates, 'checked_at': self._kst_now().isoformat(),
+                'message': ('예약·주문·체결 자동 대조: 동일 조건 주문 발견, 중복 방지 보류' if candidates else
+                            '예약·주문·체결 자동 대조 완료: 동일 조건 주문 없음. 응답 유실 요청의 미접수 확정은 필요합니다.')}
+
+    def _reservation_write(self, path, tr_id, body):
+        # Persist BEFORE transmitting. A timeout or process exit must never
+        # turn an unknown broker outcome into permission to submit again.
+        lock = _GATEWAY_STATE.setdefault('reservation_write_lock', threading.RLock())
+        with lock:
+            key = 'kis_reservation_pending'
+            if self.struct.get_config(key, ''):
+                raise RuntimeError('이전 예약 요청의 접수 여부가 불명확합니다. KIS 주문내역 대조 전 추가 예약/취소를 차단합니다.')
+            receipt_key = 'kis_reservation_unseen_receipts'
+            receipts = json.loads(self.struct.get_config(receipt_key, '') or '{}')
+            fingerprint = hashlib.sha256(json.dumps([path, tr_id, body], sort_keys=True).encode()).hexdigest()
+            if fingerprint in receipts:
+                raise RuntimeError('이미 접수한 예약이 아직 전체 조회에 나타나지 않았습니다. 동일 주문 재전송을 차단합니다.')
+            pending = json.dumps({'at': self._kst_now().isoformat(), 'tr_id': tr_id,
+                                  'symbol': body.get('PDNO', ''),
+                                  'qty': body.get('FT_ORD_QTY', ''),
+                                  'price': body.get('FT_ORD_UNPR3', '')})
+            self.struct.set_config(key, pending, description='Unresolved reservation request; broker reconciliation required')
+            if self.struct.get_config(key, '') != pending:
+                raise RuntimeError('예약 요청 안전기록 저장 실패: 주문 미전송')
+            try:
+                data = self._request('POST', path, tr_id, body=body, retries=0)
+            except Exception:
+                # Do not save exception strings: transport errors may include URLs
+                # or credentials. Keep the durable unknown-outcome barrier intact.
+                record = json.loads(pending)
+                record['failure'] = 'transport_or_preflight_error'
+                self.struct.set_config(key, json.dumps(record), description='Unresolved reservation request')
+                raise
+            if not isinstance(data, dict) or str(data.get('rt_cd', '')) not in ('0', '1'):
+                # Preserve only broker diagnostic fields, never headers/body/account.
+                diagnostic = {k: str(data.get(k, ''))[:300] for k in ('rt_cd', 'msg_cd', 'msg1')} if isinstance(data, dict) else {'response_type': type(data).__name__}
+                record = json.loads(pending)
+                record['response'] = diagnostic
+                self.struct.set_config(key, json.dumps(record, ensure_ascii=False), description='Unresolved reservation response')
+                detail = ' / '.join(v for v in diagnostic.values() if v) or '상태 코드 누락'
+                raise RuntimeError(f'예약 응답 불명 ({detail}): 재전송 차단, KIS 주문내역 확인 필요')
+            output = data.get('output') or {}
+            if str(data.get('rt_cd')) == '0' and path.endswith('/order-resv'):
+                receipt = next((output.get(k) for k in ('ODNO', 'odno', 'OVRS_RSVN_ODNO', 'ovrs_rsvn_odno') if output.get(k)), '')
+                if not receipt:
+                    raise RuntimeError('예약 접수번호 누락: 재전송 차단, KIS 주문내역 확인 필요')
+                receipts[fingerprint] = {'order_no': str(receipt), 'symbol': body.get('PDNO', ''),
+                                         'date': self._kst_now().strftime('%Y%m%d')}
+                encoded = json.dumps(receipts, sort_keys=True)
+                self.struct.set_config(receipt_key, encoded, description='Accepted reservations awaiting complete broker query')
+                if self.struct.get_config(receipt_key, '') != encoded:
+                    raise RuntimeError('예약 접수기록 저장 실패: 추가 요청 차단')
+            self.struct.set_config(key, '', description='Reservation response confirmed')
+            return data
+
     def buy_reservation_order(self, symbol, qty, price=0, order_type="LOC", exchange="NASD"):
         """
         해외주식 미국 예약매수 주문.
@@ -1086,7 +1551,7 @@ class KisApi:
             f"ORD_DVSN={ord_dvsn}, order_type={order_type}"
         )
 
-        data = self._request("POST", path, tr_id, body=body, retries=0)
+        data = self._reservation_write(path, tr_id, body)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
@@ -1121,10 +1586,7 @@ class KisApi:
 
     def get_overseas_reservation_orders(self, start_date=None, end_date=None, exchanges=None):
         """해외주식 예약주문 조회. 정상 접수와 장전 전송거부 상태를 함께 반환한다."""
-        if self.is_real is False:
-            return []
-
-        tr_id = "TTTT3039R"
+        tr_id = "TTTT3039R" if self.is_real else "VTTT3039R"
         path = "/uapi/overseas-stock/v1/trading/order-resv-list"
         if not start_date:
             start_date = _TIME.today("%Y%m%d")
@@ -1147,6 +1609,7 @@ class KisApi:
             ctx_fk = ""
             ctx_nk = ""
             page = 0
+            visited_cursors = set()
             while page < max_pages:
                 page += 1
                 params = {
@@ -1170,7 +1633,7 @@ class KisApi:
                     tr_cont="N" if (ctx_fk or ctx_nk) else "",
                 )
                 if not data or data.get("rt_cd") != "0":
-                    break
+                    raise RuntimeError('해외 예약주문 전체 조회 실패: 부분 결과로 주문하지 않습니다.')
 
                 output = data.get("output", []) or data.get("output1", []) or []
                 for item in output:
@@ -1242,11 +1705,17 @@ class KisApi:
 
                 next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
                 next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
-                tr_cont = str(data.get("tr_cont", "") or "")
-                if (next_fk == "" and next_nk == "") or tr_cont in ("", "D", "E"):
+                tr_cont = str(data.get("tr_cont", "") or "").strip().upper()
+                if tr_cont in ("D", "E"):
                     break
-                if next_fk == ctx_fk and next_nk == ctx_nk:
+                if not tr_cont and not next_fk and not next_nk and len(output) < 20:
                     break
+                if tr_cont not in ('M', 'F') or not (next_fk or next_nk):
+                    raise RuntimeError('해외 예약주문 연속조회 완료 여부 불명: 추가 주문을 차단합니다.')
+                cursor = (next_fk, next_nk)
+                if cursor == (ctx_fk, ctx_nk) or cursor in visited_cursors:
+                    raise RuntimeError('해외 예약주문 연속조회 커서 반복: 부분 결과로 주문하지 않습니다.')
+                visited_cursors.add(cursor)
                 ctx_fk = next_fk
                 ctx_nk = next_nk
             else:
@@ -1255,6 +1724,18 @@ class KisApi:
                     "전체 예약을 확인하지 못했으므로 취소/재예약을 중단해야 합니다."
                 )
 
+        # Only a COMPLETE query may acknowledge broker visibility. Never clear
+        # receipts on a partial page, timeout, or empty eventually-consistent read.
+        lock = _GATEWAY_STATE.setdefault('reservation_write_lock', threading.RLock())
+        with lock:
+            receipt_key = 'kis_reservation_unseen_receipts'
+            receipts = json.loads(self.struct.get_config(receipt_key, '') or '{}')
+            visible = {(str(r['order_no']), r['symbol'], r['receipt_date']) for r in orders}
+            remaining = {k: v for k, v in receipts.items()
+                         if (v['order_no'], v['symbol'], v['date']) not in visible}
+            if remaining != receipts:
+                self.struct.set_config(receipt_key, json.dumps(remaining, sort_keys=True),
+                                       description='Complete broker query confirmed reservation visibility')
         return orders
 
     # =========================================================================
@@ -1311,7 +1792,7 @@ class KisApi:
             f"ORD_DVSN={ord_dvsn}, order_type={order_type}"
         )
 
-        data = self._request("POST", path, tr_id, body=body, retries=0)
+        data = self._reservation_write(path, tr_id, body)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
@@ -1377,7 +1858,7 @@ class KisApi:
             f"symbol={str(symbol or '').upper()}, exchange={str(exchange or 'NASD').upper()}, side={str(side or '').upper()}"
         )
 
-        data = self._request("POST", path, tr_id, body=body, retries=0)
+        data = self._reservation_write(path, tr_id, body)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
@@ -1410,6 +1891,15 @@ class KisApi:
         - order_type: "MARKET"=시장가, "LOC"=LOC 지정가(장마감 종가), "LIMIT"=지정가
         - LOC 매도 시 price에 지정가를 전달 (종가 이하일 때 체결)
         """
+        if PAPER_MODE:
+            # A local strategy position can outlive a broker account reset.
+            # Never submit an exit solely on that stale local quantity.
+            broker_balance = self.get_balance(exchange=exchange)
+            broker_qty = sum(self._safe_int(row.get("qty", 0), 0)
+                             for row in broker_balance.get("holdings", [])
+                             if str(row.get("symbol", "")).upper() == str(symbol).upper())
+            if self._safe_int(qty, 0) > broker_qty:
+                raise RuntimeError(f"브로커 보유수량 불일치 [{symbol}]: 요청 {qty}주 / KIS {broker_qty}주. 주문 미전송; 계좌 초기화·체결 동기화 확인 필요")
         tr_id = "TTTT1006U" if self.is_real else "VTTT1001U"
         path = "/uapi/overseas-stock/v1/trading/order"
 
@@ -1472,7 +1962,7 @@ class KisApi:
     # 해외주식 잔고 조회
     # =========================================================================
 
-    def get_balance(self):
+    def get_balance(self, exchange=None):
         """
         해외주식 잔고 조회 (보유종목 + 예수금)
         반환: dict {holdings: [...], cash_balance, total_eval, ...}
@@ -1484,9 +1974,10 @@ class KisApi:
         holdings_by_symbol = {}
         summary_eval_candidates = []
         cash_balance = 0.0
+        errors = []
 
         # 다중 거래소 조회
-        for excg in ["NASD", "NYSE", "AMEX"]:
+        for excg in ([exchange] if exchange else ["NASD", "NYSE", "AMEX"]):
             try:
                 params = {
                     "CANO": self.account_prefix,
@@ -1499,6 +1990,7 @@ class KisApi:
 
                 data = self._request("GET", path, tr_id, params=params)
                 if not data or data.get("rt_cd") != "0":
+                    errors.append(f"{excg}: " + str((data or {}).get("msg1", "응답 없음")))
                     continue
 
                 output1 = data.get("output1", [])
@@ -1555,9 +2047,12 @@ class KisApi:
                 if excg_cash > cash_balance:
                     cash_balance = excg_cash
 
-            except Exception:
+            except Exception as exc:
+                errors.append(f"{excg}: {exc}")
                 continue
 
+        if errors:
+            raise RuntimeError("해외 잔고 조회 불완전: " + " | ".join(errors))
         all_holdings = list(holdings_by_symbol.values())
         holdings_eval_sum = sum(self._safe_float(item.get("eval_amount", 0), 0) for item in all_holdings)
         # 거래소별 output2 요약은 계좌 전체 평가액이 반복될 수 있어 더하면 중복된다.
@@ -1862,7 +2357,7 @@ class KisApi:
             })
         return rows
 
-    def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None):
+    def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None, strict=False):
         """해외주식 체결/미체결 내역 조회 (NASD/NYSE/AMEX 전체, 페이지네이션 지원)."""
         tr_id = "TTTS3035R" if self.is_real else "VTTS3035R"
         path = "/uapi/overseas-stock/v1/trading/inquire-ccnl"
@@ -1911,6 +2406,8 @@ class KisApi:
                     attempted_queries += 1
                     data = self._request("GET", path, tr_id, params=params)
                     if not data or data.get("rt_cd") != "0":
+                        if strict:
+                            raise RuntimeError('주문/체결 대조 조회 실패: 부분 결과로 미접수를 판단하지 않습니다.')
                         failed_queries += 1
                         msg = data.get("msg1", "Unknown error") if data else "No response"
                         errors.append(f"{exchange}/{pdno_value or 'ALL'}:{msg}")
@@ -1938,6 +2435,10 @@ class KisApi:
                     next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
                     next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
                     tr_cont = str(data.get("tr_cont", "") or "")
+                    if strict and tr_cont in ('M', 'F') and (not (next_nk or next_fk) or (next_nk == ctx_nk and next_fk == ctx_fk) or _ == 9):
+                        raise RuntimeError('주문/체결 연속조회 미완료')
+                    if strict and not tr_cont and len(self._overseas_ccnl_rows(data)) >= 20:
+                        raise RuntimeError('주문/체결 연속조회 완료 정보 누락')
                     if (next_nk == "" and next_fk == "") or tr_cont in ("", "D", "E"):
                         break
                     if next_nk == ctx_nk and next_fk == ctx_fk:
@@ -2016,24 +2517,8 @@ class KisApi:
             msg = data.get("msg1", "Unknown error") if data else "No response"
             rt_cd = data.get("rt_cd", "?") if data else "no_data"
             self._log("warning", f"get_buying_power_info failed [{symbol}:{exchange}] rt_cd={rt_cd}, msg={msg}")
-            try:
-                balance = self.get_balance() or {}
-                cash_balance = self._safe_float(balance.get("cash_balance", 0), 0)
-                fallback_qty = int(cash_balance / price) if price > 0 and cash_balance > 0 else 0
-                if cash_balance > 0:
-                    return {
-                        "amount": cash_balance,
-                        "qty": max(0, fallback_qty),
-                        "ok": True,
-                        "message": f"USD 주문 가능액 API fallback 사용: rt_cd={rt_cd}, msg={msg}",
-                        "source": "balance.cash_balance",
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "price": price,
-                        "raw": {"rt_cd": rt_cd, "msg1": msg, "fallback_cash_balance": cash_balance},
-                    }
-            except Exception as fallback_error:
-                self._log("warning", f"get_buying_power_info fallback failed [{symbol}:{exchange}]: {fallback_error}")
+            # Account cash is not broker-confirmed buying power. Never promote
+            # a failed preflight to success by substituting a balance snapshot.
             return {
                 "amount": 0.0,
                 "ok": False,
@@ -2055,8 +2540,12 @@ class KisApi:
             "ord_psbl_qty": self._safe_int(output.get("ord_psbl_qty", 0), 0),
             "ovrs_max_ord_psbl_qty": self._safe_int(output.get("ovrs_max_ord_psbl_qty", 0), 0),
         }
-        amount_source, broker_amount = max(amount_candidates.items(), key=lambda item: item[1])
-        qty_source, broker_qty = max(qty_candidates.items(), key=lambda item: item[1])
+        # Preserve an explicit zero from the symbol-specific orderable fields;
+        # broader maximum/foreign-currency values must not override them.
+        amount_source, broker_amount = (('ovrs_ord_psbl_amt', amount_candidates['ovrs_ord_psbl_amt'])
+                                       if 'ovrs_ord_psbl_amt' in output else max(amount_candidates.items(), key=lambda item: item[1]))
+        qty_source, broker_qty = (('max_ord_psbl_qty', qty_candidates['max_ord_psbl_qty'])
+                                 if 'max_ord_psbl_qty' in output else max(qty_candidates.items(), key=lambda item: item[1]))
         exchange_after_amount = self._safe_float(output.get("echm_af_ord_psbl_amt", 0), 0)
         exchange_after_qty = self._safe_int(output.get("echm_af_ord_psbl_qty", 0), 0)
 
@@ -2348,12 +2837,28 @@ class KisApi:
     # 국내주식 주문 취소
     # =========================================================================
 
-    def cancel_domestic_order(self, order_no, symbol, qty, org_branch_no=""):
+    def cancel_domestic_order(self, order_no, symbol, qty, org_branch_no="", exchange=None, ord_dvsn=None):
         """
         국내주식 지정가 주문 취소
         TR: TTTC0803U (real) / VTTC0803U (paper)
         """
-        tr_id = "TTTC0803U" if self.is_real else "VTTC0803U"
+        # Resolve missing legacy metadata from the broker, never from the clock.
+        if not exchange or not ord_dvsn or not org_branch_no:
+            matches = [row for row in self.get_domestic_fills_today(symbol)
+                       if str(row.get('order_no', '')).lstrip('0') == str(order_no).lstrip('0')
+                       and str(row.get('symbol', '')) == str(symbol)]
+            if len(matches) != 1:
+                raise ValueError('취소할 원주문을 유일하게 확인하지 못했습니다')
+            original = matches[0]
+            if exchange and exchange != original.get('exchange'):
+                raise ValueError('원주문의 시장과 취소 시장이 다릅니다')
+            exchange = original.get('exchange')
+            ord_dvsn = original.get('ord_dvsn')
+            org_branch_no = original.get('org_branch_no')
+        routing = wiz.model('portal/trading/domestic_market').cancel_route(exchange, ord_dvsn)
+        if not org_branch_no or (not self.is_real and exchange != 'KRX'):
+            raise ValueError('원주문 조직번호 또는 모의투자 시장을 확인하세요')
+        tr_id = "TTTC0013U" if self.is_real else "VTTC0013U"
         path = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
         cano = self.account_prefix
         acnt_cd = self.account_suffix
@@ -2364,13 +2869,13 @@ class KisApi:
             "ACNT_PRDT_CD": acnt_cd,
             "KRX_FWDG_ORD_ORGNO": org_branch_no or "",
             "ORGN_ODNO": str(order_no),
-            "ORD_DVSN": "00",           # 지정가
+            **routing,
             "RVSE_CNCL_DVSN_CD": "02",  # 02=취소
             "ORD_QTY": str(int(qty)),
             "ORD_UNPR": "0",
             "QTY_ALL_ORD_YN": "Y",      # 전량 취소
         }
-        data = self._request("POST", path, tr_id, body=body)
+        data = self._request("POST", path, tr_id, body=body, retries=0)
         if not data or data.get("rt_cd") != "0":
             msg = data.get("msg1", "Unknown error") if data else "No response"
             raise Exception(f"주문 취소 실패 [주문번호 {order_no}]: {msg}")
@@ -2388,13 +2893,13 @@ class KisApi:
     def get_domestic_fills_today(self, symbol=""):
         """
         당일 국내주식 주문/체결 내역 조회
-        TR: TTTC8001R (real) / VTTC8001R (paper)
+        TR: TTTC0081R (real) / VTTC0081R (paper)
 
         Returns: list of dict
           {order_no, symbol, side, ord_qty, filled_qty, filled_price, rmn_qty, status}
           status: "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED"
         """
-        tr_id = "TTTC8001R" if self.is_real else "VTTC8001R"
+        tr_id = "TTTC0081R" if self.is_real else "VTTC0081R"
         path = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         cano = self.account_prefix
         acnt_cd = self.account_suffix
@@ -2418,10 +2923,11 @@ class KisApi:
                 "INQR_DVSN_1": "",
                 "CTX_AREA_FK100": ctx_fk,
                 "CTX_AREA_NK100": ctx_nk,
+                "EXCG_ID_DVSN_CD": "ALL" if self.is_real else "KRX",
             }
-            data = self._request("GET", path, tr_id, params=params)
-            if not data:
-                break
+            data = self._request("GET", path, tr_id, params=params, tr_cont="N" if (ctx_fk or ctx_nk) else "")
+            if not data or str(data.get("rt_cd", "")) != "0":
+                raise RuntimeError("국내 체결 조회 실패: " + str((data or {}).get("msg1", "응답 없음")))
             page_rows = data.get("output1", []) or []
             rows.extend(page_rows)
             next_fk = data.get("ctx_area_fk100", data.get("CTX_AREA_FK100", "")) or ""
@@ -2453,6 +2959,9 @@ class KisApi:
             sll_buy = str(row.get("sll_buy_dvsn_cd", "02") or "02")
             result.append({
                 "order_no":     str(row.get("odno", "") or ""),
+                "exchange":     str(row.get("excg_id_dvsn_cd", "") or ""),
+                "ord_dvsn":     str(row.get("ord_dvsn_cd", row.get("ord_dvsn", "")) or ""),
+                "org_branch_no": str(row.get("ord_gno_brno", "") or ""),
                 "symbol":       str(row.get("pdno", "") or ""),
                 "name":         str(row.get("prdt_name", "") or row.get("pd_name", "") or ""),
                 "side":         "BUY" if sll_buy == "02" else "SELL",
@@ -2473,6 +2982,13 @@ class KisApi:
         e_date = datetime.datetime.strptime(end_date, "%Y%m%d")
         delta = e_date - s_date
 
+        if delta.days < 0:
+            raise ValueError('조회 종료일이 시작일보다 빠릅니다.')
+        # The API accepts a date range. Dashboard 1W/1M reads must not
+        # serialize one network request per calendar day (including weekends).
+        if delta.days <= 60:
+            return self.get_domestic_fills_for_day(start_date, symbol=symbol, end_date=end_date)
+
         all_fills = []
         for i in range(delta.days + 1):
             day = s_date + datetime.timedelta(days=i)
@@ -2489,12 +3005,12 @@ class KisApi:
         
         return all_fills
 
-    def get_domestic_fills_for_day(self, date_str, symbol=""):
+    def get_domestic_fills_for_day(self, date_str, symbol="", end_date=None):
         """
         특정 날짜의 국내주식 주문/체결 내역 조회
-        TR: TTTC8001R (real) / VTTC8001R (paper)
+        TR: TTTC0081R (real) / VTTC0081R (paper)
         """
-        tr_id = "TTTC8001R" if self.is_real else "VTTC8001R"
+        tr_id = "TTTC0081R" if self.is_real else "VTTC0081R"
         path = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         cano = self.account_prefix
         acnt_cd = self.account_suffix
@@ -2503,12 +3019,13 @@ class KisApi:
         ctx_fk = ""
         ctx_nk = ""
 
-        for _ in range(10): # Paging
+        seen_cursors = set()
+        for _ in range(100): # Complete pagination or fail, never return a prefix.
             params = {
                 "CANO": cano,
                 "ACNT_PRDT_CD": acnt_cd,
                 "INQR_STRT_DT": date_str,
-                "INQR_END_DT": date_str,
+                "INQR_END_DT": end_date or date_str,
                 "SLL_BUY_DVSN_CD": "00",
                 "INQR_DVSN": "00",
                 "PDNO": symbol or "",
@@ -2520,9 +3037,9 @@ class KisApi:
                 "CTX_AREA_FK100": ctx_fk,
                 "CTX_AREA_NK100": ctx_nk,
             }
-            data = self._request("GET", path, tr_id, params=params)
-            if not data:
-                break
+            data = self._request("GET", path, tr_id, params=params, tr_cont="N" if (ctx_fk or ctx_nk) else "")
+            if not data or str(data.get("rt_cd", "")) != "0":
+                raise RuntimeError("국내 체결 조회 실패: " + str((data or {}).get("msg1", "응답 없음")))
             
             page_rows = data.get("output1", []) or []
             rows.extend(page_rows)
@@ -2531,13 +3048,17 @@ class KisApi:
             next_nk = data.get("ctx_area_nk100", data.get("CTX_AREA_NK100", "")) or ""
             tr_cont = str(data.get("tr_cont", "") or "")
 
-            if (not next_fk and not next_nk) or tr_cont in ["", "D", "E"]:
+            if tr_cont not in ("M", "F"):
                 break
-            if next_fk == ctx_fk and next_nk == ctx_nk:
-                break
+            cursor = (str(next_fk).strip(), str(next_nk).strip())
+            if not any(cursor) or cursor in seen_cursors:
+                raise RuntimeError('국내 체결 연속조회 커서 오류: 일부 내역을 완료로 처리하지 않습니다.')
+            seen_cursors.add(cursor)
             
             ctx_fk = next_fk
             ctx_nk = next_nk
+        else:
+            raise RuntimeError('국내 체결 조회 페이지 한도 초과: 조회 기간을 줄여주세요.')
 
         result = []
         for row in rows:

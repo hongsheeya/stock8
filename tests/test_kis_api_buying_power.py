@@ -33,6 +33,9 @@ class _StructStub:
             "kis_account_no": "12345678-01",
             "kis_app_key": "app",
             "kis_app_secret": "secret",
+            "kis_paper_account_no": "12345678-01",
+            "kis_paper_app_key": "paper-app",
+            "kis_paper_app_secret": "paper-secret",
         }
 
     def get_config(self, key, default=""):
@@ -50,6 +53,55 @@ kis_api_spec.loader.exec_module(kis_api)
 
 
 class KisBuyingPowerTests(unittest.TestCase):
+    def test_momentum_rank_uses_bounded_official_request(self):
+        api = kis_api.KisApi(_StructStub())
+        calls = []
+        api._request = lambda *args, **kwargs: calls.append((args, kwargs)) or {'rt_cd':'0', 'output2':[{'symb':'TEST'}]}
+        self.assertEqual(api.get_us_momentum_rank('NAS'), [{'symb':'TEST'}])
+        args, kwargs = calls[0]
+        self.assertEqual(args[0], 'GET')
+        self.assertEqual(args[2], 'HHDFS76260000')
+        self.assertEqual(kwargs['params']['GUBN'], '1')
+        self.assertEqual(kwargs['params']['MINX'], '3')
+        self.assertEqual(kwargs['retries'], 0)
+        with self.assertRaises(ValueError): api.get_us_momentum_rank('INVALID')
+
+    def test_domestic_buying_power_never_uses_margin_inclusive_max_amount(self):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *args, **kwargs: {
+            "rt_cd": "0",
+            "output": {
+                "nrcvb_buy_amt": "0",
+                "nrcvb_buy_qty": "0",
+                "max_buy_amt": "250000000",
+                "max_buy_qty": "2500",
+            },
+        }
+
+        info = api.get_domestic_buying_power_info(symbol="005930", order_type="MARKET")
+
+        self.assertEqual(info["amount"], 0)
+        self.assertEqual(info["qty"], 0)
+        self.assertTrue(info["cash_only"])
+        self.assertEqual(info["broker_orderable_amount"], 250000000)
+
+    def test_domestic_rank_queries_use_official_ranking_endpoints(self):
+        api = kis_api.KisApi(_StructStub())
+        calls = []
+
+        def _request(method, path, tr_id, params=None, **_kwargs):
+            calls.append((method, path, tr_id, params or {}))
+            return {"rt_cd": "0", "output": [{"mksc_shrn_iscd": "005930"}]}
+
+        api._request = _request
+        volume = api.get_domestic_volume_rank()
+        movers = api.get_domestic_fluctuation_rank()
+
+        self.assertEqual(volume[0]["mksc_shrn_iscd"], "005930")
+        self.assertEqual(movers[0]["mksc_shrn_iscd"], "005930")
+        self.assertEqual(calls[0][1:3], ("/uapi/domestic-stock/v1/quotations/volume-rank", "FHPST01710000"))
+        self.assertEqual(calls[1][1:3], ("/uapi/domestic-stock/v1/ranking/fluctuation", "FHPST01700000"))
+
     def test_get_balance_dedupes_same_symbol_returned_from_multiple_exchanges(self):
         api = kis_api.KisApi(_StructStub())
 
@@ -96,7 +148,7 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertEqual(balance["holdings"][0]["symbol"], "SOXL")
         self.assertEqual(balance["total_eval"], 678.57)
 
-    def test_frcr_amount_implies_executable_qty_when_kis_qty_fields_are_zero(self):
+    def test_explicit_zero_orderable_is_not_overridden_by_foreign_currency_maximum(self):
         api = kis_api.KisApi(_StructStub())
         api._request = lambda *args, **kwargs: {
             "rt_cd": "0",
@@ -119,12 +171,31 @@ class KisBuyingPowerTests(unittest.TestCase):
         info = api.get_buying_power_info(symbol="IONQ", price=70.10, exchange="NYSE")
 
         self.assertTrue(info["ok"])
-        self.assertEqual(info["source"], "frcr_ord_psbl_amt1")
+        self.assertEqual(info["source"], "ovrs_ord_psbl_amt")
         self.assertEqual(info["broker_qty"], 0)
-        self.assertEqual(info["executable_amount"], 1560.584194)
-        self.assertEqual(info["executable_qty"], int(1560.584194 / 70.10))
-        self.assertEqual(info["qty"], int(1560.584194 / 70.10))
-        self.assertEqual(info["qty_source"], "frcr_ord_psbl_amt1:amount_implied_qty")
+        self.assertEqual(info["executable_amount"], 0)
+        self.assertEqual(info["executable_qty"], 0)
+        self.assertEqual(info["qty"], 0)
+
+    def test_failed_buying_power_never_promotes_cash_balance_to_order_permission(self):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *a, **kw: {'rt_cd': '1', 'msg1': 'rate limited'}
+        api.get_balance = lambda: self.fail('Failed preflight must not substitute cash')
+        info = api.get_buying_power_info('SOXL', 158.64, 'AMEX')
+        self.assertFalse(info['ok'])
+        self.assertIn('rate limited', info['message'])
+
+    def test_soxl_broker_orderable_not_largest_unrelated_field(self):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *a, **kw: {'rt_cd': '0', 'output': {
+            'ovrs_ord_psbl_amt': '2425.49', 'max_ord_psbl_qty': '15',
+            'frcr_ord_psbl_amt1': '3099.369307', 'ovrs_max_ord_psbl_qty': '19'}}
+        api.get_balance = lambda: {}
+        api.get_present_balance = lambda: {}
+        api._us_auto_exchange_ready = lambda: False
+        info = api.get_buying_power_info('SOXL', 158.64, 'AMEX')
+        self.assertEqual(info['executable_amount'], 2425.49)
+        self.assertEqual(info['executable_qty'], 15)
 
     def test_overseas_order_history_parses_kis_field_variants_and_uses_blank_pdno(self):
         api = kis_api.KisApi(_StructStub())
@@ -418,7 +489,7 @@ class KisBuyingPowerTests(unittest.TestCase):
 
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["path"], "/uapi/overseas-stock/v1/trading/order-resv")
-        self.assertEqual(captured["tr_id"], "TTTT3016U")
+        self.assertEqual(captured["tr_id"], "VTTT3016U")
         self.assertEqual(captured["body"]["PDNO"], "SOXL")
         self.assertEqual(captured["body"]["FT_ORD_QTY"], "3")
         self.assertEqual(captured["body"]["FT_ORD_UNPR3"], "267.58")
@@ -450,7 +521,7 @@ class KisBuyingPowerTests(unittest.TestCase):
 
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["path"], "/uapi/overseas-stock/v1/trading/order-resv-ccnl")
-        self.assertEqual(captured["tr_id"], "TTTT3017U")
+        self.assertEqual(captured["tr_id"], "VTTT3017U")
         self.assertEqual(captured["body"]["RSVN_ORD_RCIT_DT"], "20260625")
         self.assertEqual(captured["body"]["OVRS_RSVN_ODNO"], "SELL-RSV-1")
         self.assertEqual(result["reserve_order_no"], "SELL-RSV-1")

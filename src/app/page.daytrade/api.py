@@ -33,7 +33,9 @@ _active_positions_cache = {}
 _ACTIVE_POSITION_QUOTE_TTL_SEC = 4.0
 _active_position_quote_cache = {}
 _BROKER_SYNC_LOOKBACK_DAYS = 7
-_DAYTRADE_HARD_LOCKED = True
+_TRADING_MODE = str(_os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_DAYTRADE_HARD_LOCKED = str(_os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+_PAPER_DAYTRADE_FULL_ACCESS = _TRADING_MODE == "PAPER" and not _DAYTRADE_HARD_LOCKED
 _DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 
 def _kst_now():
@@ -119,9 +121,9 @@ def _listed_user(user, id_key, email_key):
 def _daytrade_access_payload():
     user = _session_user()
     is_admin = _is_admin_user(user)
-    feature_enabled = False if _DAYTRADE_HARD_LOCKED else _truthy(_get_config("daytrade_feature_enabled", "false"))
-    authorized = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_authorized_user_ids", "daytrade_authorized_user_emails")
-    confirmed = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_confirmed_user_ids", "daytrade_confirmed_user_emails")
+    feature_enabled = not _DAYTRADE_HARD_LOCKED and (_TRADING_MODE == "LIVE" or _PAPER_DAYTRADE_FULL_ACCESS or _truthy(_get_config("daytrade_feature_enabled", "false")))
+    authorized = is_admin and not _DAYTRADE_HARD_LOCKED
+    confirmed = is_admin and not _DAYTRADE_HARD_LOCKED
     return {
         "is_admin": is_admin,
         "daytrade_feature_enabled": feature_enabled,
@@ -135,6 +137,7 @@ def _daytrade_access_payload():
 
 def _require_daytrade_access():
     payload = _daytrade_access_payload()
+    payload.pop('message', None)
     if payload.get("daytrade_hard_locked"):
         wiz.response.status(403, message=_DAYTRADE_LOCK_MESSAGE, **payload)
     if payload.get("daytrade_feature_enabled") is False:
@@ -296,17 +299,20 @@ def _active_position_sort_key(row):
 
 
 def _fast_active_positions_snapshot(market="KS", refresh_quotes=True):
+    engine = _engine()
     market_key = str(market or "KS").upper().strip()
     cache_key = f"{market_key}:{'quotes' if refresh_quotes else 'state'}"
     cached = _active_positions_cache.get(cache_key)
     if isinstance(cached, dict):
         age = _time.monotonic() - float(cached.get("ts", 0) or 0)
         if age < _ACTIVE_POSITIONS_CACHE_TTL_SEC:
-            return _copy.deepcopy(cached.get("payload", []))
+            return [row for row in _copy.deepcopy(cached.get("payload", [])) if engine.analysis_allowed(row.get('symbol', ''))]
 
     engine = _engine()
     rows = []
     for row in (engine.active_positions_from_state() or []):
+        if not engine.analysis_allowed(row.get('symbol', '')):
+            continue
         row_market = str(row.get("market", "KS") or "KS").upper()
         if market_key == "US":
             if row_market not in ("US", "NYSE", "NASD", "AMEX", "NYS"):
@@ -523,7 +529,13 @@ def bootstrap():
         symbol = defaults.get("symbol", "035420")
         market = defaults.get("market", "KS")
         strategy = defaults.get("strategy", "vrev")
-        seed = requested_seed if requested_seed > 0 else defaults.get("seed", 5000000)
+        configured_seed = float(
+            _get_struct().trading.get_config(
+                "daytrade_default_seed",
+                defaults.get("seed", 5000000),
+            ) or defaults.get("seed", 5000000)
+        )
+        seed = requested_seed if requested_seed > 0 else configured_seed
         kis_status = engine.check_kis_connection()
         budget_status = engine.shared_budget_status(requested_seed=seed, use_cache_only=True)
         budget_status = _merge_budget_with_worker_cache(budget_status, worker_status)
@@ -549,7 +561,7 @@ def bootstrap():
         defaults["symbol"] = symbol
         defaults["market"] = market
         defaults["strategy"] = strategy
-        daily_loss = engine.daily_loss_status(requested_seed=defaults["seed"], use_live_price=False, use_cache_only=True, market=market)
+        daily_loss = engine.daily_loss_status(requested_seed=defaults["seed"], use_live_price=False, use_cache_only=True)
     except Exception as e:
         wiz.response.status(500, message=str(e))
     wiz.response.status(200,
@@ -1036,7 +1048,7 @@ def live_status():
         except Exception:
             active_positions = (cached_entry or {}).get("payload", {}).get("active_positions", []) if isinstance(cached_entry, dict) else []
         try:
-            daily_loss = engine.daily_loss_status(requested_seed=seed, use_live_price=force_refresh, use_cache_only=(force_refresh is False), market=market)
+            daily_loss = engine.daily_loss_status(requested_seed=seed, use_live_price=force_refresh, use_cache_only=(force_refresh is False))
         except Exception:
             daily_loss = (cached_entry or {}).get("payload", {}).get("daily_loss", {}) if isinstance(cached_entry, dict) else {}
     except Exception as e:
@@ -1274,7 +1286,7 @@ def daily_log():
             today_display = _date_display(_kst_now().strftime("%Y%m%d"))
             
             if selected_date == today_display and summary.get("valuation_available", False):
-                daily_loss = _engine().daily_loss_status(requested_seed=0, market=market)
+                daily_loss = _engine().daily_loss_status(requested_seed=0)
                 unrealized_pnl = summary.get("remaining_unrealized_pnl", 0)
                 summary["unrealized_profit"] = unrealized_pnl
                 summary["total_pnl"] = summary.get("pnl_net", 0) + unrealized_pnl
@@ -1304,7 +1316,19 @@ def period_summary():
 def run_auto_cycle():
     seed = float(wiz.request.query("seed", "5000000"))
     try:
-        result = _engine().auto_cycle(requested_seed=seed)
+        engine = _engine()
+        # A manual "즉시 점검" must never spend its request budget on
+        # discovery/backtests while an existing position needs an exit.
+        exit_result = engine.kr_execute_exit_watch(requested_seed=seed)
+        if exit_result.get("executed") or exit_result.get("submitted"):
+            result = {
+                **exit_result,
+                "message": exit_result.get("message", "청산 주문을 우선 처리했습니다."),
+                "exit_priority": True,
+            }
+        else:
+            result = engine.auto_cycle(requested_seed=seed)
+            result["exit_watch"] = exit_result
     except Exception as e:
         wiz.response.status(400, message=str(e))
     wiz.response.status(200, result=result)
@@ -1347,7 +1371,7 @@ def get_auto_status():
         engine = _engine()
         auto_enabled = engine.auto_enabled()
         budget_status = engine.shared_budget_status(requested_seed=0)
-        daily_loss = engine.daily_loss_status(requested_seed=0, market="KS")
+        daily_loss = engine.daily_loss_status(requested_seed=0)
         active_positions = engine.active_positions()
     except Exception as e:
         wiz.response.status(400, message=str(e))

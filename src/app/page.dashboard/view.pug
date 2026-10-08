@@ -384,16 +384,6 @@ div(*ngIf="showCycleDetail",
 //- Main Dashboard Content
 //- ============================================================
 
-//- Demo Mode Banner
-div(*ngIf="isMock",
-    class="mb-4 flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-400/20")
-    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
-        class="size-5 text-amber-400 shrink-0")
-        path(stroke-linecap="round", stroke-linejoin="round", d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z")
-    div
-        div(class="text-xs font-semibold text-amber-300") {{t('dash.demo_title')}}
-        div(class="text-xs text-amber-400/70 mt-0.5") {{t('dash.demo_desc')}}
-
 //- Auto-Refresh Indicator
 div(class="flex items-center justify-between mb-4")
     div(class="flex items-center gap-3")
@@ -420,6 +410,52 @@ div(class="flex items-center justify-between mb-4")
         //- Last Updated
         span(class="text-[11px] text-slate-600") {{t('dash.last')}}: {{lastRefreshKst ? lastRefreshKst.slice(11, 19) : (lastRefresh | date:'HH:mm:ss')}}
 
+//- PAPER Operations Console
+wiz-component-trading-controls(#tradeControls="", [positions]="holdings.concat(daytradePositions, infiniteBuyCycles)")
+section(*ngIf="showAdminControls && !legacyMode && isMock", class="dash-ops-console mb-6", [class]="'state-' + (automationState.code || 'off')")
+    div(class="dash-ops-main")
+        div(class="dash-ops-heading")
+            div
+                div(class="dash-ops-eyebrow") {{isMock ? 'STOCK8 PAPER CONTROL' : 'STOCK8 LIVE ACCOUNT'}}
+                h2 {{automationState.label || '자동매매 OFF'}}
+                p {{automationState.message || '연결 상태와 운용 대상을 확인한 뒤 자동매매를 켜세요.'}}
+            span(class="dash-paper-badge")
+                span
+                | {{isMock ? 'PAPER ONLY' : 'LIVE'}}
+        div(class="dash-health-grid")
+            div(class="dash-health-item", [class]="apiConnected ? 'is-ok' : 'is-error'")
+                span(class="dash-health-icon") {{apiConnected ? '✓' : '!'}}
+                div
+                    strong KIS 연결
+                    small {{apiConnected ? '계좌 연결됨' : (connectionMessage || '확인 필요')}}
+            div(class="dash-health-item", [class]="engineStatus.auto_trade ? 'is-ok' : 'is-waiting'")
+                span(class="dash-health-icon") {{engineStatus.auto_trade ? '✓' : '–'}}
+                div
+                    strong 주문 감시
+                    small {{engineStatus.auto_trade ? '자동 감시 ON' : '사용자에 의해 OFF'}}
+            div(class="dash-health-item", [class]="(automationState.active_cycles || 0) > 0 ? 'is-ok' : 'is-waiting'")
+                span(class="dash-health-icon") {{automationState.active_cycles || 0}}
+                div
+                    strong 활성 사이클
+                    small {{(automationState.active_cycles || 0) > 0 ? '주문 계획 감시 중' : '시작할 사이클 필요'}}
+    aside(*ngIf="isMock", class="dash-ops-action")
+        div(class="dash-switch-copy")
+            span {{isMock ? 'PAPER 자동매매' : '실투자 자동매매'}}
+            strong {{engineStatus.auto_trade ? 'ON' : 'OFF'}}
+        button((click)="toggleAutoTrade()",
+            [disabled]="autoTradeChanging",
+            class="dash-master-switch",
+            [class]="engineStatus.auto_trade ? 'is-on' : ''",
+            [attr.aria-label]="engineStatus.auto_trade ? '자동매매 끄기' : '자동매매 켜기'")
+            span
+        p(*ngIf="isMock && (!apiConnected || !paperReady)") PAPER에서는 토글을 먼저 켤 수 있으며 주문 시 KIS가 계정 유효성을 확인합니다.
+        p(*ngIf="!isMock") 실투자 주문은 설정의 별도 허용이 필요합니다. 자동매매 스위치만으로 주문되지 않습니다.
+        p(*ngIf="apiConnected && paperReady && (automationState.active_cycles || 0) === 0") ON으로 전환한 뒤 무한매수 사이클을 시작하세요.
+        div(class="dash-ops-links")
+            button((click)="runEngineNow()", [disabled]="loading") 즉시 점검
+            a(routerLink="/infinite-buy") 운용 종목 설정
+            a(routerLink="/settings") API 설정
+
 div(*ngIf="privacyLocked || setupRequired",
     class="mb-4 flex items-start gap-3 rounded-lg border border-sky-300/30 bg-sky-500/10 px-4 py-3 text-sky-100")
     svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
@@ -432,24 +468,29 @@ div(*ngIf="privacyLocked || setupRequired",
 //- Profit Overview Section
 div(*ngIf="!legacyMode", class="glass-card p-5 mb-6 dash-profit-overview")
     div(class="flex items-center justify-between mb-4")
-        h2(class="text-sm font-semibold text-white") {{t('profit.title')}}
+        h2(class="text-sm font-semibold text-white") 계좌 수익 현황
+        select([ngModel]="profitPeriod", (ngModelChange)="setProfitPeriod($event)", aria-label="실현손익 조회 기간")
+            option(value="1D") 오늘 실현손익
+            option(value="1W") 최근 1주 실현손익
+            option(value="1M") 최근 1개월 실현손익
         div(class="flex items-center gap-2")
             span(*ngIf="profitSyncMessage && !profitLoading", class="text-[11px] text-red-300") {{profitSyncMessage}}
-            span(*ngIf="profitLastRefresh && !profitLoading", class="text-[11px] text-slate-600") {{profitLastRefreshKst ? profitLastRefreshKst.slice(11, 19) : (profitLastRefresh | date:'HH:mm:ss')}}
+            span(*ngIf="profitLastRefresh && !profitLoading", class="text-[11px] text-slate-600", [attr.title]="'서버 집계 조회 ' + (profitData.read_model_ms || 0) + 'ms'") {{profitLastRefreshKst ? profitLastRefreshKst.slice(11, 19) : (profitLastRefresh | date:'HH:mm:ss')}}
             span(*ngIf="profitLoading", class="text-[11px] text-slate-500") {{t('profit.loading')}}
-    div(class="dash-profit-grid")
+    p(*ngIf="!profitSnapshotReady", class="text-sm text-slate-500 py-6") 수익 집계를 준비하고 있습니다. 미조회 금액을 0원으로 표시하지 않습니다.
+    div(class="dash-profit-grid", *ngIf="profitSnapshotReady")
         div(class="dash-profit-cell dash-profit-split-card dash-profit-hero")
             div(class="flex items-center justify-between gap-3 mb-3")
                 div
                     div(class="text-[10px] text-slate-500 uppercase tracking-wider") {{t('profit.realized')}}
-                    div(class="text-[11px] text-slate-600 mt-1") 전략별로 분리한 실현손익
+                    div(class="text-[11px] text-slate-600 mt-1") 선택 기간 실현손익 · 미실현은 현재 보유 기준
                 div(class="text-right shrink-0")
                     div(class="text-[10px] text-slate-500 uppercase tracking-wider") 합계
                     div(class="text-base font-bold mt-1", [class]="profitChangeClass(profitData.realized_profit)") {{signedKRW(profitData.realized_profit)}}
             div(class="grid grid-cols-1 md:grid-cols-2 gap-3")
                 div(class="dash-profit-mini")
                     div(class="flex items-center justify-between gap-3")
-                        div(class="text-[11px] font-semibold text-white") 단타 실현
+                        div(class="text-[11px] font-semibold text-white") {{showAdminControls ? '단타 실현' : '기타 전략 실현'}}
                         div(class="text-[10px] px-2 py-0.5 rounded-full border border-emerald-400/20 text-emerald-300 bg-emerald-500/10") DT
                     div(class="text-xl font-bold mt-2", [class]="profitChangeClass(profitData.daytrade_realized_profit)")
                         | {{signedKRW(profitData.daytrade_realized_profit || 0)}}
@@ -463,7 +504,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6 dash-profit-overview")
                     div(class="text-[10px] text-slate-600 mt-1") {{profitHintLabel('ib-realized')}}
         div(class="dash-profit-stat-grid")
             div(class="dash-profit-cell")
-                div(class="text-[10px] text-slate-500 uppercase tracking-wider") 단타 미실현
+                div(class="text-[10px] text-slate-500 uppercase tracking-wider") {{showAdminControls ? '단타 미실현' : '기타 보유 미실현'}}
                 div(class="text-lg font-bold mt-1", [class]="profitChangeClass(profitData.daytrade_unrealized_profit)")
                     | {{signedKRW(profitData.daytrade_unrealized_profit || 0)}}
                 div(class="text-[10px] text-slate-600 mt-0.5") {{profitHintLabel('dt-unrealized')}}
@@ -535,7 +576,7 @@ div(*ngIf="showAdminControls && balanceDiagnostics.length > 0", class="glass-car
             div(class="text-[10px] text-slate-600 truncate mt-0.5") {{row.source || row.message}}
 
 //- Summary Cards
-div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6")
+div(*ngIf="!legacyMode", class="dash-asset-grid mb-6")
     //- Buying Power
     div(class="glass-card p-5 order-2")
         div(class="flex items-center justify-between mb-3")
@@ -544,8 +585,9 @@ div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 g
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-indigo-400")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z")
         div(class="text-2xl font-bold text-white") ₩{{formatKRW(buyingPower)}}
-        div(class="text-xs text-slate-500 mt-1") KIS 주문가능금액 조회 기준
-        div(class="mt-2 space-y-1 text-[11px]")
+        div(class="text-xs text-slate-500 mt-1") 국내 주문가능 · 해외 주문가능액 별도 확인
+        details(class="buying-power-details mt-2 space-y-1 text-[11px]")
+            summary 통화별 상세
             div(class="flex items-center justify-between text-slate-500")
                 span 국내 주문가능
                 span(*ngIf="balanceSyncOk", class="text-slate-300") ₩{{formatKRW(krwOrderableCash)}}
@@ -558,7 +600,7 @@ div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 g
                 span {{t('dash.usd_available')}}
                 span(*ngIf="usdSyncOk && exchangeRate > 0", class="text-slate-300") ₩{{formatKRW(usdBuyingPower * exchangeRate)}}
                 span(*ngIf="usdSyncOk && exchangeRate <= 0", class="text-amber-400") {{t('dash.balance_unavailable')}}
-                span(*ngIf="!usdSyncOk", class="text-amber-400") {{t('dash.balance_unavailable')}}
+                span(*ngIf="!usdSyncOk", class="text-amber-400") {{usdQueryDeferred ? '조회 대기' : t('dash.balance_unavailable')}}
             div(*ngIf="showAdminControls",
                 class="flex items-center justify-between text-slate-500")
                 span 브로커 실주문 가능
@@ -568,28 +610,31 @@ div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 g
                 | 주문가능 조회: {{krwOrderableSource}}{{krwOrderableProbe ? ' · ' + krwOrderableProbe : ''}}
             div(*ngIf="!usdSyncOk && usdSyncMessage",
                 class="mt-2 rounded-lg border border-amber-400/15 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-300")
-                div(class="font-medium") {{t('dash.usd_sync_failed')}}
-                div(class="mt-0.5 text-amber-200/80") {{usdSyncMessage}}
-            div(*ngIf="usdSyncOk && usdSyncSource",
+                div(class="font-medium") {{usdQueryDeferred ? '달러 주문가능액 조회 대기' : t('dash.usd_sync_failed')}}
+                div(class="mt-0.5 text-amber-200/80") {{usdQueryDeferred ? '빠른 화면 표시를 위해 상세 조회를 생략했습니다. 새로고침으로 확인할 수 있습니다.' : usdSyncMessage}}
+            div(*ngIf="showAdminControls && usdSyncOk && usdSyncSource",
                 class="text-[10px] text-slate-600")
                 | {{t('dash.usd_source')}}: {{usdSyncSource}}
             div(*ngIf="!balanceSyncOk && balanceSyncMessage",
                 class="mt-2 rounded-lg border border-amber-400/15 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-300")
                 div(class="font-medium") {{t('dash.balance_sync_failed')}}
                 div(class="mt-0.5 text-amber-200/80") {{balanceSyncMessage}}
-            div(*ngIf="balanceSyncOk && balanceSyncSource",
+            div(*ngIf="showAdminControls && balanceSyncOk && balanceSyncSource",
                 class="text-[10px] text-slate-600")
                 | {{t('dash.balance_source')}}: {{balanceSyncSource}}
 
     //- Portfolio Value
     div(class="glass-card p-5 order-3")
         div(class="flex items-center justify-between mb-3")
-            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") {{t('dash.portfolio_value')}}
+            span(class="text-xs font-medium text-slate-400 uppercase tracking-wider") 총 주식 노출액
             div(class="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-400/20")
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-emerald-400")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941")
         div(class="text-2xl font-bold text-white") ₩{{formatKRW(portfolioValue)}}
-        div(class="text-xs text-slate-500 mt-1") {{t('dash.evaluated_amount')}}
+        div(class="text-xs text-slate-500 mt-1") 보유 주식의 총 평가액 · 순자산과 다름
+        div(*ngIf="totalAsset > 0 && portfolioValue > totalAsset",
+            class="mt-2 rounded-lg border border-amber-400/20 bg-amber-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-amber-300")
+            | 순자산을 초과한 노출입니다. 신규 매수는 중단되며 기존 포지션을 정리해야 합니다.
 
     //- Total Asset
     div(class="glass-card p-5 order-1")
@@ -599,7 +644,7 @@ div(*ngIf="!legacyMode", class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 g
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4 text-violet-400")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z")
         div(class="text-2xl font-bold text-white") ₩{{formatKRW(totalAsset)}}
-        div(class="text-xs text-slate-500 mt-1") {{t('dash.cash_portfolio')}}
+        div(class="text-xs text-slate-500 mt-1") {{totalAssetVerified ? 'KIS 잔고 합계 대조 완료 · 중복 예수금 제외' : '추정 합계 · KIS 잔고 대조 미완료'}}
 
     //- System Status
     div(class="glass-card p-5 order-4")
@@ -622,14 +667,6 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
             h2(class="text-sm font-semibold text-white") 무한매수 사이클
             p(class="text-[12px] text-slate-400 mt-1") 현재 진행 중인 무한매수와 오늘 LOC 예약매수 상태입니다.
         div(class="flex flex-col gap-2 min-w-full md:min-w-[460px] md:items-end")
-            button((click)="toggleAutoTrade()",
-                [disabled]="loading",
-                class="inline-flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[12px] font-semibold transition-colors border disabled:opacity-50",
-                [class]="engineStatus.auto_trade ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/20' : 'bg-slate-500/10 border-slate-400/20 text-slate-300 hover:bg-slate-500/20'")
-                span 무한매수 매매
-                span(class="rounded-full px-2 py-0.5 text-[10px]",
-                    [class]="engineStatus.auto_trade ? 'bg-emerald-400/20 text-emerald-200' : 'bg-slate-400/15 text-slate-300'")
-                    | {{engineStatus.auto_trade ? 'ON' : 'OFF'}}
             div(class="grid grid-cols-3 gap-2 w-full")
                 div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
                     div(class="text-[10px] text-slate-500") 진행 사이클
@@ -646,7 +683,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
         div(class="text-[11px] text-slate-600 mt-1") 대시보드에서 무한매수 ON 및 시드 배정 후 시작된 사이클이 여기에 표시됩니다.
 
     div(*ngIf="infiniteBuyCycles.length > 0", class="overflow-x-auto")
-        table(class="w-full min-w-[1040px] text-left dash-daytrade-table")
+        table(class="w-full min-w-[1040px] text-left dash-daytrade-table infinite-cycle-table")
             thead
                 tr(class="border-b border-white/10")
                     th(class="pb-2 pl-4 text-xs font-medium text-slate-500 min-w-[170px]") 종목
@@ -666,7 +703,9 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                             div(class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-400/15 bg-cyan-500/10 text-[12px] font-bold text-cyan-200")
                                 | {{(c.symbol || '?').slice(0, 1)}}
                             div(class="min-w-0")
-                                div(class="text-[13px] font-semibold text-white") {{c.symbol}}
+                                div(class="text-[13px] font-semibold text-white")
+                                    | {{c.symbol}}
+                                    button(*ngIf="!isMock && c.symbol !== 'SOXL'", (click)="tradeControls.lock(c.symbol, !tradeControls.locked(c.symbol))", [disabled]="tradeControls.busy || !tradeControls.state?.configured", class="holding-lock", [attr.aria-label]="c.symbol + (tradeControls.locked(c.symbol) ? ' 자동매매 잠금 해제' : ' 자동매매 잠그기')", [title]="tradeControls.locked(c.symbol) ? '자동매매 잠금 — 클릭하여 해제' : '자동매매 허용 — 클릭하여 잠금'") {{tradeControls.locked(c.symbol) ? '🔒' : '🔓'}}
                                 div(class="text-[11px] text-slate-500") {{c.cycle_number ? '#' + c.cycle_number : '-'}}
                     td(class="py-3 pr-4")
                         div(class="flex flex-col items-start gap-1", (click)="$event.stopPropagation()")
@@ -704,7 +743,8 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                             [class]="infiniteBuyCycleToggleClass(c)")
                             | {{infiniteBuyCycleToggleLabel(c)}}
                     td(class="py-3")
-                        div(class="flex flex-col gap-1")
+                        span(*ngIf="c.loc_buy_status === 'deferred'", class="text-slate-500 text-xs", title="예약 상태 미조회 — 접수 완료를 뜻하지 않습니다") —
+                        div(*ngIf="c.loc_buy_status !== 'deferred'", class="flex flex-col gap-1")
                             div(class="flex items-center gap-2")
                                 span([class]="locStatusBadge(c.loc_buy_status)") {{locStatusLabel(c)}}
                                 span(*ngIf="c.loc_buy_order_no", class="text-[10px] text-slate-500") {{c.loc_buy_order_no}}
@@ -731,7 +771,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                 div(class="text-[10px] text-slate-500") 종목 수
                 div(class="text-sm font-bold text-white mt-0.5") {{daytradePositionSummary.count || 0}}
             div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
-                div(class="text-[10px] text-slate-500") 평가액
+                div(class="text-[10px] text-slate-500") 총 주식 노출액
                 div(class="text-sm font-bold text-white mt-0.5") ₩{{formatKRW(daytradePositionSummary.eval_amount_krw || 0)}}
             div(class="rounded-lg border border-white/5 bg-white/5 px-3 py-2")
                 div(class="text-[10px] text-slate-500") 평가손익
@@ -750,7 +790,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                     th(class="pb-2 text-xs font-medium text-slate-500 text-right") 수량
                     th(class="pb-2 text-xs font-medium text-slate-500 text-right") 평균가
                     th(class="pb-2 text-xs font-medium text-slate-500 text-right") 현재가
-                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 평가액
+                    th(class="pb-2 text-xs font-medium text-slate-500 text-right") 주식 노출액
                     th(class="pb-2 text-xs font-medium text-slate-500 text-right") 손익
                     th(class="pb-2 text-xs font-medium text-slate-500 text-right") 수익률
             tbody
@@ -760,6 +800,7 @@ div(*ngIf="!legacyMode", class="glass-card p-5 mb-6")
                     td(class="py-3 pr-3")
                         div(class="text-[13px] font-semibold text-white") {{p.symbol}}
                         div(class="text-[11px] text-slate-500 truncate max-w-[180px]") {{p.name || p.strategy_name || '-'}}
+                        button(*ngIf="!isMock && showAdminControls", (click)="tradeControls.lock(p.symbol, !tradeControls.locked(p.symbol))", [disabled]="tradeControls.busy || !tradeControls.state?.configured", class="holding-lock", [attr.aria-label]="p.symbol + (tradeControls.locked(p.symbol) ? ' 자동매매 잠금 해제' : ' 자동매매 잠그기')", [title]="tradeControls.locked(p.symbol) ? '자동매매 잠금 — 클릭하여 해제' : '자동매매 허용 — 클릭하여 잠금'") {{tradeControls.locked(p.symbol) ? '🔒' : '🔓'}}
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{p.qty}}
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{formatPositionPrice(p, p.avg_price)}}
                     td(class="py-3 pr-3 text-right text-[13px] text-slate-300") {{formatPositionPrice(p, p.current_price)}}

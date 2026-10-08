@@ -2,6 +2,7 @@ import json
 import datetime
 import time
 import re
+import os
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -28,7 +29,15 @@ _BROKER_OPTIONS = [
     },
 ]
 _BROKER_PROVIDERS = {item["id"] for item in _BROKER_OPTIONS if item.get("enabled")}
-_DAYTRADE_HARD_LOCKED = True
+_TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_PAPER_MODE = _TRADING_MODE == "PAPER"
+_DAYTRADE_HARD_LOCKED = str(os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+_PAPER_DAYTRADE_FULL_ACCESS = _PAPER_MODE and not _DAYTRADE_HARD_LOCKED
+if _PAPER_MODE:
+    for _option in _BROKER_OPTIONS:
+        if _option.get("id") != "kis":
+            _option["enabled"] = False
+            _option["status"] = "PAPER 비활성"
 _DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 _DEFAULT_WATCHLIST_ITEMS = [
     {
@@ -159,17 +168,17 @@ def _api_settings_payload_from_request():
     if broker_provider_raw not in _BROKER_PROVIDERS:
         wiz.response.status(400, message=f"{requested_broker.get('name', broker_provider_raw)} API는 아직 무한매수 실주문 지원이 검증되지 않았습니다.")
 
-    is_real = _get_config("kis_is_real", "false")
+    is_real = "false" if _PAPER_MODE else "true"
     default_is_mock = "false" if str(is_real).lower() == "true" else "true"
     return {
         "broker_provider": _normalize_broker_provider(broker_provider_raw),
-        "app_key": request_or_saved("app_key", "kis_app_key", ""),
-        "app_secret": request_or_saved("app_secret", "kis_app_secret", ""),
-        "account_no": _normalize_account_no(request_or_saved("account_no", "kis_account_no", "")),
+        "app_key": request_or_saved("app_key", "kis_paper_app_key" if _PAPER_MODE else "kis_live_app_key", ""),
+        "app_secret": request_or_saved("app_secret", "kis_paper_app_secret" if _PAPER_MODE else "kis_live_app_secret", ""),
+        "account_no": _normalize_account_no(request_or_saved("account_no", "kis_paper_account_no" if _PAPER_MODE else "kis_live_account_no", "")),
         "toss_client_id": request_or_saved("toss_client_id", "toss_client_id", ""),
         "toss_client_secret": request_or_saved("toss_client_secret", "toss_client_secret", ""),
         "toss_account_seq": request_or_saved("toss_account_seq", "toss_account_seq", ""),
-        "is_mock": wiz.request.query("is_mock", "false") if use_request_values else default_is_mock,
+        "is_mock": "true" if _PAPER_MODE else "false",
         "_input_source": "screen" if use_request_values else "saved",
     }
 
@@ -203,13 +212,34 @@ def _validate_api_settings_payload(payload):
 
 
 def _persist_api_settings(payload):
+    if _PAPER_MODE:
+        _, _, user = _session_user()
+        if not wiz.model('portal/trading/paper_subscription')(wiz.server.path.root).enabled(user['id']):
+            wiz.response.status(403, message='설정에서 모의투자를 먼저 신청하세요.')
     # is_mock → is_real로 변환하여 kis_is_real 키에 저장 (kis_api.py와 키 통일)
-    is_real = "false" if payload["is_mock"] in ["true", "True", "1", True] else "true"
+    if _PAPER_MODE and payload.get("broker_provider") != "kis":
+        wiz.response.status(400, message="PAPER mode supports KIS mock trading only.")
+    if _PAPER_MODE and payload.get("is_mock") not in ["true", "True", "1", True]:
+        wiz.response.status(400, message="PAPER mode cannot be switched to a live account.")
+    if not _PAPER_MODE and payload.get("is_mock") in ["true", "True", "1", True]:
+        wiz.response.status(400, message="실투자 서버에서 모의투자 설정을 저장할 수 없습니다.")
+    is_real = "false" if _PAPER_MODE else "true"
+    kis_prefix = "kis_paper" if _PAPER_MODE else "kis_live"
+
+    previous_kis = {
+        "app_key": _get_config(f"{kis_prefix}_app_key", ""),
+        "app_secret": _get_config(f"{kis_prefix}_app_secret", ""),
+        "account_no": _get_config(f"{kis_prefix}_account_no", ""),
+    }
+    kis_credentials_changed = any(
+        str(previous_kis[key] or "") != str(payload[key] or "")
+        for key in previous_kis
+    )
 
     _set_config("broker_provider", payload["broker_provider"], "선택한 증권사")
-    _set_config("kis_app_key", payload["app_key"], "한국투자증권 앱 키", True)
-    _set_config("kis_app_secret", payload["app_secret"], "한국투자증권 앱 시크릿", True)
-    _set_config("kis_account_no", payload["account_no"], "한국투자증권 계좌번호", True)
+    _set_config(f"{kis_prefix}_app_key", payload["app_key"], "KIS environment-specific app key", True)
+    _set_config(f"{kis_prefix}_app_secret", payload["app_secret"], "KIS environment-specific app secret", True)
+    _set_config(f"{kis_prefix}_account_no", payload["account_no"], "KIS environment-specific account", True)
     _set_config("kis_is_real", is_real, "실전투자 여부")
     _set_config("toss_client_id", payload["toss_client_id"], "토스증권 클라이언트 ID", True)
     _set_config("toss_client_secret", payload["toss_client_secret"], "토스증권 클라이언트 비밀키", True)
@@ -225,8 +255,11 @@ def _persist_api_settings(payload):
         config_db.delete(id=old_mock["id"])
 
     # 브로커/키/계좌를 바꾼 뒤에는 반드시 새 토큰으로 검증한다.
-    _set_config("kis_access_token", "", "한국투자증권 접근 토큰", True)
-    _set_config("kis_token_expires", "0", "한국투자증권 토큰 만료시각")
+    if kis_credentials_changed:
+        _set_config(f"{kis_prefix}_access_token", "", "KIS environment-specific access token", True)
+        _set_config(f"{kis_prefix}_token_expires", "0", "KIS environment-specific token expiry")
+        if _PAPER_MODE:
+            _set_config("kis_paper_readiness_scope", "", "PAPER readiness invalidated", True)
     _set_config("toss_access_token", "", "토스증권 접근 토큰", True)
     _set_config("toss_token_expires", "0", "토스증권 토큰 만료시각")
     try:
@@ -249,6 +282,8 @@ def _api_settings_response(payload, result, is_real, saved=False):
         account_no=payload["account_no"],
         toss_account_no=result.get("account_no", ""),
         is_mock=is_real != "true",
+        paper_ready=_PAPER_MODE and bool(_get_config("kis_paper_readiness_scope", "")),
+        readiness_verified_at=_get_config("kis_paper_readiness_verified_at", ""),
         toss_account_seq=_get_config("toss_account_seq", payload["toss_account_seq"]),
         diagnostics=result.get("diagnostics", []),
     )
@@ -312,6 +347,12 @@ def _get_config(key, default=""):
     return default
 
 def _set_config(key, value, description="", is_secret=False):
+    # Shared legacy settings forms also submit hidden daytrade fields.
+    # Keep infinite-buy saves working without granting daytrade configuration.
+    if str(key).startswith(('daytrade_', 'us_daytrade_')):
+        _, _, user = _session_user()
+        if not _is_admin_user(user):
+            return
     trading = _trading()
     setter = getattr(trading, "set_config", None)
     if callable(setter):
@@ -400,22 +441,23 @@ def load_settings():
         trading = _trading()
         watchlist_db = trading.db("etf_watchlist")
 
-        broker_provider = _normalize_broker_provider(_get_config("broker_provider", "kis"))
-        app_key = _get_config("kis_app_key")
-        app_secret = _get_config("kis_app_secret")
+        broker_provider = "kis" if _PAPER_MODE else _normalize_broker_provider(_get_config("broker_provider", "kis"))
+        app_key = _get_config("kis_paper_app_key" if _PAPER_MODE else "kis_live_app_key")
+        app_secret = _get_config("kis_paper_app_secret" if _PAPER_MODE else "kis_live_app_secret")
         toss_client_id = _get_config("toss_client_id", "")
         toss_client_secret = _get_config("toss_client_secret", "")
         toss_account_seq = _get_config("toss_account_seq", "")
-        account_raw = _get_config("kis_account_no")
+        account_key = "kis_paper_account_no" if _PAPER_MODE else "kis_live_account_no"
+        account_raw = _get_config(account_key)
         # 레거시 호환: 하이픈 없는 8자리면 suffix와 합치기
         if account_raw and "-" not in account_raw:
             suffix = _get_config("kis_account_suffix", "01")
             if suffix:
                 account_raw = f"{account_raw}-{suffix}"
-                _set_config("kis_account_no", account_raw, "한국투자증권 계좌번호", True)
+                _set_config(account_key, account_raw, "KIS environment-specific account", True)
         account_no = account_raw
 
-        is_real = _get_config("kis_is_real", "false")
+        is_real = "false" if _PAPER_MODE else "true"
         division_count = _get_config("default_division_count", "40")
         target_profit = _get_config("default_target_profit", "10")
         auto_trade = _get_config("auto_trade_enabled", "false")
@@ -435,7 +477,7 @@ def load_settings():
         sell_method = _normalize_order_method(_get_config("sell_method", "firegate"), "firegate")
         daytrade_default_seed = _get_config("daytrade_default_seed", "5000000")
         daytrade_us_default_seed = _get_config("daytrade_us_default_seed", daytrade_default_seed or "5000000")
-        daytrade_feature_enabled = "false" if _DAYTRADE_HARD_LOCKED else _get_config("daytrade_feature_enabled", "false")
+        daytrade_feature_enabled = "true" if _PAPER_DAYTRADE_FULL_ACCESS else ("false" if _DAYTRADE_HARD_LOCKED else _get_config("daytrade_feature_enabled", "false"))
         daytrade_authorized_user_ids = _get_config("daytrade_authorized_user_ids", "")
         daytrade_authorized_user_emails = _get_config("daytrade_authorized_user_emails", "")
         daytrade_auto_enabled = _get_config("daytrade_auto_enabled", "false")
@@ -453,8 +495,8 @@ def load_settings():
         user_email = user.get("email", "")
         login_id = user_email.split("@", 1)[0] if "@" in user_email else user_email
         is_admin = _is_admin_user(user)
-        daytrade_user_authorized = is_admin or _daytrade_user_authorized(user)
-        daytrade_user_confirmed = is_admin or _daytrade_user_confirmed(user)
+        daytrade_user_authorized = is_admin
+        daytrade_user_confirmed = is_admin
         if _DAYTRADE_HARD_LOCKED:
             daytrade_user_authorized = False
             daytrade_user_confirmed = False
@@ -468,6 +510,9 @@ def load_settings():
         wiz.response.status(500, message=f"load_settings failed: {e}")
 
     wiz.response.status(200,
+        trading_mode=_TRADING_MODE,
+        paper_mode=_PAPER_MODE,
+        kis_base_url="https://openapivts.koreainvestment.com:29443" if _PAPER_MODE else "https://openapi.koreainvestment.com:9443",
         app_key=app_key,
         app_secret=app_secret,
         broker_provider=broker_provider,
@@ -478,6 +523,8 @@ def load_settings():
         toss_account_seq=toss_account_seq,
         account_no=account_no,
         is_mock=is_real != "true",
+        paper_ready=_PAPER_MODE and bool(_get_config("kis_paper_readiness_scope", "")),
+        readiness_verified_at=_get_config("kis_paper_readiness_verified_at", ""),
         division_count=_safe_int(division_count, 40),
         target_profit=_safe_float(target_profit, 10),
         auto_trade=str(auto_trade).lower() == "true",
@@ -531,7 +578,8 @@ def save_api_settings():
     trading, is_real = _persist_api_settings(payload)
 
     try:
-        result = _selected_broker_api(trading).test_connection()
+        broker = _selected_broker_api(trading)
+        result = broker.validate_paper_readiness() if _PAPER_MODE else broker.test_connection()
     except Exception as e:
         result = {"success": False, "message": f"증권사 API 연결 테스트 중 오류가 발생했습니다: {e}"}
 
@@ -545,14 +593,16 @@ def test_connection():
         _validate_api_settings_payload(payload)
         trading, is_real = _persist_api_settings(payload)
         try:
-            result = _selected_broker_api(trading).test_connection()
+            broker = _selected_broker_api(trading)
+            result = broker.validate_paper_readiness() if _PAPER_MODE else broker.test_connection()
         except Exception as e:
             result = {"success": False, "message": f"증권사 API 연결 테스트 중 오류가 발생했습니다: {e}"}
         _api_settings_response(payload, result, is_real, saved=True)
 
     trading = _trading()
     try:
-        result = _selected_broker_api(trading).test_connection()
+        broker = _selected_broker_api(trading)
+        result = broker.validate_paper_readiness() if _PAPER_MODE else broker.test_connection()
     except Exception as e:
         wiz.response.status(200, success=False, message=f"증권사 API 연결 테스트 중 오류가 발생했습니다: {e}")
     if result.get("success", False) is False:
@@ -671,7 +721,7 @@ def save_params():
     daytrade_us_default_seed = max(100000.0, min(1000000000.0, _safe_float(wiz.request.query("daytrade_us_default_seed", str(daytrade_default_seed)), daytrade_default_seed)))
     daytrade_auto_enabled = wiz.request.query("daytrade_auto_enabled", "false")
     daytrade_us_auto_enabled = wiz.request.query("daytrade_us_auto_enabled", "false")
-    if _DAYTRADE_HARD_LOCKED or _truthy(_get_config("daytrade_feature_enabled", "false")) is False:
+    if _DAYTRADE_HARD_LOCKED or (not _PAPER_DAYTRADE_FULL_ACCESS and _truthy(_get_config("daytrade_feature_enabled", "false")) is False):
         daytrade_auto_enabled = "false"
         daytrade_us_auto_enabled = "false"
     daytrade_daily_loss_limit_krw = max(0.0, min(10000000.0, _safe_float(wiz.request.query("daytrade_daily_loss_limit_krw", "50000"), 50000)))
@@ -768,6 +818,10 @@ def save_daytrade_admin_settings():
 def confirm_daytrade_warning():
     """일반 사용자가 단타 위험 문구를 직접 입력해 확인."""
     _, _, user = _session_user()
+    if not _is_admin_user(user):
+        wiz.response.status(403, message='단타는 관리자 전용 기능입니다.')
+    if _PAPER_DAYTRADE_FULL_ACCESS:
+        wiz.response.status(200, confirmed=True, paper_full_access=True, message="모의투자에서는 단타 기능이 자동 승인됩니다.")
     if _DAYTRADE_HARD_LOCKED:
         wiz.response.status(403, message=_DAYTRADE_LOCK_MESSAGE, daytrade_hard_locked=True)
     if _truthy(_get_config("daytrade_feature_enabled", "false")) is False:
@@ -882,3 +936,16 @@ def search_symbol():
             pass
 
     wiz.response.status(200, results=results, connected=True)
+def account_context():
+    _, _, user = _session_user()
+    context = wiz.model("portal/trading/account_context").context()
+    context['paper_subscribed'] = wiz.model('portal/trading/paper_subscription')(wiz.server.path.root).enabled(user['id'])
+    wiz.response.status(200, context)
+
+def subscribe_paper():
+    from flask import request
+    if request.method != 'POST' or (request.headers.get('Origin') and request.headers['Origin'] != request.host_url.rstrip('/')):
+        wiz.response.status(403, message='허용되지 않은 요청입니다.')
+    _, _, user = _session_user()
+    wiz.model('portal/trading/paper_subscription')(wiz.server.path.root).subscribe(user['id'])
+    account_context()

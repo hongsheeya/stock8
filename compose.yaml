@@ -1,0 +1,45 @@
+services:
+  stock8:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      TZ: ${TZ:-Asia/Seoul}
+      WIZ_DB_MAX_CONCURRENCY: ${WIZ_DB_MAX_CONCURRENCY:-4}
+      WIZ_SECRET_KEY: ${WIZ_SECRET_KEY:?Set WIZ_SECRET_KEY in .env}
+      TRADING_MODE: ${TRADING_MODE:-PAPER}
+      STOCK8_PAPER_DB_PATH: ${STOCK8_PAPER_DB_PATH:-project/main/data/paper/trading.db}
+      STOCK8_DAYTRADE_HARD_LOCK: ${STOCK8_DAYTRADE_HARD_LOCK:-false}
+    volumes:
+      - ./config:/opt/app/project/main/config
+      - ./data:/opt/app/project/main/data
+      - ./logs:/var/log/wiz
+    networks:
+      - stock8
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      stock8:
+        condition: service_healthy
+    environment:
+      STOCK8_SITE_ADDRESS: ${STOCK8_SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - stock8
+
+networks:
+  stock8:
+
+volumes:
+  caddy_data:
+  caddy_config:

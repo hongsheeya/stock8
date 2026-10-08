@@ -5,6 +5,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -124,12 +125,20 @@ class _KisApiStub:
             "estimated_qty": 0,
         }
         self.buy_orders = []
+        self.domestic_fills = []
 
     def get_balance(self):
         return {"holdings": copy.deepcopy(self.overseas_holdings)}
 
     def get_domestic_balance(self):
         return {"holdings": copy.deepcopy(self.domestic_holdings)}
+
+    def get_domestic_fills_today(self, symbol=""):
+        rows = copy.deepcopy(self.domestic_fills)
+        return [row for row in rows if not symbol or row.get("symbol") == symbol]
+
+    def get_domestic_fills_for_day(self, _date_str, symbol=""):
+        return self.get_domestic_fills_today(symbol)
 
     def get_buying_power_info(self, symbol="TQQQ", price=0, exchange="NASD"):
         payload = copy.deepcopy(self.buying_power_info)
@@ -190,6 +199,115 @@ def _engine_with_state(state_map, holdings, configs=None):
 
 
 class DaytradeEngineRegressionTests(unittest.TestCase):
+    def test_locked_signal_does_not_analyze_or_fetch_quotes(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        engine, _ = _engine_with_state({}, [])
+        engine.struct.order_policy = SimpleNamespace(read=lambda: {'symbols': {'005930': True}})
+        engine._signal_from_state = Mock(side_effect=AssertionError('locked symbol analyzed'))
+        result = engine.signal_status('005930')
+        self.assertTrue(result['analysis_excluded'])
+        engine._signal_from_state.assert_not_called()
+        self.assertFalse(engine.analysis_allowed('SOXL'))
+    def test_budget_excludes_locked_positions_but_account_exposure_keeps_them(self):
+        from types import SimpleNamespace
+        engine, _ = _engine_with_state({}, [])
+        permissions = {'symbols': {'005930': True, '069500': False, 'SOXL': False}}
+        engine.struct.order_policy = SimpleNamespace(read=lambda: permissions)
+        engine.active_positions = lambda **kwargs: [
+            {'symbol': '005930', 'position_qty': 10, 'avg_price': 100, 'current_price': 110},
+            {'symbol': '069500', 'position_qty': 2, 'avg_price': 50, 'current_price': 55},
+            {'symbol': 'SOXL', 'position_qty': 5, 'avg_price': 100, 'current_price': 110}]
+        budget = engine.portfolio_usage(use_live_price=False, budget_only=True)
+        self.assertEqual(budget['active_cost_krw'], 100)
+        self.assertEqual(budget['position_count'], 1)
+        full = engine.portfolio_usage(use_live_price=False)
+        self.assertEqual(full['active_cost_krw'], 1600)
+        permissions['symbols']['005930'] = False
+        self.assertEqual(engine.portfolio_usage(use_live_price=False, budget_only=True)['active_cost_krw'], 1100)
+
+    def test_budget_policy_failure_does_not_release_private_holdings_as_cash(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        engine, _ = _engine_with_state({}, [])
+        engine.active_positions = lambda **kwargs: []
+        engine.struct.order_policy = SimpleNamespace(read=Mock(side_effect=RuntimeError('unavailable')))
+        with self.assertRaises(RuntimeError):
+            engine.portfolio_usage(use_live_price=False, budget_only=True)
+
+    def test_domestic_budget_never_spends_locked_equity_or_double_counts_settlement(self):
+        engine, _ = _engine_with_state({}, [])
+        engine.infinite_buy_daily_reserve = lambda: {'reserve_usd': 0}
+        engine._fetch_kis_balance_raw = lambda: {
+            'withdrawable_krw': 100000, 'd1_deposit_krw': 100000,
+            'krw_balance': 100000, 'usd_krw': 1350, 'source': 'test',
+            'd2_deposit_krw': 100000, 'total_asset_krw': 10000000,
+            'domestic_eval_krw': 9900000}
+        engine.portfolio_usage = lambda **kwargs: {
+            'active_entry_seed_krw': 50000, 'active_cost_krw': 50000, 'position_count': 1}
+        budget = engine.shared_budget_status(requested_seed=5000000, market='KS')
+        self.assertEqual(budget['cash_max_krw'], 100000)
+        self.assertLessEqual(budget['total_seed_krw'], 150000)
+        self.assertLessEqual(budget['remaining_seed_krw'], 100000)
+
+    def test_closed_paper_session_blocks_even_forced_exit_before_quote_lookup(self):
+        engine, _ = _engine_with_state({}, [])
+        engine._daytrade_market_open = lambda market: False
+        engine.signal_status = lambda *a, **k: self.fail("closed session must not fetch quotes or order")
+        with patch.object(daytrade_engine, "_PAPER_MODE", True), patch.object(daytrade_engine, "_PAPER_CONTINUOUS", False):
+            result = engine.execute_live("TQQQ", market="US", force=True, allow_buy=False)
+        self.assertTrue(result["market_closed"])
+        self.assertFalse(result["submitted"])
+
+    def test_reserved_cash_is_subtracted_once_before_dynamic_allocation(self):
+        engine, _ = _engine_with_state({}, [])
+        engine.infinite_buy_daily_reserve = lambda: {'reserve_usd': 1000}
+        engine._fetch_kis_balance_raw = lambda: {'withdrawable_krw': 1500000, 'krw_balance':1500000, 'usd_krw':1000, 'source':'test', 'total_asset_krw':10000000}
+        engine.portfolio_usage = lambda **kwargs: {'active_entry_seed_krw':0, 'position_count':0}
+        def allocate(**kwargs):
+            self.assertEqual(kwargs['total_asset_krw'], 500000)
+            self.assertEqual(kwargs['reserve_krw'], 0)
+            return {'target_seed_krw': kwargs['total_asset_krw'] * .6}
+        engine._dynamic_daytrade_allocation = allocate
+        budget = engine.shared_budget_status(requested_seed=1000000, market='KS')
+        self.assertEqual(budget['remaining_seed_krw'], 300000)
+        self.assertEqual(budget['applied_reserve_krw'], 1000000)
+
+    def test_exit_watch_does_not_submit_orders_after_domestic_market_close(self):
+        engine, _state = _engine_with_state({
+            "133690.KS": {"symbol": "133690", "market": "KS", "position_qty": 10, "avg_price": 100, "strategy_id": "vrev"},
+        }, [], configs={"daytrade_auto_enabled": "true"})
+        engine._daytrade_market_open = lambda market="KS": False
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        engine.active_positions = lambda **kwargs: (_ for _ in ()).throw(AssertionError("closed market must not query positions"))
+        engine.execute_live = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("closed market must not submit sell"))
+
+        result = engine.kr_execute_exit_watch(requested_seed=5000000)
+
+        self.assertTrue(result["market_closed"])
+        self.assertFalse(result["submitted"])
+        self.assertEqual(result["executed_count"], 0)
+
+    def test_balance_snapshot_keeps_empty_domestic_holdings_when_kis_balance_fails(self):
+        engine, _state = _engine_with_state({}, [])
+        engine.struct.kis_api.get_domestic_balance = lambda: (_ for _ in ()).throw(RuntimeError("rate limited"))
+        engine.struct.kis_api.get_balance = lambda: {"holdings": [], "cash_balance": 0, "total_eval": 0}
+        engine.struct.kis_api.get_present_balance = lambda: {}
+        engine.struct.kis_api.get_domestic_buying_power_info = lambda **_kwargs: {"ok": False}
+        for key in ("_trading_kis_balance_cache_v2", "_trading_kis_balance_cache_ts"):
+            if hasattr(sys, key):
+                delattr(sys, key)
+
+        raw = engine._fetch_kis_balance_raw()
+
+        self.assertEqual(raw["holdings"], [])
+
+    def test_paper_mode_exposes_daytrade_without_legacy_feature_flag(self):
+        engine, _state = _engine_with_state({}, [], configs={})
+
+        self.assertTrue(engine._feature_enabled())
+        self.assertFalse(engine.auto_enabled())
+
     def test_execute_exit_watch_skips_domestic_when_auto_disabled(self):
         engine, _state = _engine_with_state({}, [], configs={
             "daytrade_auto_enabled": "false",
@@ -246,6 +364,99 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertEqual(saved["122630.KS"]["pending_sell_order_no"], "")
         self.assertEqual(saved["122630.KS"]["pending_sell_qty"], 0)
         self.assertEqual(saved["122630.KS"]["last_exit_reason"], "국장 단타 자동매매 OFF")
+
+    def test_pending_sell_matches_kis_order_number_without_leading_zeroes(self):
+        engine, _state = _engine_with_state({}, [])
+        engine.struct.kis_api.domestic_fills = [{
+            "order_no": "37869",
+            "symbol": "069500",
+            "side": "SELL",
+            "status": "FILLED",
+            "filled_qty": 10,
+            "filled_price": 106000,
+            "rmn_qty": 0,
+        }]
+        engine._log_execution = lambda *_args, **_kwargs: None
+        state = {
+            "symbol": "069500",
+            "market": "KS",
+            "strategy_id": "vrev",
+            "position_qty": 10,
+            "avg_price": 105000,
+            "realized_profit": 0,
+            "pending_sell_order_no": "0000037869",
+            "pending_sell_price": 106000,
+            "pending_sell_qty": 10,
+            "pending_sell_type": "JACKPOT",
+            "pending_sell_placed_at": "2026-05-26 09:50:00",
+        }
+
+        status = engine._sync_pending_sell(state, "069500", "KS", current_price=106000)
+
+        self.assertEqual(status, "filled")
+        self.assertEqual(state["position_qty"], 0)
+        self.assertEqual(state["realized_profit"], 10000)
+        self.assertEqual(state["pending_sell_order_no"], "")
+
+    def test_resolve_domestic_fill_matches_order_number_without_leading_zeroes(self):
+        engine, _state = _engine_with_state({}, [])
+        engine.struct.kis_api.domestic_fills = [{
+            "order_no": "17001",
+            "symbol": "069500",
+            "side": "BUY",
+            "status": "FILLED",
+            "filled_qty": 3,
+            "filled_price": 104900,
+        }]
+
+        fill = engine._resolve_domestic_fill(
+            "069500",
+            "BUY",
+            {"order_no": "0000017001"},
+            fallback_price=104860,
+            fallback_qty=3,
+        )
+
+        self.assertEqual(fill["status"], "FILLED")
+        self.assertEqual(fill["filled_qty"], 3)
+        self.assertEqual(fill["filled_price"], 104900)
+
+    def test_pending_buy_is_reconciled_from_kis_fill(self):
+        engine, _state = _engine_with_state({}, [])
+        engine.struct.kis_api.domestic_fills = [{
+            "order_no": "6042",
+            "symbol": "069500",
+            "side": "BUY",
+            "status": "FILLED",
+            "filled_qty": 3,
+            "filled_price": 104900,
+        }]
+        state = {
+            "symbol": "069500",
+            "market": "KS",
+            "position_qty": 0,
+            "avg_price": 0,
+            "pending_buy_order_no": "0000006042",
+            "pending_buy_action": "BUY1",
+            "pending_buy_qty": 3,
+            "pending_buy_price": 104860,
+            "pending_buy_placed_at": "2026-05-25 15:10:00",
+            "orders": [{
+                "order_no": "0000006042",
+                "action": "BUY1",
+                "qty": 3,
+                "price": 104860,
+                "status": "ACCEPTED_UNVERIFIED",
+            }],
+        }
+
+        status = engine._sync_pending_buy(state, "069500", "KS")
+
+        self.assertEqual(status, "filled")
+        self.assertEqual(state["pending_buy_order_no"], "")
+        self.assertEqual(state["position_qty"], 3)
+        self.assertEqual(state["avg_price"], 104900)
+        self.assertEqual(state["orders"][0]["status"], "FILLED")
 
     def test_daily_loss_limit_is_soft_warning_by_default(self):
         engine, _state = _engine_with_state({
@@ -326,6 +537,98 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertEqual(synced["broker_unmanaged_qty"], 0)
         self.assertTrue(synced["buy1_used"])
 
+    def test_sync_uses_broker_quantity_and_average_for_managed_position(self):
+        holdings = [{
+            "symbol": "051910",
+            "market": "KS",
+            "name": "LG Chem",
+            "qty": 177,
+            "avg_price": 277000,
+            "purchase_amount": 49163520,
+            "current_price": 282500,
+        }]
+        engine, state = _engine_with_state({
+            "051910.KS": {
+                "symbol": "051910",
+                "market": "KS",
+                "name": "LG Chem",
+                "position_qty": 180,
+                "avg_price": 277000,
+                "orders": [{"action": "BUY1", "qty": 180, "price": 277000}],
+            },
+        }, holdings)
+
+        engine._sync_broker_positions()
+        synced = state()["051910.KS"]
+
+        self.assertEqual(synced["position_qty"], 177)
+        self.assertEqual(synced["avg_price"], 277760)
+        self.assertEqual(synced["broker_unmanaged_qty"], 0)
+
+    def test_exit_watch_syncs_broker_once_then_uses_cached_position_state(self):
+        holdings = [{
+            "symbol": "051910",
+            "market": "KS",
+            "name": "LG Chem",
+            "qty": 177,
+            "avg_price": 277760,
+            "current_price": 282500,
+        }]
+        engine, _state = _engine_with_state({
+            "051910.KS": {
+                "symbol": "051910",
+                "market": "KS",
+                "name": "LG Chem",
+                "position_qty": 177,
+                "avg_price": 277760,
+                "strategy_id": "vrev",
+            },
+        }, holdings, configs={"daytrade_auto_enabled": "true"})
+        calls = []
+        engine.execute_live = lambda *args, **kwargs: calls.append(kwargs) or {
+            "executed": False,
+            "message": "hold",
+            "status": {"signal": {"action": "HOLD"}},
+        }
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        engine.shared_budget_status = lambda **kwargs: {"total_seed_krw": 100000000}
+
+        result = engine.kr_execute_exit_watch(requested_seed=5000000)
+
+        self.assertEqual(result["watched_count"], 1)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(calls[0]["sync_broker"])
+
+    def test_exit_watch_forces_one_deleveraging_order_when_gross_exposure_exceeds_net_assets(self):
+        engine, _state = _engine_with_state({
+            "AAA.KS": {"symbol": "AAA", "market": "KS", "position_qty": 10, "avg_price": 9, "strategy_id": "vrev"},
+            "BBB.KS": {"symbol": "BBB", "market": "KS", "position_qty": 10, "avg_price": 11, "strategy_id": "vrev"},
+        }, [], configs={"daytrade_auto_enabled": "true"})
+        engine.active_positions = lambda sync_broker=True, use_live_price=True, market_filter=None: [
+            {"symbol": "AAA", "market": "KS", "position_qty": 10, "avg_price": 9, "current_price": 10, "pnl_pct": 11.1, "strategy_id": "vrev"},
+            {"symbol": "BBB", "market": "KS", "position_qty": 10, "avg_price": 11, "current_price": 10, "pnl_pct": -9.1, "strategy_id": "vrev"},
+        ]
+        engine.shared_budget_status = lambda **kwargs: {"total_seed_krw": 100}
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        calls = []
+
+        def execute(*args, **kwargs):
+            calls.append((args, kwargs))
+            if kwargs.get("force"):
+                return {"executed": False, "submitted": True, "action": "SELL_DELEVERAGE", "message": "submitted", "status": {"signal": {"action": "SELL_DELEVERAGE"}}}
+            return {"executed": False, "message": "hold", "status": {"signal": {"action": "HOLD"}}}
+
+        engine.execute_live = execute
+
+        result = engine.kr_execute_exit_watch(requested_seed=100)
+
+        forced = [item for item in calls if item[1].get("force")]
+        self.assertEqual(len(forced), 1)
+        self.assertEqual(forced[0][0][0], "AAA")
+        self.assertEqual(forced[0][1]["forced_sell_qty"], 10)
+        self.assertTrue(result["submitted"])
+        self.assertEqual(result["submitted_count"], 1)
+
     def test_sync_keeps_broker_only_holding_unmanaged_when_adoption_disabled(self):
         holdings = [{
             "symbol": "005930",
@@ -405,7 +708,8 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         engine._append_runtime_log = lambda *args, **kwargs: None
         engine.auto_enabled = lambda market="KS": True
 
-        result = engine.auto_candidates(requested_seed=3000000, market="KS")
+        with patch.object(daytrade_engine, "_PAPER_MODE", False):
+            result = engine.auto_candidates(requested_seed=3000000, market="KS")
 
         self.assertEqual(result["candidates"], [])
         self.assertTrue(result["recommendation"]["live_quality_guard"]["block_new_entries"])
@@ -414,9 +718,15 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
 
     def test_live_strategy_allowed_accepts_ks_volume_breakout_when_live_supported(self):
         engine, _state = _engine_with_state({}, [], configs={"daytrade_auto_max_symbols": "5"})
-        self.assertTrue(engine._live_strategy_allowed("volume_breakout", market="KS"))
-        self.assertTrue(engine._live_strategy_allowed("vrev", market="KS"))
-        self.assertFalse(engine._live_strategy_allowed("shadow_only", market="KS"))
+        with patch.object(daytrade_engine, "_PAPER_MODE", False):
+            self.assertTrue(engine._live_strategy_allowed("volume_breakout", market="KS"))
+            self.assertTrue(engine._live_strategy_allowed("vrev", market="KS"))
+            self.assertFalse(engine._live_strategy_allowed("shadow_only", market="KS"))
+
+    def test_paper_strategy_allows_shadow_research_strategy(self):
+        engine, _state = _engine_with_state({}, [], configs={"daytrade_auto_max_symbols": "5"})
+        with patch.object(daytrade_engine, "_PAPER_MODE", True):
+            self.assertTrue(engine._live_strategy_allowed("shadow_only", market="KS"))
 
     def test_active_positions_marks_synced_local_order_position_auto_managed(self):
         holdings = [{
@@ -456,10 +766,29 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertGreater(required_seed, 918000)
         self.assertGreaterEqual(engine._buy_qty(required_seed, 918000), 1)
 
-    def test_ks_auto_max_symbols_has_larger_floor_even_with_old_config(self):
+    def test_market_auto_max_symbols_respects_rate_limit_config(self):
         engine, _state = _engine_with_state({}, [], configs={"daytrade_auto_max_symbols": "8"})
 
-        self.assertEqual(engine._auto_max_symbols(market="KS"), 16)
+        with patch.object(daytrade_engine, "_PAPER_MODE", False):
+            self.assertEqual(engine._auto_max_symbols(market="KS"), 8)
+        with patch.object(daytrade_engine, "_PAPER_MODE", True):
+            self.assertEqual(engine._auto_max_symbols(market="KS"), 8)
+
+    def test_risk_off_regime_prefers_inverse_and_blocks_kosdaq_longs(self):
+        engine, _state = _engine_with_state({}, [])
+        candidates = [
+            {"symbol": "247540", "market": "KQ", "strategy_id": "vrev"},
+            {"symbol": "122630", "market": "KS", "strategy_id": "vrev"},
+            {"symbol": "114800", "market": "KS", "strategy_id": "vrev"},
+            {"symbol": "005930", "market": "KS", "strategy_id": "vrev"},
+        ]
+
+        with patch.object(_StrategyStub, "market_regime_snapshot", lambda _self: {"regime": "RISK_OFF", "reason": "test breadth"}, create=True):
+            allowed, excluded, snapshot = engine._apply_ks_market_regime_policy(candidates)
+
+        self.assertEqual(snapshot["regime"], "RISK_OFF")
+        self.assertEqual(allowed[0]["symbol"], "114800")
+        self.assertEqual({row["symbol"] for row in excluded}, {"247540", "122630"})
 
     def test_legacy_narrow_cache_refreshes_before_filtered_limit_masks_it(self):
         engine, _state = _engine_with_state({}, [])
@@ -520,6 +849,85 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertEqual(expanded["fast_universe_added_count"], 4)
         self.assertTrue(expanded["fast_universe_expanded"])
         self.assertEqual(expanded["candidate_universe_count"], 20)
+
+    def test_paper_auto_candidates_forwards_bounded_untrained_fallback_to_live_signal_checks(self):
+        engine, _state = _engine_with_state({}, [], configs={"daytrade_auto_max_symbols": "5"})
+
+        class _FallbackStrategy(_StrategyStub):
+            def candidate_universe(self, market="KS"):
+                return [
+                    {"symbol": "005930", "name": "Samsung", "market": "KS", "strategy_id": "vrev"},
+                    {"symbol": "000660", "name": "SK Hynix", "market": "KS", "strategy_id": "vrev"},
+                ]
+
+        engine._Daytrade = _FallbackStrategy
+        _FallbackStrategy.recommendation_payload = {
+            "leaderboard": [],
+            "quality_guard": {"block_new_entries": True, "issues": ["no training data"]},
+        }
+        engine.shared_budget_status = lambda **kwargs: {
+            "effective_daytrade_seed": 3000000.0,
+            "total_seed_krw": 3000000.0,
+            "used_seed_krw": 0.0,
+            "remaining_seed_krw": 3000000.0,
+            "slot_target_count": 2,
+            "available_slot_count": 2,
+            "max_symbols": 5,
+            "slot_seed_limit_krw": 1500000.0,
+        }
+        engine.portfolio_usage = lambda **kwargs: {"active_positions": [], "active_entry_seed_krw": 0.0, "active_cost_krw": 0.0}
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        engine.auto_enabled = lambda market="KS": True
+
+        with patch.object(daytrade_engine, "_PAPER_MODE", True):
+            result = engine.auto_candidates(requested_seed=3000000, market="KS")
+
+        self.assertEqual([row["symbol"] for row in result["candidates"]], ["005930", "000660"])
+        self.assertTrue(all(row["paper_exploration"] for row in result["candidates"]))
+        self.assertTrue(result["recommendation"]["fast_universe_expanded"])
+        self.assertFalse(result["recommendation"]["live_quality_guard"]["block_new_entries"])
+        self.assertTrue(result["recommendation"]["live_quality_guard"]["paper_exploration"])
+
+    def test_us_exit_watch_skips_slow_broker_checks_while_market_is_closed(self):
+        engine, _state = _engine_with_state({}, [], configs={"daytrade_us_auto_enabled": "true"})
+        engine._us_market_open = lambda: False
+        engine._us_premarket_open = lambda: False
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        engine.active_positions = lambda **kwargs: (_ for _ in ()).throw(AssertionError("closed US market must not query holdings"))
+
+        result = engine.us_execute_exit_watch(requested_seed=5000000)
+
+        self.assertTrue(result["market_closed"])
+        self.assertEqual(result["watched_count"], 0)
+
+    def test_execute_live_blocks_buy_without_reliable_price_evidence(self):
+        engine, _state = _engine_with_state({}, [], configs={})
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        status = {
+            "state": {"symbol": "005930", "market": "KS", "position_qty": 0, "avg_price": 0},
+            "signal": {
+                "action": "BUY1",
+                "reason": "1차 눌림 구간 진입 신호",
+                "order_qty": 1,
+                "current_price": 70000,
+                "price_source": "error_fallback",
+                "strategy_id": "vrev",
+            },
+            "runtime": {"risk_status": "SAFE", "issues": [], "warnings": []},
+        }
+
+        result = engine.execute_live(
+            "005930",
+            market="KS",
+            seed=1000000,
+            allow_buy=True,
+            sync_broker=False,
+            precomputed_status=status,
+        )
+
+        self.assertFalse(result["executed"])
+        self.assertTrue(result["evidence_blocked"])
+        self.assertIn("가격 출처", result["message"])
 
     def test_guardrails_use_allocated_seed_as_symbol_limit_floor(self):
         engine, _state = _engine_with_state({}, [], configs={
@@ -614,6 +1022,31 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertEqual(budget["us_combined_orderable_amount_usd"], 1000.0)
         self.assertEqual(budget["us_estimated_orderable_qty"], 5)
         self.assertEqual(budget["actual_orderable_seed_krw"], 1500000.0)
+
+    def test_shared_budget_cache_only_never_refetches_fresh_kis_balance(self):
+        import time
+        from unittest.mock import Mock
+        engine, _state = _engine_with_state({}, [])
+        engine.infinite_buy_daily_reserve = lambda: {"reserve_usd": 0, "cycles": [], "cycle_count": 0}
+        engine.portfolio_usage = Mock(return_value={"active_entry_seed_krw": 0, "active_cost_krw": 0, "position_count": 0})
+        engine._fetch_kis_balance_raw = lambda: self.fail("cache-only UI path made a network balance request")
+        cached = {
+            "withdrawable_krw": 1000000, "krw_balance": 1000000, "usd_krw": 1350,
+            "same_day_sell_krw": 0, "same_day_buy_krw": 0, "source": "test",
+        }
+        setattr(sys, "_trading_kis_balance_cache_v2", cached)
+        setattr(sys, "_trading_kis_balance_cache_ts", time.time())
+        try:
+            budget = engine.shared_budget_status(requested_seed=500000, use_cache_only=True)
+            self.assertEqual(budget["withdrawable_krw"], 1000000)
+            self.assertTrue(str(budget["source"]).startswith("cache_only:"))
+            for call in engine.portfolio_usage.call_args_list:
+                self.assertFalse(call.kwargs['sync_broker'])
+                self.assertFalse(call.kwargs['use_live_price'])
+        finally:
+            for key in ("_trading_kis_balance_cache_v2", "_trading_kis_balance_cache_ts"):
+                if hasattr(sys, key):
+                    delattr(sys, key)
 
 if __name__ == "__main__":
     unittest.main()

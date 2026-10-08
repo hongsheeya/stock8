@@ -5,18 +5,37 @@ import bcrypt
 import json
 import datetime
 
+def trading_database_path(root):
+    mode = str(os.environ.get("TRADING_MODE", "PAPER")).upper()
+    if mode not in ("LIVE", "PAPER"):
+        raise RuntimeError("Invalid trading environment")
+    paths = {
+        name: os.path.realpath(os.path.join(root, os.environ.get(
+            "STOCK8_" + name + "_DB_PATH", "project/main/data/" + name.lower() + "/trading.db")))
+        for name in ("LIVE", "PAPER")
+    }
+    if os.path.normcase(paths["LIVE"]) == os.path.normcase(paths["PAPER"]):
+        raise RuntimeError("LIVE and PAPER databases must be physically separate")
+    return paths[mode]
+
 def Model(namespace):
     class DBModel(pw.Model):
         class Meta:
-            config = wiz.config("database").get(namespace)
-            if config.type == 'mysql':
+            if namespace == "trading":
+                sqlitedb = trading_database_path(wiz.server.path.root)
+                os.makedirs(os.path.dirname(sqlitedb), exist_ok=True)
+                database = pw.SqliteDatabase(sqlitedb)
+            else:
+                config = wiz.config("database").get(namespace)
+            if namespace != "trading" and config.type == 'mysql':
                 opts = dict()
                 for key in ['host', 'user', 'password', 'charset', 'port']:
                     if key in config:
                         opts[key] = config[key]
                 database = pw.MySQLDatabase(config.database, **opts)
-            else:
+            elif namespace != "trading":
                 sqlitedb = os.path.realpath(os.path.join(wiz.server.path.root, config.path))
+                os.makedirs(os.path.dirname(sqlitedb), exist_ok=True)
                 database = pw.SqliteDatabase(sqlitedb)
 
         class PasswordField(pw.TextField):

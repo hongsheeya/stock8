@@ -5,7 +5,7 @@ div(class="firegate-page")
             div(class="mt-1 text-[11px] text-slate-400") {{bridgeStatusText()}}
         div(class="flex shrink-0 flex-wrap items-center justify-end gap-2")
             button((click)="connectFireGateBridge()",
-                [disabled]="bridgeBusy",
+                [disabled]="bridgeBusy || (!bridge?.configured && !popupReady)",
                 class="inline-flex items-center gap-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[13px] font-medium text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50")
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.25a8.25 8.25 0 0 1 15 0")
@@ -27,8 +27,10 @@ div(class="firegate-page")
                 span 도구
 
     div(*ngIf="error", class="mx-3 mb-3 rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-200") {{error}}
+    p(class="mx-3 mb-3 text-sm text-slate-600") 최초 한 번 Google 계정을 연결하세요. 이후에는 재로그인 없이 ‘지금 동기화’를 사용합니다. 인증이 취소되면 다시 연결해야 합니다.
     div(*ngIf="bridgeMessage", class="mx-3 mb-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-[12px] text-emerald-200") {{bridgeMessage}}
     div(*ngIf="showBridgeTools", class="mx-3 mb-3 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-3")
+        button((click)="loginWithPopup()", [disabled]="bridgeBusy || !popupReady") Google 계정 다시 연결
         button((click)="syncFireGate()",
             [disabled]="bridgeBusy || !bridge?.configured",
             class="inline-flex items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[13px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50")
@@ -43,7 +45,15 @@ div(class="firegate-page")
 
     div(class="firegate-shell")
         div(*ngIf="loading", class="flex h-full items-center justify-center bg-white text-sm text-slate-500") 로딩 중
-        iframe(*ngIf="!loading",
+        section(*ngIf="!loading && !bridge?.configured", class="bridge-onboarding")
+            span STOCK8 × FIRE GATE
+            h2 FireGate 계정을 한 번 연결하세요
+            p 버튼을 누르면 Google 인증 창이 열립니다. 계정을 선택하고 인증을 마치면 Stock8에 연결을 저장합니다.
+            button((click)="loginWithPopup()", [disabled]="bridgeBusy || !popupReady") {{bridgeBusy ? authStage + '…' : (popupReady ? 'Google 계정 연결' : '인증 모듈 준비 중…')}}
+            p 앱 내 브라우저에서 인증 창이 열리지 않으면 아래 주소를 일반 Chrome에서 열어주세요. Stock8 로그인 후 같은 버튼으로 연결할 수 있습니다.
+            code(style="display:block; overflow-wrap:anywhere; user-select:all") {{browserConnectUrl}}
+            p 연결 저장 후 ‘지금 동기화’를 누르세요. FireGate 사이트 자체의 로그인 상태와 Stock8 서버 연결은 별개입니다.
+        iframe(*ngIf="!loading && bridge?.configured",
             id="fireGateIframe",
             src="https://fire-gate.app/",
             title="Fire Gate",

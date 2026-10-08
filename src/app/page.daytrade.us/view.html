@@ -7,6 +7,32 @@
 
 <div *ngIf="!loading" class="h-full overflow-auto trading-scroll">
     <div class="space-y-4 pb-4">
+        <wiz-component-trading-controls #tradeControls market="US" [daytradeOnly]="true" [positions]="usActivePositions"></wiz-component-trading-controls>
+        <div *ngIf="bootstrapDelayed" class="daytrade-delayed-banner"><strong>화면을 먼저 열었습니다.</strong><span>계좌·시세 데이터는 백그라운드에서 불러오는 중입니다.</span></div>
+        <div class="flex w-fit items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
+            <button (click)="toggleAdvancedControls()" class="rounded-md px-4 py-1.5 text-[13px] font-medium">{{advancedControlsCollapsed ? '상세 설정·전략' : '상세 접기'}}</button>
+        </div>
+        <section *ngIf="tradeControls.state?.mode === 'PAPER'" class="glass-card border p-4" [class]="isUsAutoEnabled ? 'border-emerald-400/20 bg-emerald-500/5' : 'border-red-400/20 bg-red-500/5'">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg" [class]="isUsAutoEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'">▶</div>
+                    <div>
+                        <div class="text-[12px] font-semibold text-slate-300">미장 단타 자동매매</div>
+                        <div class="mt-1 flex items-center gap-2"><span class="inline-flex rounded-full px-2 py-1 text-[11px] font-semibold" [class]="isUsAutoEnabled ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'">{{isUsAutoEnabled ? 'ON' : 'OFF'}}</span><span class="text-[11px] text-slate-500">{{isUsAutoEnabled ? '자동순환 활성' : '신규 자동진입 중지'}}</span></div>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <button (click)="toggleAuto()" [disabled]="refreshing" class="rounded-lg border px-4 py-2 text-[13px] font-semibold transition-colors disabled:opacity-50" [class]="isUsAutoEnabled ? 'border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'">{{isUsAutoEnabled ? '자동매매 끄기' : '자동매매 켜기'}}</button>
+                    <button (click)="refreshLight()" [disabled]="refreshing" class="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-40">{{refreshing ? '점검 중...' : '즉시 점검'}}</button>
+                </div>
+            </div>
+        </section>
+        <section class="glass-card p-5 momentum-scanner">
+            <div class="scanner-heading"><h2>거래량 · 급등 종목 탐색</h2><button (click)="scanMomentum()" [disabled]="scannerBusy">{{scannerBusy ? '조회 중…' : '급등 후보 확인'}}</button></div>
+            <p>NASDAQ · NYSE · AMEX / 거래량 30만주·거래대금 $200만 이상 / 신규 조회는 5분 간격</p>
+            <p role="status" *ngIf="scannerMessage">{{scannerMessage}}</p>
+            <div class="momentum-row" *ngFor="let item of momentumCandidates"><strong>{{item.symbol}} · {{item.name}}</strong><span>{{item.selection_reason}}</span></div>
+        </section>
         <section class="glass-card p-5">
             <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div class="space-y-4 xl:max-w-3xl">
@@ -18,7 +44,7 @@
 
                     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
                         <div class="rounded-lg bg-white/5 px-3 py-3">
-                            <div class="text-[10px] text-slate-500">현재 후보</div>
+                            <div class="text-[10px] text-slate-500">선택 종목 · 기존 보유 감시 포함</div>
                             <div class="mt-1 text-[15px] font-semibold text-white">{{symbol}}</div>
                             <div class="mt-1 text-[11px] text-slate-400">{{selectedStrategySpec?.name || strategy}}</div>
                         </div>
@@ -42,7 +68,7 @@
                     <div class="rounded-lg border px-4 py-3" [class]="autoStatusPanelClass">
 	                        <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
 	                            <div>
-	                                <div class="text-[12px] font-semibold text-white">자동매매 상태</div>
+	                                <div class="text-[12px] font-semibold text-white">엔진 진단 · 운용 권한</div>
 	                                <div class="mt-1 text-[12px] text-slate-300">{{autoStateReason || '상태를 확인하는 중입니다.'}}</div>
 	                            </div>
 	                            <div class="flex flex-col gap-2 lg:min-w-[280px]">
@@ -50,11 +76,11 @@
 	                                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
 	                                <div class="rounded-lg bg-black/20 px-3 py-2">
 	                                    <div class="text-slate-500">워커</div>
-	                                    <div class="mt-1 font-semibold" [class]="workerStarted ? 'text-emerald-300' : 'text-red-300'">{{workerStarted ? 'RUNNING' : 'STOPPED'}}</div>
+	                                    <div class="mt-1 font-semibold" [class]="workerStarted ? 'text-emerald-300' : 'text-slate-500'">{{autoStatus?.worker_status ? (workerStarted ? 'RUNNING' : 'STOPPED') : '확인 필요'}}</div>
 	                                </div>
 	                                <div class="rounded-lg bg-black/20 px-3 py-2">
 	                                    <div class="text-slate-500">자동매매 토글</div>
-	                                    <div class="mt-1 font-semibold" [class]="isUsAutoEnabled ? 'text-emerald-300' : 'text-slate-300'">{{isUsAutoEnabled ? 'ON' : 'OFF'}}</div>
+	                                    <div class="mt-1 font-semibold text-slate-700">{{tradeControls.state?.mode === 'LIVE' ? (tradeControls.state?.daytrade ? 'ON' : 'OFF') : (tradeControls.state?.mode === 'PAPER' ? (isUsAutoEnabled ? 'ON' : 'OFF') : '확인 중')}}</div>
 	                                </div>
 	                                </div>
 	                            </div>
@@ -77,9 +103,17 @@
                         <h2 class="text-sm font-semibold text-white">운영 제어</h2>
                         <button (click)="refreshLight()" [disabled]="refreshing" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50">{{refreshing ? '갱신 중...' : '새로고침'}}</button>
                     </div>
-                    <div class="space-y-3">
+                    <div class="space-y-3" *ngIf="tradeControls.state?.mode === 'PAPER'">
                         <button (click)="toggleAuto()" [disabled]="refreshing" class="w-full rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors disabled:opacity-50" [class]="isUsAutoEnabled ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-red-500/10 hover:border-red-400/30 hover:text-red-300' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-emerald-500/10 hover:border-emerald-400/30 hover:text-emerald-300'">{{isUsAutoEnabled ? '자동매매 ON · 중지' : '자동매매 OFF · 시작'}}</button>
-                        <button (click)="toggleAdvancedControls()" class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:bg-white/10">{{advancedControlsCollapsed ? '고급 설정' : '고급 설정 접기'}}</button>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <button (click)="executeSignal()" [disabled]="orderProcessing || refreshing" class="rounded-lg border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-[12px] font-semibold text-blue-200 transition-colors hover:bg-blue-500/20 disabled:opacity-50">{{orderProcessing ? '주문 처리 중...' : '시그널 점검 · 모의주문'}}</button>
+                            <button (click)="manualSellSelected()" [disabled]="orderProcessing || !hasSelectedPosition" class="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[12px] font-semibold text-rose-200 transition-colors hover:bg-rose-500/20 disabled:opacity-40">선택 종목 모의청산</button>
+                        </div>
+                        <div *ngIf="executionResult" class="rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-[11px] text-slate-300">
+                            <div class="font-semibold" [class]="executionResult?.executed ? 'text-emerald-300' : 'text-amber-300'">{{executionResult?.executed ? '모의주문 전송 완료' : '주문 보류'}}</div>
+                            <div class="mt-1 leading-5">{{executionResultMessage}}</div>
+                            <div *ngIf="executionResult?.order?.order_no" class="mt-1 text-slate-500">주문번호 {{executionResult.order.order_no}}</div>
+                        </div>
                         <div *ngIf="!advancedControlsCollapsed" class="space-y-3 rounded-lg border border-white/10 bg-black/10 p-3">
                             <select [(ngModel)]="strategy" class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[13px] text-slate-200 focus:border-blue-400/50 focus:outline-none">
                                 <option *ngFor="let item of strategyOptions" [ngValue]="item.id">{{item.name}}</option>
@@ -276,9 +310,10 @@
                 <section class="glass-card p-4">
                     <div class="mb-3 flex items-center justify-between gap-3">
                         <h2 class="text-sm font-semibold text-white">진행 포지션</h2>
-                        <span class="text-[11px] text-slate-500">{{usActivePositions.length}}건</span>
+                        <span class="text-[11px] text-slate-500">{{autoStatus ? usActivePositions.length + '건' : '조회 대기'}}</span>
                     </div>
-                    <div *ngIf="usActivePositions.length === 0" class="rounded-lg bg-white/5 px-3 py-4 text-center text-[12px] text-slate-500">현재 진행 중인 미장 포지션이 없습니다.</div>
+                    <wiz-component-trading-controls [positions]="usActivePositions" [locksOnly]="true" [showLocks]="true"></wiz-component-trading-controls>
+                    <div *ngIf="usActivePositions.length === 0" class="rounded-lg bg-white/5 px-3 py-4 text-center text-[12px] text-slate-500">{{autoStatus ? '현재 진행 중인 미장 포지션이 없습니다.' : '포지션 조회 결과를 기다리고 있습니다. 보유 없음으로 판단하지 않습니다.'}}</div>
                     <div *ngIf="usActivePositions.length > 0" class="space-y-2">
                         <div *ngFor="let item of usActivePositions" class="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-[12px]">
                             <div class="flex items-center justify-between gap-3">
@@ -295,7 +330,7 @@
                     </div>
                 </section>
 
-                <section class="glass-card p-4">
+                <section *ngIf="!advancedControlsCollapsed" class="glass-card p-4">
                     <div class="mb-3 flex items-center justify-between gap-3">
                         <h2 class="text-sm font-semibold text-white">전략 프로파일</h2>
                         <span class="text-[11px] text-slate-500">{{strategy}}</span>

@@ -12,6 +12,42 @@ spec.loader.exec_module(bridge)
 
 
 class FireGateBridgeTests(unittest.TestCase):
+    def test_archived_duplicate_is_not_pulled_or_found(self):
+        from unittest.mock import Mock
+        active = {'id': 'original', 'ticker': 'SOXL', 'source': 'infinitystock',
+                  'sourceCycleId': 'current', 'isRunning': True}
+        archived = dict(active, id='duplicate', stock8Archived=True, isRunning=False)
+        remote = bridge.FireGateBridge('test', 'test')
+        remote.list_portfolios = Mock(return_value=[archived, active])
+        self.assertEqual(bridge._select_pull_portfolios([archived, active]), [active])
+        self.assertEqual(remote.find_portfolio('SOXL', include_stopped=True)['id'], 'original')
+
+    def test_reconciled_trade_is_not_replayed_to_original(self):
+        from unittest.mock import Mock, patch
+        remote = Mock()
+        remote.find_portfolio.return_value = {'id': 'original', 'reconciledSourceTradeIds': ['old-fill']}
+        with patch.object(bridge, 'load_bridge_config', return_value={'enabled': True}), \
+             patch.object(bridge, '_bridge_call_from_config', side_effect=lambda s, fn: fn(remote, {})):
+            result = bridge.sync_cycle_trade(Mock(), {'id': 'current', 'symbol': 'SOXL'},
+                {'id': 'old-fill', 'symbol': 'SOXL', 'action': 'BUY', 'status': 'FILLED',
+                 'filled_qty': 3, 'filled_price': 100, 'source': 'KIS'})
+        self.assertEqual(result['reason'], 'reconciled')
+        remote.add_transaction_and_update_portfolio.assert_not_called()
+        remote.list_transactions.assert_not_called()
+
+    def test_batch_push_skips_reconciled_history(self):
+        from unittest.mock import Mock, patch
+        remote, trading = Mock(), Mock()
+        remote.ensure_v4_portfolio.return_value = ({'id': 'original', 'reconciledSourceTradeIds': ['old-fill']}, False)
+        remote.list_transactions.return_value = []
+        trading.db.return_value.rows.return_value = [{'id': 'old-fill', 'action': 'BUY', 'status': 'FILLED'}]
+        trading.get_config.return_value = 0
+        with patch.object(bridge, '_local_rows_for_push', return_value=[{'id': 'current', 'symbol': 'SOXL'}]):
+            result = bridge._push_local_to_firegate(remote, trading)
+        self.assertEqual(result['skipped_trades'], 1)
+        self.assertEqual(result['pushed_trades'], 0)
+        remote.add_transaction_and_update_portfolio.assert_not_called()
+
     def test_model_export_exposes_bridge_api(self):
         self.assertIs(bridge.Model.FireGateBridge, bridge.FireGateBridge)
         self.assertIs(bridge.Model.FireGateAuthError, bridge.FireGateAuthError)
@@ -186,6 +222,13 @@ class FireGateBridgeTests(unittest.TestCase):
         self.assertEqual(updated["id"], managed["id"])
         self.assertEqual(remote.find_portfolio("SOXL")["seed"], 5000)
         self.assertEqual(updated["seed"], 12000)
+
+        before = [dict(row) for row in remote.portfolios]
+        with self.assertRaises(bridge.FireGateBridgeError):
+            remote.ensure_v4_portfolio(
+                "SOXL", 12000, source=bridge.INFINITYSTOCK_SOURCE,
+                source_cycle_id="migrated-cycle-id")
+        self.assertEqual(remote.portfolios, before)
 
     def test_apply_v4_buy_transaction_updates_t_value_and_average(self):
         portfolio = bridge.build_v4_portfolio("TQQQ", 10000, division_count=20, target_profit=15)

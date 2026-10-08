@@ -3,6 +3,8 @@
 # =============================================================================
 import datetime
 import json
+import math
+import os
 import sys
 import threading
 
@@ -12,6 +14,10 @@ except Exception:
     ZoneInfo = None
 
 _TIME = wiz.model("portal/trading/kst")
+_TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_DATA_ROOT = "data/paper/daytrade" if _TRADING_MODE == "PAPER" else "data/live/daytrade"
+_PAPER_MODE = _TRADING_MODE == "PAPER"
+_PAPER_CONTINUOUS = _PAPER_MODE and str(os.environ.get("STOCK8_PAPER_CONTINUOUS", "true") or "true").lower() in ("1", "true", "yes", "on")
 
 
 class DomesticDaytradeEngine:
@@ -27,10 +33,12 @@ class DomesticDaytradeEngine:
     # 실시간 체결 데이터 기반 1분봉 조립기 (Candle Aggregator)
     _AGGREGATED_CANDLES: dict = {}  # {"symbol.market": {"ticks": [], "last_ts": datetime}}
     _AGGREGATED_CANDLES_TTL: float = 300.0  # 5분 캐시
+    _KIS_PERIOD_PROFIT_UNSUPPORTED: bool = False
 
     def __init__(self, struct):
         self.struct = struct
         self._Daytrade = wiz.model("portal/trading/struct/daytrade")
+        self._backfill_state_history_once()
 
     @property
     def strategy(self):
@@ -39,8 +47,13 @@ class DomesticDaytradeEngine:
     def _fs(self):
         return wiz.project.fs()
 
+    def _data_root(self):
+        if _PAPER_MODE:
+            return _DATA_ROOT
+        return _DATA_ROOT + '/' + self.struct.live_data_scope
+
     def _state_path(self):
-        return "data/daytrade/live_state.json"
+        return f"{self._data_root()}/live_state.json"
 
     def _market_key(self, market="", symbol=""):
         hint = str(market or "").upper().strip()
@@ -58,8 +71,8 @@ class DomesticDaytradeEngine:
     def _runtime_log_path(self, market=""):
         key = self._market_key(market)
         if key == "US":
-            return "data/daytrade/runtime_logs_us.json"
-        return "data/daytrade/runtime_logs_ks.json"
+            return f"{self._data_root()}/runtime_logs_us.json"
+        return f"{self._data_root()}/runtime_logs_ks.json"
 
     def _market_from_event_type(self, event_type="", symbol=""):
         event = str(event_type or "").upper()
@@ -73,7 +86,104 @@ class DomesticDaytradeEngine:
         prefix = "DT_US" if self._market_key(market, symbol) == "US" else "DT_KS"
         return f"{prefix}_{str(action or '').upper()}"
 
+    def _backfill_state_history_once(self):
+        """Copy legacy state-file fills into trade_log once per server process."""
+        marker = f"_stock8_daytrade_history_backfilled_{os.getpid()}_{_TRADING_MODE.lower()}"
+        if getattr(sys, marker, False):
+            return
+        try:
+            db = self.struct.db("trade_log")
+            existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
+            corrected = 0
+            # A previous compatibility backfill treated every legacy order
+            # number as a fill. Those rows are only broker acceptances unless
+            # the saved state contains explicit fill evidence.
+            for row in existing_rows:
+                try:
+                    raw = json.loads(row.get("raw_response", "") or "{}")
+                except Exception:
+                    raw = {}
+                runtime = raw.get("runtime", {}) if isinstance(raw, dict) else {}
+                if not isinstance(runtime, dict) or runtime.get("history_backfill") is not True:
+                    continue
+                raw["execution_status"] = "ACCEPTED_UNVERIFIED"
+                raw["action"] = f"{str(raw.get('action', row.get('action', 'ORDER')) or 'ORDER').replace('_PENDING', '')}_PENDING"
+                raw["message"] = "기존 주문 접수 기록 · KIS 체결 미확인"
+                db.update({
+                    "action": "PENDING",
+                    "filled_price": 0,
+                    "filled_qty": 0,
+                    "message": raw["message"],
+                    "raw_response": self._safe_json_dumps(raw),
+                }, id=row.get("id"))
+                corrected += 1
+            if corrected:
+                existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
+            existing_order_nos = {
+                str(row.get("order_no", "") or "").strip()
+                for row in existing_rows
+                if str(row.get("order_no", "") or "").strip()
+            }
+            inserted = 0
+            for state_key, state in (self._load_state_map() or {}).items():
+                if not isinstance(state, dict):
+                    continue
+                symbol = str(state.get("symbol", "") or str(state_key).split(".")[0]).upper()
+                market = self._market_key(state.get("market", "") or (str(state_key).split(".")[1] if "." in str(state_key) else "KS"), symbol)
+                for order in list(state.get("orders", []) or []):
+                    if not isinstance(order, dict):
+                        continue
+                    action_detail = str(order.get("action", "") or "").upper()
+                    action = self._normalize_trade_action(action_detail)
+                    order_no = str(order.get("order_no", "") or order.get("reserve_order_no", "") or "").strip()
+                    execution_status = str(order.get("status", order.get("execution_status", "")) or "").upper()
+                    qty = max(0, self._safe_int(order.get("filled_qty", 0), 0))
+                    price = max(0.0, self._safe_float(order.get("filled_price", 0), 0))
+                    explicitly_filled = execution_status in ("FILLED", "EXECUTED", "DONE", "COMPLETE", "COMPLETED") and qty > 0 and price > 0
+                    if action not in ("BUY", "SELL") or not order_no or order_no in existing_order_nos or not explicitly_filled:
+                        continue
+                    created_kst = str(order.get("timestamp", "") or state.get("updated_at", "") or self._timestamp())
+                    reason = str(order.get("reason", "") or "상태 파일에서 복구한 PAPER 체결")
+                    payload = {
+                        "symbol": symbol,
+                        "market": market,
+                        "name": state.get("name", "") or symbol,
+                        "action": action_detail,
+                        "qty": qty,
+                        "price": round(price, 4),
+                        "order": order,
+                        "runtime": {"created_kst": created_kst, "reason": reason, "history_backfill": True},
+                        "message": reason,
+                        "execution_status": "FILLED",
+                        "created_kst": created_kst,
+                    }
+                    db.insert({
+                        "cycle_id": f"daytrade:{market.lower()}:{symbol}",
+                        "symbol": symbol,
+                        "event_type": self._dt_event_type(action=action_detail, market=market, symbol=symbol),
+                        "action": action,
+                        "order_no": order_no,
+                        "order_price": price,
+                        "order_qty": qty,
+                        "filled_price": price,
+                        "filled_qty": qty,
+                        "message": reason,
+                        "raw_response": self._safe_json_dumps(payload),
+                    })
+                    existing_order_nos.add(order_no)
+                    inserted += 1
+            setattr(sys, marker, True)
+            if inserted:
+                self._append_runtime_log("info", f"기존 PAPER 단타 체결 {inserted}건을 거래 DB에 복구했습니다.", market="KS")
+            if corrected:
+                self._append_runtime_log("warning", f"체결 근거가 없던 과거 주문 {corrected}건을 접수·확인대기로 정정했습니다.", market="KS")
+        except Exception:
+            # Startup must remain available even if a legacy state file is malformed.
+            return
+
     def _global_lock(self, name):
+        if not _PAPER_MODE:
+            name = self.struct.live_data_scope + ':' + name
         key = "_trading_daytrade_engine_locks"
         locks = getattr(sys, key, None)
         if isinstance(locks, dict) is False:
@@ -105,6 +215,9 @@ class DomesticDaytradeEngine:
     def _hard_locked(self):
         return bool(getattr(self.struct, "daytrade_hard_locked", False))
 
+    def _broker(self):
+        return getattr(self.struct, 'daytrade_broker', None) or self.struct.kis_api
+
     def _hard_lock_message(self):
         return str(getattr(self.struct, "daytrade_lock_message", "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."))
 
@@ -120,6 +233,8 @@ class DomesticDaytradeEngine:
     def _feature_enabled(self):
         if self._hard_locked():
             return False
+        if _PAPER_MODE:
+            return True
         return str(self._config("daytrade_feature_enabled", "false") or "false").lower() in ("1", "true", "yes", "y", "on")
 
     def _state_key(self, symbol, market="KS"):
@@ -135,7 +250,7 @@ class DomesticDaytradeEngine:
     def _save_state_map(self, payload):
         with self._global_lock("state_io"):
             fs = self._fs()
-            fs.makedirs("data/daytrade")
+            fs.makedirs(self._data_root())
             fs.write.json(self._state_path(), payload)
 
     def _now(self):
@@ -391,6 +506,8 @@ class DomesticDaytradeEngine:
 
     def _normalize_trade_action(self, action=""):
         action = str(action or "").upper().strip()
+        if action.startswith("PRE_SELL"):
+            return "SELL"
         if action.startswith("BUY"):
             return "BUY"
         if action.startswith("SELL"):
@@ -485,6 +602,8 @@ class DomesticDaytradeEngine:
 
     def _us_market_open(self):
         """미국 본장 시간 (ET 09:30~16:00)"""
+        if _PAPER_CONTINUOUS:
+            return True
         if ZoneInfo is not None:
             now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
         else:
@@ -497,6 +616,8 @@ class DomesticDaytradeEngine:
 
     def _us_premarket_open(self):
         """미국 프리마켓 시간 (ET 04:00~09:30)"""
+        if _PAPER_CONTINUOUS:
+            return True
         if ZoneInfo is not None:
             now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
         else:
@@ -508,6 +629,8 @@ class DomesticDaytradeEngine:
         return 400 <= hhmm < 930
 
     def _us_auto_buy_ready(self, now=None):
+        if _PAPER_CONTINUOUS:
+            return True
         now = now or self._now()
         hhmm = now.hour * 100 + now.minute
         cutoff = 2220 if self._is_us_dst() else 2320
@@ -570,11 +693,121 @@ class DomesticDaytradeEngine:
         state["pending_sell_qty"] = 0
         state["pending_sell_type"] = ""
         state["pending_sell_placed_at"] = ""
+        state.pop("pending_sell_cancel_requested_order", None)
+
+    @staticmethod
+    def _normalized_order_no(value):
+        """KIS가 선행 0을 생략해도 같은 주문번호로 비교한다."""
+        text = str(value or "").strip()
+        if text.isdigit():
+            return text.lstrip("0") or "0"
+        return text.upper()
+
+    def _same_order_no(self, left, right):
+        normalized_left = self._normalized_order_no(left)
+        normalized_right = self._normalized_order_no(right)
+        return normalized_left != "" and normalized_left == normalized_right
+
+    def reconcile_order_history(self, max_dates=2):
+        """Read-only broker reconciliation, including fully sold positions.
+
+        Update fill evidence only; holdings remain owned by broker balance sync.
+        Batch by date to avoid a separate gateway call for every symbol/order.
+        """
+        state_map = self._load_state_map()
+        dates = sorted({
+            str(order.get("timestamp", ""))[:10]
+            for state in state_map.values() if not self._is_us_market(state.get("market", "KS"))
+            for order in state.get("orders", [])
+            if order.get("order_no") and str(order.get("status", "")).upper() not in ("FILLED", "CANCELLED")
+            and len(str(order.get("timestamp", ""))) >= 10
+        })
+        updated = 0
+        errors = []
+        # Oldest unresolved dates first so historical sells do not starve.
+        cursor = int(getattr(sys, "_stock8_reconcile_date_cursor", 0)) % max(1, len(dates))
+        selected_dates = (dates[cursor:] + dates[:cursor])[:max_dates]
+        setattr(sys, "_stock8_reconcile_date_cursor", cursor + len(selected_dates))
+        for date in selected_dates:
+            try:
+                with self._broker().request_options(timeout=5, retries=0):
+                    fills = self._broker().get_domestic_fills_for_day(date.replace("-", ""))
+            except Exception as exc:
+                errors.append({"date": date, "message": str(exc)})
+                continue
+            indexed = {(str(f.get("symbol", "")), self._normalized_order_no(f.get("order_no"))): f for f in fills}
+            with self._global_lock("state_io"):
+                current = self._load_state_map()
+                for state in current.values():
+                    if self._is_us_market(state.get("market", "KS")):
+                        continue
+                    for order in state.get("orders", []):
+                        if str(order.get("timestamp", ""))[:10] != date:
+                            continue
+                        fill = indexed.get((str(state.get("symbol", "")), self._normalized_order_no(order.get("order_no"))))
+                        if not fill:
+                            continue
+                        status = str(fill.get("status", "OPEN")).upper()
+                        order.update(status=status, filled_qty=self._safe_int(fill.get("filled_qty"), 0),
+                                     filled_price=self._safe_float(fill.get("filled_price"), 0), verification="kis")
+                        updated += 1
+                        if status in ("FILLED", "CANCELLED"):
+                            if self._same_order_no(state.get("pending_sell_order_no"), order.get("order_no")):
+                                self._clear_pending_sell(state)
+                            if self._same_order_no(state.get("pending_buy_order_no"), order.get("order_no")):
+                                state["pending_buy_order_no"] = ""
+                self._save_state_map(current)
+        result = {"checked_at": self._timestamp(), "updated": updated, "errors": errors, "remaining_dates": len(dates)}
+        self._fs().write.json(f"{self._data_root()}/reconciliation.json", result)
+        return result
+
+    def _domestic_fills_for_pending(self, symbol, placed_at=""):
+        placed_date = str(placed_at or "")[:10].replace("-", "")
+        today = self._now().strftime("%Y%m%d")
+        if placed_date and placed_date != today and hasattr(self.struct.kis_api, "get_domestic_fills_for_day"):
+            return self._broker().get_domestic_fills_for_day(placed_date, symbol=symbol) or []
+        return self._broker().get_domestic_fills_today(symbol) or []
+
+    def _mark_state_order_fill(self, state, order_no, fill):
+        for order in reversed(list(state.get("orders", []) or [])):
+            if not self._same_order_no(order.get("order_no", ""), order_no):
+                continue
+            order["status"] = str(fill.get("status", "FILLED") or "FILLED").upper()
+            order["filled_qty"] = self._safe_int(fill.get("filled_qty", order.get("qty", 0)), 0)
+            order["filled_price"] = self._safe_float(fill.get("filled_price", order.get("price", 0)), 0)
+            break
+
+    def _sync_pending_buy(self, state, symbol, market):
+        order_no = str(state.get("pending_buy_order_no", "") or "")
+        if not order_no or self._is_us_market(market):
+            return "none"
+        try:
+            fills = self._domestic_fills_for_pending(symbol, state.get("pending_buy_placed_at", ""))
+        except Exception:
+            return "open"
+        matched = next((row for row in fills if self._same_order_no(row.get("order_no", ""), order_no)), None)
+        if not matched:
+            return "open"
+        status = str(matched.get("status", "OPEN") or "OPEN").upper()
+        self._mark_state_order_fill(state, order_no, matched)
+        if status in ("FILLED", "CANCELLED"):
+            filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
+            filled_price = self._safe_float(matched.get("filled_price", 0), 0)
+            if status == "FILLED" and self._safe_int(state.get("position_qty", 0), 0) <= 0 and filled_qty > 0:
+                state["position_qty"] = filled_qty
+                state["avg_price"] = filled_price
+            state["pending_buy_order_no"] = ""
+            state["pending_buy_action"] = ""
+            state["pending_buy_qty"] = 0
+            state["pending_buy_price"] = 0
+            state["pending_buy_placed_at"] = ""
+            return status.lower()
+        return "open"
 
     def _open_sell_orders(self, symbol):
         rows = []
         try:
-            fills = self.struct.kis_api.get_domestic_fills_today(symbol)
+            fills = self._broker().get_domestic_fills_today(symbol) or []
         except Exception:
             return rows
         for item in fills:
@@ -597,7 +830,7 @@ class DomesticDaytradeEngine:
             if order_no == "" or qty <= 0:
                 continue
             try:
-                self.struct.kis_api.cancel_domestic_order(order_no, symbol, qty)
+                self._broker().cancel_domestic_order(order_no, symbol, qty)
                 cancelled.append({"order_no": order_no, "qty": qty})
             except Exception:
                 continue
@@ -616,21 +849,40 @@ class DomesticDaytradeEngine:
 
         # 체결 내역 조회
         try:
-            fills = self.struct.kis_api.get_domestic_fills_today(symbol)
+            fills = self._domestic_fills_for_pending(symbol, state.get("pending_sell_placed_at", ""))
         except Exception:
             return "open"  # API 실패 → 대기 유지
 
         matched = None
         for fill in fills:
-            if fill["order_no"] == str(order_no):
+            if self._same_order_no(fill.get("order_no", ""), order_no):
                 matched = fill
                 break
 
         if matched:
             status = matched.get("status", "OPEN")
+            # Preserve executed shares even if the remainder is cancelled.
+            # History consumes cumulative broker fills, not requested quantity.
+            self._mark_state_order_fill(state, order_no, matched)
             if status == "FILLED":
                 filled_price = matched.get("filled_price", 0)
                 filled_qty   = matched.get("filled_qty", int(state.get("pending_sell_qty", 0) or 0))
+                self._mark_state_order_fill(state, order_no, matched)
+                pending_at = str(state.get("pending_sell_placed_at", "") or "")
+                has_later_buy = any(
+                    str((item or {}).get("timestamp", "") or "") > pending_at
+                    and self._normalize_trade_action((item or {}).get("action", "")) == "BUY"
+                    for item in list(state.get("orders", []) or [])
+                )
+                if has_later_buy:
+                    # The broker has already replaced yesterday's sold position
+                    # with a newer buy. Mark the old sell as filled for FIFO
+                    # history without subtracting it from today's holdings.
+                    state["last_exit_action"] = "SELL_FULL"
+                    state["last_exit_reason"] = f"과거 매도 체결 확인 ₩{round(filled_price):,}"
+                    state["last_exit_order_no"] = str(order_no)
+                    self._clear_pending_sell(state)
+                    return "filled"
                 prev_avg     = self._safe_float(state.get("avg_price", 0), 0)
                 prev_qty     = int(state.get("position_qty", 0) or 0)
                 realized = (filled_price - prev_avg) * filled_qty if filled_price > 0 and prev_avg > 0 else 0
@@ -677,15 +929,28 @@ class DomesticDaytradeEngine:
         pending_price   = self._safe_float(state.get("pending_sell_price", 0), 0)
         cancel_threshold = pending_price * 0.990  # 예약가 대비 1% 이상 하락 시 취소
         if pending_price > 0 and current_price > 0 and current_price < cancel_threshold:
-            qty = int(state.get("pending_sell_qty", 0) or 0)
-            try:
-                self.struct.kis_api.cancel_domestic_order(order_no, symbol, qty)
-            except Exception:
-                pass  # 취소 실패 시에도 pending 해제 (이미 체결/만료 가능성)
-            self._clear_pending_sell(state)
-            return "cancelled"
+            self._request_pending_sell_cancel(state, symbol)
+            # Acceptance is not final cancellation. Keep tracking until the
+            # broker's fill query confirms CANCELLED or FILLED on a later pass.
+            return "open"
 
         return "open"
+
+    def _request_pending_sell_cancel(self, state, symbol):
+        """Request once; only a later broker observation can release the order."""
+        order_no = str(state.get("pending_sell_order_no", "") or "")
+        qty = self._safe_int(state.get("pending_sell_qty", 0), 0)
+        if not order_no or qty <= 0:
+            return
+        if self._same_order_no(state.get("pending_sell_cancel_requested_order", ""), order_no):
+            return
+        state["pending_sell_cancel_requested_order"] = order_no
+        try:
+            self._broker().cancel_domestic_order(order_no, symbol, qty)
+        except Exception:
+            # Timeout can mean the broker accepted it but the response was lost.
+            # Do not replay or release a replacement sell against the same shares.
+            pass
 
     def _default_state(self, symbol, market, seed, name="", strategy_id="vrev"):
         return {
@@ -739,23 +1004,26 @@ class DomesticDaytradeEngine:
             state["name"] = name or self.strategy.symbol_name(symbol)
         return state
 
-    def _sync_broker_positions(self):
+    def _sync_broker_positions(self, market_filter=None):
         adopt_broker_positions = str(self._config("daytrade_adopt_broker_positions", "true") or "true").lower() == "true"
+        market_filter = str(market_filter or "").upper().strip()
         domestic_holdings = []
         overseas_holdings = []
         fetched_markets = set()
-        try:
-            raw = self._fetch_kis_balance_raw()
-            domestic_holdings = raw.get("holdings", []) or []
-            fetched_markets.update(["KS", "KQ"])
-        except Exception:
-            domestic_holdings = []
+        if market_filter != "US":
+            try:
+                raw = self._fetch_kis_balance_raw()
+                domestic_holdings = raw.get("holdings", []) or []
+                fetched_markets.update(["KS", "KQ"])
+            except Exception:
+                domestic_holdings = []
 
-        try:
-            overseas_holdings = self.struct.kis_api.get_balance().get("holdings", []) or []
-            fetched_markets.add("US")
-        except Exception:
-            overseas_holdings = []
+        if market_filter in ("", "US"):
+            try:
+                overseas_holdings = self._broker().get_balance().get("holdings", []) or []
+                fetched_markets.add("US")
+            except Exception:
+                overseas_holdings = []
 
         if len(fetched_markets) == 0:
             return
@@ -790,7 +1058,7 @@ class DomesticDaytradeEngine:
             prev_avg = self._safe_float(state.get("avg_price", 0), 0)
             broker_avg = self._safe_float(item.get("avg_price", 0), 0)
             purchase_amount = self._safe_float(item.get("purchase_amount", 0), 0)
-            if qty > 0 and purchase_amount > 0 and (broker_avg <= 0 or abs((broker_avg * qty) - purchase_amount) > max(1.0, purchase_amount * 0.2)):
+            if qty > 0 and purchase_amount > 0:
                 broker_avg = purchase_amount / qty
             rebuilt = self._state_order_open_position(state)
             rebuilt_qty = self._safe_int(rebuilt.get("qty", 0), 0)
@@ -799,18 +1067,29 @@ class DomesticDaytradeEngine:
             state["symbol"] = symbol
             state["market"] = market
             state["name"] = item.get("name", state.get("name", "") or self.strategy.symbol_name(symbol))
+            broker_last_price = self._safe_float(item.get("current_price", 0), 0)
+            eval_amount = self._safe_float(item.get("eval_amount", 0), 0)
+            if broker_last_price <= 0 and qty > 0 and eval_amount > 0:
+                broker_last_price = eval_amount / qty
+            if broker_last_price > 0:
+                state["last_price"] = round(broker_last_price, 4)
             if not state.get("strategy_id"):
                 state["strategy_id"] = default_strategy
 
             managed_qty = max(prev_qty, rebuilt_qty)
             managed_avg = rebuilt_avg if rebuilt_avg > 0 else prev_avg
             if managed_qty > 0:
-                state["position_qty"] = managed_qty
-                if managed_avg > 0:
-                    state["avg_price"] = round(managed_avg, 4)
+                # Once the broker balance is available it is authoritative.
+                # Local order reconstruction may lag partial fills, corporate
+                # actions or externally submitted orders and must not keep a
+                # stale quantity/average price alive indefinitely.
+                state["position_qty"] = qty
+                authoritative_avg = broker_avg if broker_avg > 0 else managed_avg
+                if authoritative_avg > 0:
+                    state["avg_price"] = round(authoritative_avg, 4)
                 state["broker_unmanaged_position"] = False
-                state["broker_unmanaged_qty"] = max(0, qty - managed_qty)
-                if managed_qty > 0:
+                state["broker_unmanaged_qty"] = 0
+                if qty > 0:
                     state["buy1_used"] = True
             elif adopt_broker_positions:
                 state["position_qty"] = qty
@@ -854,6 +1133,11 @@ class DomesticDaytradeEngine:
 
     def _profile_for(self, symbol, strategy_id="vrev", market="KS"):
         resolved_strategy = self.strategy._normalize_strategy(strategy_id)
+        if resolved_strategy in ('paper_selective_breakout', 'paper_selective_pullback'):
+            return {**self.strategy._default_profile_for_market(market=market),
+                    'budget_ratio': .3, 'buy_split_ratio': 1.0, 'stop_loss_pct': 1.0,
+                    'jackpot_take_profit_pct': 2.5, 'carry_overnight_enabled': False,
+                    'stop_reentry_same_day_block': True}
         default_profile = self.strategy._default_profile_for_market(market=market, strategy_id=resolved_strategy)
         trained_profile = self.strategy.latest_profile(symbol=symbol, strategy_id=resolved_strategy, market=market)
         if isinstance(trained_profile, dict):
@@ -876,7 +1160,7 @@ class DomesticDaytradeEngine:
                 targets = [
                     self._runtime_log_path("KS"),
                     self._runtime_log_path("US"),
-                    "data/daytrade/runtime_logs.json",
+                    f"{self._data_root()}/runtime_logs.json",
                 ]
             for path in targets:
                 try:
@@ -932,7 +1216,7 @@ class DomesticDaytradeEngine:
                 "strategy_id": self.strategy._normalize_strategy(strategy_id),
                 "meta": meta or {},
             })
-            fs.makedirs("data/daytrade")
+            fs.makedirs(self._data_root())
             fs.write.json(runtime_path, raw_logs)
 
     def _chunk_qty(self, budget, price):
@@ -974,13 +1258,13 @@ class DomesticDaytradeEngine:
             usd_krw = 0.0
         if usd_krw <= 0:
             try:
-                present = self.struct.kis_api.get_present_balance()
+                present = self._broker().get_present_balance()
                 usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
             except Exception:
                 usd_krw = 0.0
         if usd_krw <= 0:
             try:
-                fx = self.struct.kis_api._get_usd_krw_rate_fallback()
+                fx = self._broker()._get_usd_krw_rate_fallback()
                 usd_krw = self._safe_float(fx.get("rate", 0), 0)
             except Exception:
                 usd_krw = 0.0
@@ -1127,7 +1411,7 @@ class DomesticDaytradeEngine:
 
         # KIS 실시간 체결가 API 호출
         try:
-            ticks = self.struct.kis_api.get_domestic_realtime_price_details(symbol)
+            ticks = self._broker().get_domestic_realtime_price_details(symbol)
             if not ticks:
                 return None
         except Exception:
@@ -1209,8 +1493,8 @@ class DomesticDaytradeEngine:
         """
         import time as _t, sys as _sys
         now = _t.time()
-        _CACHE_KEY = "_trading_kis_balance_cache_v2"
-        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts"
+        _CACHE_KEY = "_trading_kis_balance_cache_v2" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
+        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
         _CACHE_TTL = 120.0
 
         cached = getattr(_sys, _CACHE_KEY, None)
@@ -1235,13 +1519,14 @@ class DomesticDaytradeEngine:
         present_total_asset_krw = 0.0
         direct_total_asset_krw = 0.0
         summary_total_asset_krw = 0.0
+        domestic_holdings = []
         source = "manual"
         total_asset_source = "fallback"
         # 1순위: 주문가능금액 조회 (TTTC8908R) → 실제 매수 가능액(당일매도 재사용 포함)
         try:
             defaults = self.strategy.defaults()
             budget_symbol = defaults.get("symbol", "005930")
-            domestic = self.struct.kis_api.get_domestic_buying_power_info(symbol=budget_symbol, order_type="MARKET")
+            domestic = self._broker().get_domestic_buying_power_info(symbol=budget_symbol, order_type="MARKET")
             if domestic.get("ok"):
                 withdrawable_krw = self._safe_float(domestic.get("amount", 0), 0)
                 source = f"buying_power:{domestic.get('source', 'ord_psbl_cash')}"
@@ -1250,7 +1535,7 @@ class DomesticDaytradeEngine:
         # 2순위: 잔고조회는 당일 매수/매도 흐름 참고용으로만 사용한다.
         # 실주문 예산은 예수금총액이 아니라 현금최대가능 금액(TTTC8908R) 기준으로 계산한다.
         try:
-            domestic_bal = self.struct.kis_api.get_domestic_balance()
+            domestic_bal = self._broker().get_domestic_balance()
             same_day_sell_krw = self._safe_float(domestic_bal.get("same_day_sell_krw", 0), 0)
             same_day_buy_krw = self._safe_float(domestic_bal.get("same_day_buy_krw", 0), 0)
             _krw = self._safe_float(domestic_bal.get("krw_balance", 0), 0)
@@ -1267,13 +1552,12 @@ class DomesticDaytradeEngine:
             if isinstance(raw_summary, list):
                 raw_summary = raw_summary[0] if len(raw_summary) > 0 else {}
             if isinstance(raw_summary, dict):
-                summary_domestic_eval = self.struct.kis_api._pick_first_amount(raw_summary, [
-                    "scts_evlu_amt",
+                summary_domestic_eval = self._broker()._pick_first_amount(raw_summary, [
                     "evlu_amt_smtl_amt",
                 ])
                 if summary_domestic_eval > 0:
                     domestic_eval_krw = summary_domestic_eval
-                subscription_deposit_krw = self.struct.kis_api._pick_first_amount(raw_summary, [
+                subscription_deposit_krw = self._broker()._pick_first_amount(raw_summary, [
                     "subsc_amt",
                     "subsc_tot_amt",
                     "subsprc_amt",
@@ -1282,15 +1566,15 @@ class DomesticDaytradeEngine:
                     "stck_subs_amt",
                     "subt_dps",
                 ])
-                d1_deposit_krw = self.struct.kis_api._pick_first_amount(raw_summary, [
+                d1_deposit_krw = self._broker()._pick_first_amount(raw_summary, [
                     "nxdy_excc_amt",
                     "prvs_rcdl_excc_amt",
                 ])
-                d2_deposit_krw = self.struct.kis_api._pick_first_amount(raw_summary, [
+                d2_deposit_krw = self._broker()._pick_first_amount(raw_summary, [
                     "d2_auto_rdpt_amt",
                     "nxdy_auto_rdpt_amt",
                 ])
-                summary_total_asset_krw = self.struct.kis_api._pick_first_amount(raw_summary, [
+                summary_total_asset_krw = self._broker()._pick_first_amount(raw_summary, [
                     "tot_evlu_amt",
                     "nass_amt",
                     "bfdy_tot_asst_evlu_amt",
@@ -1308,7 +1592,7 @@ class DomesticDaytradeEngine:
         krw_balance = deposit_krw
         # 환율은 해외주식 잔고 API에서
         try:
-            present = self.struct.kis_api.get_present_balance()
+            present = self._broker().get_present_balance()
             usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
             present_total_asset_krw = self._safe_float(present.get("total_asset_krw", 0), 0)
             if present_total_asset_krw > 0:
@@ -1316,7 +1600,7 @@ class DomesticDaytradeEngine:
         except Exception:
             pass
         try:
-            overseas = self.struct.kis_api.get_balance()
+            overseas = self._broker().get_balance()
             usd_cash_balance_usd = self._safe_float(overseas.get("cash_balance", 0), 0)
             foreign_eval_usd = self._safe_float(overseas.get("total_eval", 0), 0)
             if foreign_eval_usd <= 0:
@@ -1330,19 +1614,27 @@ class DomesticDaytradeEngine:
             2,
         )
         fallback_total_asset_krw = round(balance_withdrawable_krw + domestic_eval_krw + foreign_eval_krw + subscription_deposit_krw, 2)
-        total_asset_candidates = [
-            (present_total_asset_krw, "present_balance.total_asset_krw"),
-            (direct_total_asset_krw, "direct(krw+domestic_eval+usd_cash+usd_eval)"),
-            (summary_total_asset_krw, "domestic_balance.summary_total_asset_krw"),
-            (max(
+        # KIS total-asset summaries are net assets. `max_buy_amt`/orderable
+        # cash may contain settlement credit or buying power and must never be
+        # added to holdings then selected merely because it is larger. That
+        # mistake allowed a 100M PAPER account to allocate roughly 250M.
+        if summary_total_asset_krw > 0:
+            total_asset_krw = summary_total_asset_krw
+            total_asset_source = "domestic_balance.summary_total_asset_krw"
+        elif present_total_asset_krw > 0:
+            total_asset_krw = present_total_asset_krw
+            total_asset_source = "present_balance.total_asset_krw"
+        else:
+            fallback_candidates = [value for value in (
+                direct_total_asset_krw,
                 fallback_total_asset_krw,
                 d1_deposit_krw,
                 d2_deposit_krw,
                 balance_withdrawable_krw,
                 deposit_krw,
-            ), "fallback_total_asset_krw"),
-        ]
-        total_asset_krw, total_asset_source = max(total_asset_candidates, key=lambda item: self._safe_float(item[0], 0))
+            ) if self._safe_float(value, 0) > 0]
+            total_asset_krw = min(fallback_candidates) if fallback_candidates else 0.0
+            total_asset_source = "conservative_fallback_total_asset_krw"
         total_asset_krw = round(self._safe_float(total_asset_krw, 0), 2)
         raw = {
             "krw_balance": krw_balance,
@@ -1372,6 +1664,84 @@ class DomesticDaytradeEngine:
         setattr(_sys, _CACHE_TS_KEY, now)
         return raw
 
+    def _recent_daytrade_allocation_performance(self, limit=160):
+        """Return a lightweight, local-only score used for budget allocation."""
+        result = {"sell_count": 0, "win_count": 0, "win_rate": 0.0, "realized_krw": 0.0}
+        try:
+            rows = self.struct.db("trade_log").rows(
+                event_type__startswith="DT_",
+                orderby="created",
+                order="DESC",
+                dump=max(20, min(500, self._safe_int(limit, 160))),
+            ) or []
+        except Exception:
+            return result
+        for row in rows:
+            action = str(row.get("action", "") or "").upper()
+            if not action.startswith("SELL") or self._safe_int(row.get("filled_qty", 0), 0) <= 0:
+                continue
+            realized = 0.0
+            try:
+                raw = json.loads(str(row.get("raw_response", "") or "{}"))
+                runtime = raw.get("runtime", {}) if isinstance(raw, dict) else {}
+                realized = self._safe_float(runtime.get("realized", raw.get("realized", 0)), 0)
+            except Exception:
+                realized = 0.0
+            result["sell_count"] += 1
+            result["realized_krw"] += realized
+            if realized > 0:
+                result["win_count"] += 1
+            if result["sell_count"] >= 30:
+                break
+        if result["sell_count"] > 0:
+            result["win_rate"] = round(result["win_count"] / result["sell_count"] * 100, 2)
+        result["realized_krw"] = round(result["realized_krw"], 2)
+        return result
+
+    def _dynamic_daytrade_allocation(self, total_asset_krw=0, reserve_krw=0, requested_seed=0):
+        enabled = str(self._config("daytrade_dynamic_allocation_enabled", "false") or "false").lower() == "true"
+        total_asset_krw = max(0.0, self._safe_float(total_asset_krw, 0))
+        reserve_krw = max(0.0, self._safe_float(reserve_krw, 0))
+        requested_seed = max(0.0, self._safe_float(requested_seed, 0))
+        performance = self._recent_daytrade_allocation_performance() if enabled else {
+            "sell_count": 0, "win_count": 0, "win_rate": 0.0, "realized_krw": 0.0,
+        }
+        min_ratio = min(0.9, max(0.1, self._safe_float(self._config("daytrade_dynamic_min_ratio", "0.45"), 0.45)))
+        max_ratio = min(0.95, max(min_ratio, self._safe_float(self._config("daytrade_dynamic_max_ratio", "0.80"), 0.80)))
+        ratio = min(max_ratio, max(min_ratio, self._safe_float(self._config("daytrade_dynamic_base_ratio", "0.60"), 0.60)))
+        reasons = [f"기준 {ratio * 100:.0f}%"]
+        reserve_ratio = (reserve_krw / total_asset_krw) if total_asset_krw > 0 else 0.0
+        if enabled and total_asset_krw > 0:
+            if reserve_ratio <= 0.10:
+                ratio += 0.10
+                reasons.append("무한매수 당일 예약 부담 낮음 +10%p")
+            elif reserve_ratio >= 0.25:
+                ratio -= 0.10
+                reasons.append("무한매수 예약 부담 높음 -10%p")
+            if performance.get("sell_count", 0) >= 3:
+                if performance.get("realized_krw", 0) > 0 and performance.get("win_rate", 0) >= 55:
+                    ratio += 0.10
+                    reasons.append("최근 단타 성과 양호 +10%p")
+                elif performance.get("realized_krw", 0) < 0 or performance.get("win_rate", 0) < 40:
+                    ratio -= 0.10
+                    reasons.append("최근 단타 성과 부진 -10%p")
+        ratio = min(max_ratio, max(min_ratio, ratio))
+        allocation_cap_krw = max(0.0, total_asset_krw - reserve_krw)
+        target_seed_krw = allocation_cap_krw if total_asset_krw <= 0 else min(allocation_cap_krw, total_asset_krw * ratio)
+        if not enabled:
+            target_seed_krw = requested_seed if requested_seed > 0 else allocation_cap_krw
+            ratio = (target_seed_krw / total_asset_krw) if total_asset_krw > 0 else 0.0
+            reasons = ["수동 설정 시드"]
+        return {
+            "enabled": enabled,
+            "ratio": round(ratio, 4),
+            "target_seed_krw": round(max(0.0, target_seed_krw), 2),
+            "allocation_cap_krw": round(allocation_cap_krw, 2),
+            "reserve_ratio": round(reserve_ratio, 4),
+            "reasons": reasons,
+            "performance": performance,
+        }
+
     def shared_budget_status(self, requested_seed=0, use_cache_only=False, market="KS"):
         """
         예산 상태 반환.
@@ -1380,14 +1750,17 @@ class DomesticDaytradeEngine:
         import time as _t, sys as _sys
         market_key = "US" if self._is_us_market(market) else "KS"
         reserve = self.infinite_buy_daily_reserve()
-        _CACHE_KEY = "_trading_kis_balance_cache_v2"
-        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts"
+        _CACHE_KEY = "_trading_kis_balance_cache_v2" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
+        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
         _CACHE_TTL = 120.0
         cached = getattr(_sys, _CACHE_KEY, None)
         cached_ts = getattr(_sys, _CACHE_TS_KEY, 0.0)
         cache_fresh = cached and (_t.time() - cached_ts) < _CACHE_TTL
         
-        if use_cache_only and not cache_fresh:
+        if use_cache_only and cache_fresh:
+            raw = dict(cached or {})
+            raw["source"] = f"cache_only:{raw.get('source', 'memory')}"
+        elif use_cache_only:
             # 캐시 없음 → 빠른 응답 (잔고 0)
             raw = {"krw_balance": 0.0, "withdrawable_krw": 0.0, "usd_krw": 0.0,
                    "same_day_sell_krw": 0.0, "same_day_buy_krw": 0.0, "source": "cache_miss"}
@@ -1423,7 +1796,7 @@ class DomesticDaytradeEngine:
         us_cash_balance_usd = 0.0
         us_krw_auto_exchange_krw = 0.0
         us_krw_auto_exchange_estimate_usd = 0.0
-        if market_key == "US":
+        if market_key == "US" and not use_cache_only:
             try:
                 us_defaults = self.strategy.us_defaults()
                 budget_symbol = str(us_defaults.get("symbol", "TQQQ") or "TQQQ").upper()
@@ -1432,7 +1805,7 @@ class DomesticDaytradeEngine:
                     if str(item.get("symbol", "") or "").upper() == budget_symbol:
                         exchange = str(item.get("exchange", exchange) or exchange).upper()
                         break
-                us_power = self.struct.kis_api.get_buying_power_info(symbol=budget_symbol, exchange=exchange)
+                us_power = self._broker().get_buying_power_info(symbol=budget_symbol, exchange=exchange)
                 if us_power.get("ok"):
                     us_orderable_amount_usd = self._safe_float(us_power.get("amount", 0), 0)
                     us_orderable_qty = max(0, self._safe_int(us_power.get("qty", 0), 0))
@@ -1452,7 +1825,7 @@ class DomesticDaytradeEngine:
             except Exception:
                 pass
             try:
-                overseas_balance = self.struct.kis_api.get_balance() or {}
+                overseas_balance = self._broker().get_balance() or {}
                 us_cash_balance_usd = self._safe_float(overseas_balance.get("cash_balance", 0), 0)
             except Exception:
                 us_cash_balance_usd = 0.0
@@ -1461,7 +1834,7 @@ class DomesticDaytradeEngine:
         # 무한매수 예약금 차감 여부 콜록 (DB 콘피그)
         ignore_reserve = str(self._config("daytrade_ignore_reserve", "false")).lower() == "true"
         reserved_krw = 0.0
-        if ignore_reserve is False and market_key == "US":
+        if ignore_reserve is False:
             reserved_krw = reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0
         # withdrawable_krw는 TTTC8908R(주문가능금액) 기준이므로 당일매도분이 이미 포함됨.
         # same_day_sell_krw는 참고용 표시 전용 — 여기에 다시 더하면 이중계산 됨.
@@ -1472,36 +1845,36 @@ class DomesticDaytradeEngine:
         if market_key == "US":
             tradable_cash_krw = max(us_combined_orderable_amount_krw, us_orderable_amount_krw + us_krw_auto_exchange_krw)
         else:
-            tradable_cash_krw = withdrawable_krw + d1_deposit_krw + d2_deposit_krw
-            if tradable_cash_krw <= 0 and domestic_eval_krw <= 0 and foreign_eval_krw <= 0:
-                tradable_cash_krw = max(tradable_cash_krw, total_asset_krw)
+            # The broker orderable amount already accounts for settlement.
+            # D+1/D+2 balances and private holdings are not additional cash.
+            tradable_cash_krw = withdrawable_krw
         available_before_reserve = max(0.0, tradable_cash_krw)
         available_for_daytrade = max(0.0, available_before_reserve - reserved_krw)
         requested_seed = self._safe_float(requested_seed, 0)
         live_order_seed = available_for_daytrade
-        portfolio = self.portfolio_usage(use_live_price=True, market_filter=market_key)
+        portfolio = self.portfolio_usage(use_live_price=not use_cache_only, market_filter=market_key, sync_broker=not use_cache_only, budget_only=True)
         market_used_seed_krw = round(max(0.0, self._safe_float(portfolio.get("active_entry_seed_krw", portfolio.get("active_cost_krw", 0)), 0)), 2)
         cross_market_used_seed_krw = market_used_seed_krw
         if market_key == "US":
             try:
-                shared_portfolio = self.portfolio_usage(use_live_price=True)
+                shared_portfolio = self.portfolio_usage(use_live_price=not use_cache_only, sync_broker=not use_cache_only, budget_only=True)
                 cross_market_used_seed_krw = round(max(0.0, self._safe_float(shared_portfolio.get("active_entry_seed_krw", shared_portfolio.get("active_cost_krw", market_used_seed_krw)), market_used_seed_krw)), 2)
             except Exception:
                 cross_market_used_seed_krw = market_used_seed_krw
         used_seed_krw = max(market_used_seed_krw, cross_market_used_seed_krw)
         capacity_daytrade_seed_krw = round(max(0.0, available_for_daytrade + used_seed_krw), 2)
-        # total_seed_krw: min(requested_seed, total_asset_krw) — 총 자산이 시드 상한
-        # 설정 시드가 총 자산보다 크면 총 자산이 곧 시드 (없는 돈을 시드로 쓸 수 없음)
-        _asset_cap = total_asset_krw if total_asset_krw > 0 else capacity_daytrade_seed_krw
-        if requested_seed > 0:
-            total_seed_krw = round(min(requested_seed, _asset_cap), 2)
-        else:
-            total_seed_krw = round(_asset_cap, 2)
-        # remaining_seed_krw: total_seed - used (현금 cap 없음)
-        # 총 자산 - 현재 포지션 매입금액 = 추가 매수 가능 금액
-        remaining_seed_krw = round(max(0.0, total_seed_krw - used_seed_krw), 2)
-        # effective_seed: 실질 주문 기준 시드 = remaining_seed (총자산기반)
-        # available_for_daytrade(현금기준 21,539)로 cap하지 않음
+        _asset_cap = min(total_asset_krw, capacity_daytrade_seed_krw) if total_asset_krw > 0 else capacity_daytrade_seed_krw
+        allocation = self._dynamic_daytrade_allocation(
+            total_asset_krw=_asset_cap,
+            # Capacity already excludes the reserve; never subtract twice.
+            reserve_krw=0,
+            requested_seed=requested_seed,
+        )
+        target_seed_krw = self._safe_float(allocation.get("target_seed_krw", requested_seed), requested_seed)
+        total_seed_krw = round(min(max(used_seed_krw, target_seed_krw, 0.0), _asset_cap), 2)
+        # Remaining strategy allocation cannot exceed unreserved broker cash.
+        remaining_seed_krw = round(min(max(0.0, total_seed_krw - used_seed_krw), available_for_daytrade), 2)
+        # Locked holdings never become additional cash or trading allocation.
         effective_seed = remaining_seed_krw
         position_count = self._safe_int(portfolio.get("position_count", 0), 0)
         max_symbols = self._auto_max_symbols(market=market_key)
@@ -1548,6 +1921,9 @@ class DomesticDaytradeEngine:
             "infinite_buy_daily_reserve_usd": round(reserve.get("reserve_usd", 0), 2),
             "infinite_buy_daily_reserve_krw": round(reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0, 2),
             "reserve_ignored": ignore_reserve,
+            "applied_reserve_krw": round(reserved_krw, 2),
+            "budget_status": "unavailable" if source == "cache_miss" else "ready",
+            "budget_updated_at": self._now().isoformat(),
             "available_for_daytrade": round(available_for_daytrade, 2),
             "actual_orderable_seed_krw": round(available_for_daytrade, 2),
             "live_order_seed": round(live_order_seed, 2),
@@ -1570,8 +1946,10 @@ class DomesticDaytradeEngine:
             "source": source,
             "reserve_cycles": reserve.get("cycles", []),
             "reserve_cycle_count": reserve.get("cycle_count", 0),
+            "dynamic_allocation": allocation,
+            "daytrade_allocation_ratio": round(self._safe_float(allocation.get("ratio", 0), 0) * 100, 2),
             "message": ("무한매수 예약금 무시 중 — 현금최대가능 전액을 단타 실주문에 사용합니다." if ignore_reserve
-                else "무한매수 당일 예약금 차감 후 남는 현금최대가능 금액만 단타 실주문에 사용합니다."),
+                else f"무한매수 당일 예약금 보존 · 단타 자동배분 {self._safe_float(allocation.get('ratio', 0), 0) * 100:.0f}% ({' / '.join(allocation.get('reasons', []))})"),
         }
 
     def _current_price(self, symbol, market="KS", fallback=0.0):
@@ -1590,20 +1968,34 @@ class DomesticDaytradeEngine:
             pass
         return self._safe_float(fallback, 0)
 
-    def portfolio_usage(self, use_live_price=True, market_filter=None):
+    def portfolio_usage(self, use_live_price=True, market_filter=None, sync_broker=True, budget_only=False):
         rows = []
         active_market_value = 0.0
         active_cost_value = 0.0
         active_committed_seed = 0.0
         active_entry_seed = 0.0
         active_qty = 0
-        positions = self.active_positions()
+        positions = self.active_positions(sync_broker=sync_broker, use_live_price=use_live_price, market_filter=market_filter)
+        # Budget excludes private locked holdings, while account exposure and
+        # broker reconciliation retain every position. Never turn a lock into cash.
+        permissions = None
+        if budget_only:
+            policy = getattr(self.struct, 'order_policy', None)
+            if policy is not None:
+                permissions = policy.read()  # Read failure must not free budget.
+            elif not _PAPER_MODE:
+                raise RuntimeError('단타 시드 계산에 필요한 종목 잠금을 확인하지 못했습니다.')
         for position in positions:
             qty = self._safe_int(position.get("position_qty", 0), 0)
             if qty <= 0:
                 continue
             symbol = position.get("symbol", "")
             market = position.get("market", "KS")
+            if budget_only:
+                if str(symbol).strip().upper() == 'SOXL':
+                    continue
+                if permissions is not None and permissions.get('symbols', {}).get(str(symbol).strip().upper(), not _PAPER_MODE) is not False:
+                    continue
             if market_filter is not None and str(market).upper() != str(market_filter).upper():
                 continue
             avg_price = self._safe_float(position.get("avg_price", 0), 0)
@@ -1715,8 +2107,11 @@ class DomesticDaytradeEngine:
             return {
                 "executed": False,
                 "message": "국내 주식 시장이 열려있지 않습니다.",
-                "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                # The worker runs continuously so it can be ready at open.
+                # Outside the session, never block the whole loop on fresh KIS
+                # balance calls; the dashboard has its own explicit refresh.
+                "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS", use_cache_only=True),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True),
                 "results": [],
                 "candidates": [],
             }
@@ -1851,6 +2246,12 @@ class DomesticDaytradeEngine:
                     elif action.startswith("SELL"):
                         tracked_position_count = max(0, tracked_position_count - 1)
                         remaining_seed_krw = min(effective_seed, remaining_seed_krw + max(order_value, 0))
+                elif outcome.get("submitted") and action.startswith("BUY"):
+                    # A broker-accepted order is committed capital even before
+                    # the fill inquiry confirms it. Never allocate that money
+                    # to another candidate in the same cycle.
+                    tracked_position_count += 1
+                    remaining_seed_krw = max(0.0, remaining_seed_krw - max(order_value, 0))
                 results.append({
                     "symbol": symbol,
                     "market": market,
@@ -1859,6 +2260,7 @@ class DomesticDaytradeEngine:
                     "source": item.get("source", "leaderboard"),
                     "score": item.get("score", 0),
                     "executed": bool(outcome.get("executed", False)),
+                    "submitted": bool(outcome.get("submitted", False)),
                     "message": outcome.get("message", ""),
                     "signal": outcome.get("status", {}).get("signal", {}).get("action", "HOLD"),
                     "risk_status": outcome.get("status", {}).get("runtime", {}).get("risk_status", "SAFE"),
@@ -1939,6 +2341,8 @@ class DomesticDaytradeEngine:
         return issues
 
     def _live_strategy_allowed(self, strategy_id="vrev", market="KS"):
+        if _PAPER_MODE:
+            return True
         strategy_id = str(strategy_id or "").strip().lower()
         spec = self.strategy.strategy_spec(strategy_id)
         spec_market = str(spec.get("market", "KS") or "KS").upper()
@@ -1947,7 +2351,30 @@ class DomesticDaytradeEngine:
             return live_supported and spec_market == "US"
         return live_supported and spec_market != "US"
 
-    def execute_live(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True):
+    def execute_live(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True, sync_broker=True, forced_sell_qty=None, force_reason="", current_price_override=0, precomputed_status=None):
+        if str(symbol).strip().upper() == 'SOXL':
+            return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
+                    'order_value': 0, 'message': 'SOXL은 무한매수 전용으로 단타 주문이 잠겨 있습니다.'}
+        if str(strategy_id).startswith('paper_selective_'):
+            if not _PAPER_MODE or market != 'KS' or getattr(self.struct.kis_api, 'is_real', None) is not False:
+                return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
+                        'message': '이 전략은 KIS 국내 모의투자에서만 검증할 수 있습니다.', 'order_value': 0}
+            # Never trust a previously computed BUY/SELL or force-liquidate a
+            # private holding using this experimental strategy's permission.
+            if force:
+                return {'executed': False, 'submitted': False, 'action': 'FORCE_DISABLED', 'order_value': 0}
+            if not self.auto_enabled('KS'):
+                return {'executed': False, 'submitted': False, 'action': 'AUTO_OFF', 'order_value': 0}
+            if not self._daytrade_market_open('KS'):
+                return {'executed': False, 'submitted': False, 'action': 'WAIT_MARKET', 'order_value': 0}
+            precomputed_status = None
+        # Quotes and premarket research are not permission to submit PAPER
+        # orders outside the supported regular session, including exits.
+        if _PAPER_MODE and not _PAPER_CONTINUOUS and not self._daytrade_market_open(market):
+            return {"executed": False, "submitted": False, "market_closed": True,
+                    "action": "WAIT_MARKET", "order_value": 0,
+                    "message": "모의투자 정규장 시작 대기 — 주문은 전송하지 않습니다.",
+                    "status": precomputed_status or {}}
         if self._hard_locked():
             return {
                 "executed": False,
@@ -1966,13 +2393,65 @@ class DomesticDaytradeEngine:
                 "order_value": 0,
             }
         strategy_id = self.strategy._normalize_strategy(strategy_id)
-        status = self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
+        status = precomputed_status if isinstance(precomputed_status, dict) else self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id, sync_broker=sync_broker, allow_buy=allow_buy, current_price_override=current_price_override)
         signal = status.get("signal", {}) or {}
         state = status.get("state", {}) or {}
         runtime = status.get("runtime", {}) or {}
         action = str(signal.get("action", "HOLD") or "HOLD")
         qty = max(0, self._safe_int(signal.get("order_qty", 0), 0))
         current_price = self._safe_float(signal.get("current_price", 0), 0)
+        if force and allow_buy is False and not self._is_us_market(market):
+            held_qty = max(0, self._safe_int(state.get("position_qty", 0), 0))
+            requested_forced_qty = held_qty if forced_sell_qty is None else self._safe_int(forced_sell_qty, 0)
+            forced_qty = min(held_qty, max(0, requested_forced_qty))
+            if forced_qty > 0:
+                action = "SELL_DELEVERAGE"
+                qty = forced_qty
+                signal.update({
+                    "action": action,
+                    "order_qty": forced_qty,
+                    "reason": force_reason or "총 주식 노출액이 순자산 한도를 초과해 위험 축소 매도",
+                    "forced_deleverage": True,
+                })
+                status["signal"] = signal
+
+        # Every broker order needs an auditable thesis. PAPER is where this
+        # discipline must be proven, so it does not bypass the evidence gate.
+        evidence_issues = []
+        reason_text = str(signal.get("reason", "") or "").strip()
+        price_source = str(signal.get("price_source", "") or "").strip().lower()
+        if action != "HOLD" and len(reason_text) < 8:
+            evidence_issues.append("구체적인 매매 사유가 없습니다.")
+        if action.startswith("BUY"):
+            try:
+                ownership_issue = self.strategy.daytrade_entry_issue(symbol)
+            except Exception:
+                ownership_issue = '전략별 종목 소유 확인 실패로 신규 매수를 보류합니다.'
+            if ownership_issue:
+                evidence_issues.append(ownership_issue)
+            if current_price <= 0 or qty <= 0:
+                evidence_issues.append("유효한 현재가 또는 주문수량이 없습니다.")
+            if price_source in ("", "error_fallback", "state", "state_cache"):
+                evidence_issues.append(f"신규 매수에 사용할 수 없는 가격 출처입니다: {price_source or '없음'}")
+            if list(signal.get("preflight_issues", []) or []):
+                evidence_issues.extend(str(item) for item in signal.get("preflight_issues", []) if str(item).strip())
+        if evidence_issues:
+            message = "매매 근거 검증 실패: " + " / ".join(evidence_issues[:4])
+            self._append_runtime_log(
+                "warning",
+                f"{symbol} 주문 차단: {message}",
+                symbol=symbol,
+                strategy_id=strategy_id,
+                meta=self._compact_runtime_meta(status, {"evidence_issues": evidence_issues}),
+            )
+            return {
+                "executed": False,
+                "message": message,
+                "status": status,
+                "action": action,
+                "order_value": 0,
+                "evidence_blocked": True,
+            }
         order_value = round(current_price * qty, 2)
         breakout_meta = signal.get("breakout_meta")
 
@@ -2043,7 +2522,7 @@ class DomesticDaytradeEngine:
         try:
             if action == "PRE_SELL_JACKPOT":
                 limit_price = self._round_krw_price(self._safe_float(signal.get("pre_sell_price", current_price), current_price))
-                order = self.struct.kis_api.sell_domestic_order(symbol, qty, price=limit_price, order_type="LIMIT")
+                order = self._broker().sell_domestic_order(symbol, qty, price=limit_price, order_type="LIMIT")
                 state["pending_sell_order_no"] = str(order.get("order_no", "") or "")
                 state["pending_sell_price"] = limit_price
                 state["pending_sell_qty"] = qty
@@ -2051,13 +2530,37 @@ class DomesticDaytradeEngine:
                 state["pending_sell_placed_at"] = self._timestamp()
                 state["last_signal"] = action
                 state["updated_at"] = self._timestamp()
-                self._append_order(state, action, qty, limit_price, order, strategy_id=strategy_id, reason=signal.get("reason", ""))
+                self._append_order(
+                    state,
+                    action,
+                    qty,
+                    limit_price,
+                    order,
+                    strategy_id=strategy_id,
+                    reason=signal.get("reason", ""),
+                    status="ACCEPTED_UNVERIFIED",
+                )
                 self._store_state(state)
                 self._invalidate_kis_cache()
                 log_message = f"{symbol} 잭팟 사전예약 매도 등록 | {qty}주 · 지정가 ₩{limit_price:,} | {signal.get('reason', '')}"
-                self._log_execution(symbol, action, qty, limit_price, order, log_message, strategy_id=strategy_id, runtime=self._compact_runtime_meta(status, {"order_value": round(limit_price * qty, 2), "pending_sell": True}), name=name or state.get("name", ""), breakout_meta=breakout_meta)
+                self._log_order_pending(
+                    symbol,
+                    action,
+                    qty,
+                    limit_price,
+                    order,
+                    log_message,
+                    strategy_id=strategy_id,
+                    runtime=self._compact_runtime_meta(status, {
+                        "order_value": round(limit_price * qty, 2),
+                        "pending_sell": True,
+                    }),
+                    name=name or state.get("name", ""),
+                    market=market,
+                )
                 return {
-                    "executed": True,
+                    "executed": False,
+                    "submitted": True,
                     "message": f"{symbol} 잭팟 지정가 매도를 예약했습니다.",
                     "order": order,
                     "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
@@ -2088,7 +2591,7 @@ class DomesticDaytradeEngine:
                             "order_value": 0,
                         }
                     exchange = self._us_exchange(symbol)
-                    buying_power = self.struct.kis_api.get_buying_power_info(symbol=symbol, price=round(current_price, 2), exchange=exchange)
+                    buying_power = self._broker().get_buying_power_info(symbol=symbol, price=round(current_price, 2), exchange=exchange)
                     max_qty = max(0, self._safe_int(buying_power.get("executable_qty", buying_power.get("broker_qty", buying_power.get("qty", 0))), 0))
                     orderable_amount_usd = self._safe_float(buying_power.get("executable_amount", buying_power.get("broker_amount", buying_power.get("amount", 0))), 0)
                     estimated_amount_usd = max(
@@ -2142,14 +2645,46 @@ class DomesticDaytradeEngine:
                     if qty > planning_qty:
                         qty = planning_qty
                         order_value = round(current_price * qty, 2)
-                    order = self.struct.kis_api.buy_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
-                    # 해외 체결 확인 API 미구현 → fallback 사용
-                    fill = {"filled_price": current_price, "filled_qty": qty, "status": "UNKNOWN"}
+                    order = self._broker().buy_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+                    # 주문 접수와 체결은 다르다. 해외 체결 조회가 없는 동안
+                    # 주문 수량 전체를 체결로 간주하면 모의자산이 부풀려진다.
+                    fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
                 else:
-                    order = self.struct.kis_api.buy_domestic_order(symbol, qty, price=0, order_type="MARKET")
+                    order = self._broker().buy_domestic_order(symbol, qty, price=0, order_type="MARKET")
                     fill = self._resolve_domestic_fill(symbol, "BUY", order, fallback_price=current_price, fallback_qty=qty)
-                exec_price = self._safe_float(fill.get("filled_price", current_price), current_price)
-                exec_qty = max(0, self._safe_int(fill.get("filled_qty", qty), qty))
+                exec_price = self._safe_float(fill.get("filled_price", 0), 0)
+                exec_qty = max(0, self._safe_int(fill.get("filled_qty", 0), 0))
+                if exec_qty <= 0 or exec_price <= 0 or (strategy_id.startswith('paper_selective_') and exec_qty < qty):
+                    pending_status = str(fill.get("status", "") or "ACCEPTED_UNVERIFIED").upper()
+                    state["pending_buy_order_no"] = str((order or {}).get("order_no", "") or "")
+                    state["pending_buy_action"] = action
+                    state["pending_buy_qty"] = qty
+                    state["pending_buy_price"] = current_price
+                    state["pending_buy_placed_at"] = self._timestamp()
+                    if action == "BUY1":
+                        state["buy1_used"] = True
+                    if action == "BUY2":
+                        state["buy2_used"] = True
+                    state["last_signal"] = f"{action}_PENDING"
+                    state["updated_at"] = self._timestamp()
+                    self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
+                                       reason=signal.get("reason", ""), status=pending_status)
+                    self._store_state(state)
+                    self._invalidate_kis_cache()
+                    message = f"{symbol} {action} 주문 접수 · 체결 확인 대기"
+                    self._log_order_pending(symbol, action, qty, current_price, order, message,
+                                            strategy_id=strategy_id,
+                                            runtime=self._compact_runtime_meta(status, {"order_value": order_value}),
+                                            name=name or state.get("name", ""), market=market)
+                    return {
+                        "executed": False,
+                        "submitted": True,
+                        "message": message,
+                        "order": order,
+                        "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
+                        "action": action,
+                        "order_value": order_value,
+                    }
                 new_qty = prev_qty + exec_qty
                 total_cost = (prev_avg * prev_qty) + (exec_price * exec_qty)
                 state["position_qty"] = new_qty
@@ -2164,19 +2699,82 @@ class DomesticDaytradeEngine:
                 state["carried_overnight"] = False
                 state["last_signal"] = action
                 state["updated_at"] = self._timestamp()
-                self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id, reason=signal.get("reason", ""))
+                self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
+                                   reason=signal.get("reason", ""), status=str(fill.get("status", "FILLED") or "FILLED"),
+                                   filled_qty=exec_qty, filled_price=exec_price)
                 self._store_state(state)
                 self._invalidate_kis_cache()
+                actual_price = exec_price
+                actual_qty = exec_qty
+                actual_order_value = round(actual_price * actual_qty, 2)
+                if self._is_us_market(market):
+                    log_message = f"{symbol} {action} 실행 | {actual_qty}주 · ${actual_price:.2f} · 체결금액 ${actual_order_value:.2f} | {signal.get('reason', '')}"
+                else:
+                    log_message = f"{symbol} {action} 실행 | {actual_qty}주 · 체결가 ₩{round(actual_price):,} · 체결금액 ₩{round(actual_order_value):,} | {signal.get('reason', '')}"
+                self._log_execution(
+                    symbol,
+                    action,
+                    actual_qty,
+                    actual_price,
+                    order,
+                    log_message,
+                    strategy_id=strategy_id,
+                    runtime=self._compact_runtime_meta(status, {
+                        "order_value": actual_order_value,
+                        "realized": 0.0,
+                        "post_position_qty": self._safe_int(state.get("position_qty", 0), 0),
+                        "post_avg_price": round(self._safe_float(state.get("avg_price", 0), 0), 4),
+                    }),
+                    name=name or state.get("name", ""),
+                    filled_price=actual_price,
+                    filled_qty=actual_qty,
+                    breakout_meta=breakout_meta,
+                )
+                return {
+                    "executed": True,
+                    "message": log_message,
+                    "order": order,
+                    "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
+                    "action": action,
+                    "order_value": actual_order_value,
+                }
             else:
                 if self._is_us_market(market):
                     exchange = self._us_exchange(symbol)
-                    order = self.struct.kis_api.sell_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
-                    fill = {"filled_price": current_price, "filled_qty": qty, "status": "UNKNOWN"}
+                    order = self._broker().sell_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+                    fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
                 else:
-                    order = self.struct.kis_api.sell_domestic_order(symbol, qty, price=0, order_type="MARKET")
+                    order = self._broker().sell_domestic_order(symbol, qty, price=0, order_type="MARKET")
                     fill = self._resolve_domestic_fill(symbol, "SELL", order, fallback_price=current_price, fallback_qty=qty)
-                exec_price = self._safe_float(fill.get("filled_price", current_price), current_price)
-                exec_qty = max(0, self._safe_int(fill.get("filled_qty", qty), qty))
+                exec_price = self._safe_float(fill.get("filled_price", 0), 0)
+                exec_qty = max(0, self._safe_int(fill.get("filled_qty", 0), 0))
+                if exec_qty <= 0 or exec_price <= 0 or (strategy_id.startswith('paper_selective_') and exec_qty < qty):
+                    pending_status = str(fill.get("status", "") or "ACCEPTED_UNVERIFIED").upper()
+                    state["pending_sell_order_no"] = str((order or {}).get("order_no", "") or "")
+                    state["pending_sell_price"] = current_price
+                    state["pending_sell_qty"] = qty
+                    state["pending_sell_type"] = action
+                    state["pending_sell_placed_at"] = self._timestamp()
+                    state["last_signal"] = f"{action}_PENDING"
+                    state["updated_at"] = self._timestamp()
+                    self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
+                                       reason=signal.get("reason", ""), status=pending_status)
+                    self._store_state(state)
+                    self._invalidate_kis_cache()
+                    message = f"{symbol} {action} 주문 접수 · 체결 확인 대기"
+                    self._log_order_pending(symbol, action, qty, current_price, order, message,
+                                            strategy_id=strategy_id,
+                                            runtime=self._compact_runtime_meta(status, {"order_value": order_value}),
+                                            name=name or state.get("name", ""), market=market)
+                    return {
+                        "executed": False,
+                        "submitted": True,
+                        "message": message,
+                        "order": order,
+                        "status": self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id),
+                        "action": action,
+                        "order_value": order_value,
+                    }
                 sell_qty = min(prev_qty, exec_qty)
                 realized = (exec_price - prev_avg) * sell_qty if prev_avg > 0 else 0.0
                 state["realized_profit"] = round(self._safe_float(state.get("realized_profit", 0), 0) + realized, 2)
@@ -2196,7 +2794,9 @@ class DomesticDaytradeEngine:
                         state["buy1_used"] = True  # 1차 익절 완료 표시 (재진입 방지)
                 state["last_signal"] = action
                 state["updated_at"] = self._timestamp()
-                self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id, reason=signal.get("reason", ""))
+                self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
+                                   reason=signal.get("reason", ""), status=str(fill.get("status", "FILLED") or "FILLED"),
+                                   filled_qty=exec_qty, filled_price=exec_price)
                 self._store_state(state)
                 self._invalidate_kis_cache()
 
@@ -2255,8 +2855,27 @@ class DomesticDaytradeEngine:
         except Exception as e:
             error_message = str(e)
             self._push_state_error(state, error_message)
+            # KIS가 주문을 거절한 경우에도 마지막 시도 시각을 남긴다.
+            # 체결 주문 목록만으로 쿨다운을 계산하면 동일 신호를 매 사이클마다
+            # 재전송하여 초당 거래건수 제한과 중복 주문을 유발한다.
+            state["last_order_failure_at"] = self._timestamp()
+            state["last_order_failure_action"] = action
             state["updated_at"] = self._timestamp()
             self._store_state(state)
+            self._log_order_failure(
+                symbol,
+                action,
+                qty,
+                current_price,
+                error_message,
+                strategy_id=strategy_id,
+                runtime=self._compact_runtime_meta(status, {
+                    "failed_action": action,
+                    "order_value": order_value,
+                }),
+                name=name or state.get("name", ""),
+                market=market,
+            )
             self._append_runtime_log("error", f"{symbol} 주문 실패: {error_message}", symbol=symbol, strategy_id=strategy_id, meta=self._compact_runtime_meta(status, {"failed_action": action, "order_value": order_value}))
             return {
                 "executed": False,
@@ -2386,13 +3005,32 @@ class DomesticDaytradeEngine:
         """활성 포지션에 대해 자동청산 감시 실행 (신규 매수 없음)"""
         if self._hard_locked():
             return {"executed": False, "executed_count": 0, "watched_count": 0, "message": self._hard_lock_message(), "hard_locked": True, "results": []}
-        with self._global_lock("engine_cycle"):
-            positions = [p for p in self.active_positions() if not self._is_us_market(p.get("market", "KS"))]
+        # Do not hammer the paper gateway with impossible market orders after
+        # the exchange has closed.  The next in-session heartbeat evaluates the
+        # same position and retries the still-valid exit signal.
+        if not self._daytrade_market_open("KS"):
+            message = "국장 종료 — 다음 장 시작 후 자동청산 감시를 재개합니다."
+            self._append_runtime_log("info", message, meta={"market": "KS", "market_closed": True})
+            return {
+                "executed": False,
+                "submitted": False,
+                "executed_count": 0,
+                "submitted_count": 0,
+                "watched_count": 0,
+                "market_closed": True,
+                "message": message,
+                "results": [],
+            }
+        with self._global_lock("exit_cycle"):
+            positions = [p for p in self.active_positions(use_live_price=False, market_filter="KS") if self.analysis_allowed(p.get('symbol', ''))]
             results = []
             executed_count = 0
             watched_count = 0
+            submitted_count = 0
             for item in positions:
                 symbol = item.get("symbol", "")
+                if not self.analysis_allowed(symbol):
+                    continue
                 market = item.get("market", "KS")
                 strategy_id = item.get("strategy_id", "vrev")
                 state = self._state_for(symbol, market=market, seed=max(self._safe_float(item.get("current_price", 0), 0) * self._safe_int(item.get("position_qty", 0), 0), 1), name=item.get("name", ""), strategy_id=strategy_id)
@@ -2403,6 +3041,61 @@ class DomesticDaytradeEngine:
                 if not has_watch:
                     continue
                 watched_count += 1
+                current_price = max(0.0, self._safe_float(item.get("current_price", 0), 0))
+                position_qty = max(0, self._safe_int(state.get("position_qty", 0), 0))
+                avg_price = max(0.0, self._safe_float(state.get("avg_price", 0), 0))
+                try:
+                    profile = self._profile_for(symbol, strategy_id=strategy_id, market=market)
+                except (AttributeError, TypeError):
+                    # Lightweight strategy stubs used by diagnostics/tests do
+                    # not expose the full trainer profile API.
+                    profile = {
+                        "stop_loss_pct": 1.5,
+                        "jackpot_take_profit_pct": 2.0,
+                        "jackpot_soft_exit_guard_ratio": 0.995,
+                    }
+                action = "HOLD"
+                reason = "현재 빠른 청산 조건에 해당하지 않습니다."
+                order_qty = 0
+                pending_order_no = str(state.get("pending_sell_order_no", "") or "")
+                stop_loss_pct = abs(self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5))
+                jackpot_pct = max(0.0, self._safe_float(profile.get("jackpot_take_profit_pct", 2.0), 2.0))
+                jackpot_price = avg_price * (1 + jackpot_pct / 100) if avg_price > 0 else 0
+                jackpot_guard = jackpot_price * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
+                if pending_order_no:
+                    reason = f"기존 매도 주문 {pending_order_no} 체결 확인 대기 중"
+                elif bool(state.get("stop_loss_enabled", False)) and self._safe_float(state.get("stop_loss_price", 0), 0) > 0 and current_price <= self._safe_float(state.get("stop_loss_price", 0), 0):
+                    action, order_qty, reason = "SELL_STOP_LOSS", position_qty, "사용자 지정 손절가 확인"
+                elif avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100):
+                    action, order_qty, reason = "SELL_STOP_LOSS", position_qty, f"자동 손절가 확인 (평단가 -{stop_loss_pct}%)"
+                elif bool(state.get("manual_sell_enabled", False)) and self._safe_float(state.get("manual_sell_target_price", 0), 0) > 0 and current_price >= self._safe_float(state.get("manual_sell_target_price", 0), 0):
+                    action, order_qty, reason = "SELL_MANUAL", position_qty, "사용자 지정 판매가 도달"
+                elif strategy_id == "vrev" and jackpot_price > 0 and current_price >= jackpot_price:
+                    action, order_qty, reason = "SELL_FULL", position_qty, f"목표 수익 {jackpot_pct}% 달성 전량 청산"
+                elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard:
+                    action, order_qty, reason = "PRE_SELL_JACKPOT", position_qty, f"잭팟가 ₩{round(jackpot_price):,} 근접 — 사전 지정가 예약 우선"
+                elif str(state.get("last_signal", "") or "").startswith("SELL"):
+                    action, order_qty, reason = str(state.get("last_signal")), position_qty, "직전 유효 매도 신호를 빠른 청산 경로에서 재확인"
+                signal = {
+                    "action": action,
+                    "reason": reason,
+                    "order_qty": order_qty,
+                    "current_price": current_price,
+                    "position_qty": position_qty,
+                    "avg_price": avg_price,
+                    "pre_sell_price": round(jackpot_price) if action == "PRE_SELL_JACKPOT" else 0,
+                    "price_source": "kis_broker_balance",
+                    "strategy_id": strategy_id,
+                }
+                fast_status = {
+                    "symbol": symbol,
+                    "market": market,
+                    "name": item.get("name", ""),
+                    "state": state,
+                    "signal": signal,
+                    "profile": profile,
+                    "runtime": {"mode": "paper", "risk_status": "SAFE", "issues": [], "warnings": [], "connection": self.check_kis_connection(), "portfolio": {}, "daily_loss": {}},
+                }
                 outcome = self.execute_live(
                     symbol,
                     market=market,
@@ -2411,9 +3104,14 @@ class DomesticDaytradeEngine:
                     strategy_id=strategy_id,
                     force=False,
                     allow_buy=False,
+                    sync_broker=False,
+                    current_price_override=current_price,
+                    precomputed_status=fast_status,
                 )
                 if outcome.get("executed"):
                     executed_count += 1
+                if outcome.get("submitted"):
+                    submitted_count += 1
                 results.append({
                     "symbol": symbol,
                     "market": market,
@@ -2426,15 +3124,108 @@ class DomesticDaytradeEngine:
                     "watch_active": True,
                 })
 
+                # One sell submission per heartbeat. This keeps the mock KIS
+                # gateway below its order-rate ceiling and lets the next broker
+                # reconciliation confirm the fill before another reduction.
+                if outcome.get("executed") or outcome.get("submitted"):
+                    break
+
+            gross_exposure = sum(
+                max(0.0, self._safe_float(item.get("current_price", 0), 0))
+                * max(0, self._safe_int(item.get("position_qty", 0), 0))
+                for item in positions
+            )
+            budget = self.shared_budget_status(
+                requested_seed=requested_seed,
+                market="KS",
+                use_cache_only=True,
+            )
+            net_assets = max(0.0, self._safe_float(budget.get("total_seed_krw", 0), 0))
+            max_exposure_ratio = max(0.5, self._safe_float(self._config("daytrade_max_gross_exposure_ratio", "1.0"), 1.0))
+            exposure_limit = net_assets * max_exposure_ratio
+            excess_exposure = max(0.0, gross_exposure - exposure_limit) if net_assets > 0 else 0.0
+
+            if executed_count == 0 and submitted_count == 0 and excess_exposure > 0:
+                deleverage_candidates = []
+                for item in positions:
+                    symbol = item.get("symbol", "")
+                    market = item.get("market", "KS")
+                    state = self._state_for(symbol, market=market, seed=requested_seed, name=item.get("name", ""), strategy_id=item.get("strategy_id", "vrev"))
+                    if str(state.get("pending_sell_order_no", "") or "") != "":
+                        continue
+                    qty = max(0, self._safe_int(item.get("position_qty", 0), 0))
+                    price = max(0.0, self._safe_float(item.get("current_price", 0), 0))
+                    if qty <= 0 or price <= 0:
+                        continue
+                    deleverage_candidates.append(item)
+                deleverage_candidates.sort(
+                    key=lambda row: (
+                        self._safe_float(row.get("pnl_pct", 0), 0),
+                        self._safe_float(row.get("current_price", 0), 0) * self._safe_int(row.get("position_qty", 0), 0),
+                    ),
+                    reverse=True,
+                )
+                if deleverage_candidates:
+                    item = deleverage_candidates[0]
+                    price = max(0.0, self._safe_float(item.get("current_price", 0), 0))
+                    held_qty = max(0, self._safe_int(item.get("position_qty", 0), 0))
+                    forced_qty = min(held_qty, max(1, int(math.ceil(excess_exposure / price))))
+                    outcome = self.execute_live(
+                        item.get("symbol", ""),
+                        market=item.get("market", "KS"),
+                        seed=max(price * held_qty, self._safe_float(requested_seed, 0), 1),
+                        name=item.get("name", ""),
+                        strategy_id=item.get("strategy_id", "vrev"),
+                        force=True,
+                        allow_buy=False,
+                        sync_broker=False,
+                        forced_sell_qty=forced_qty,
+                        force_reason=(
+                            f"총 주식 노출 ₩{round(gross_exposure):,} > "
+                            f"순자산 한도 ₩{round(exposure_limit):,}; 초과 노출 자동 축소"
+                        ),
+                        current_price_override=price,
+                        precomputed_status={
+                            "symbol": item.get("symbol", ""),
+                            "market": item.get("market", "KS"),
+                            "name": item.get("name", ""),
+                            "state": state,
+                            "signal": {"action": "HOLD", "reason": "과다 노출 축소 검사", "order_qty": 0, "current_price": price, "position_qty": held_qty, "avg_price": self._safe_float(state.get("avg_price", 0), 0), "price_source": "kis_broker_balance", "strategy_id": item.get("strategy_id", "vrev")},
+                            "profile": {},
+                            "runtime": {"mode": "paper", "risk_status": "SAFE", "issues": [], "warnings": [], "connection": self.check_kis_connection(), "portfolio": {}, "daily_loss": {}},
+                        },
+                    )
+                    if outcome.get("executed"):
+                        executed_count += 1
+                    if outcome.get("submitted"):
+                        submitted_count += 1
+                    results.append({
+                        "symbol": item.get("symbol", ""),
+                        "market": item.get("market", "KS"),
+                        "name": item.get("name", ""),
+                        "strategy_id": item.get("strategy_id", "vrev"),
+                        "executed": bool(outcome.get("executed", False)),
+                        "submitted": bool(outcome.get("submitted", False)),
+                        "message": outcome.get("message", ""),
+                        "signal": outcome.get("action", "SELL_DELEVERAGE"),
+                        "current_price": price,
+                        "watch_active": True,
+                        "forced_deleverage": True,
+                    })
+
             message = "자동청산 감시 대상이 없습니다."
             if watched_count > 0:
                 message = f"자동청산 감시 {watched_count}건 점검 완료"
-            if executed_count > 0:
+            if executed_count > 0 or submitted_count > 0:
                 message = f"자동청산 감시로 {executed_count}건 주문을 실행했습니다."
-            self._append_runtime_log("info", message, meta={"watched_count": watched_count, "executed_count": executed_count})
-            return {"executed": executed_count > 0, "executed_count": executed_count, "watched_count": watched_count, "message": message, "results": results}
+                if submitted_count > 0 and executed_count == 0:
+                    message = f"자동청산 감시로 {submitted_count}건 주문을 접수하고 체결을 확인 중입니다."
+            self._append_runtime_log("info", message, meta={"watched_count": watched_count, "executed_count": executed_count, "submitted_count": submitted_count, "gross_exposure": round(gross_exposure, 2), "exposure_limit": round(exposure_limit, 2)})
+            return {"executed": executed_count > 0, "submitted": submitted_count > 0, "executed_count": executed_count, "submitted_count": submitted_count, "watched_count": watched_count, "message": message, "gross_exposure": round(gross_exposure, 2), "exposure_limit": round(exposure_limit, 2), "results": results}
 
     def manual_sell(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", qty=None):
+        if str(symbol).strip().upper() == 'SOXL':
+            raise RuntimeError('SOXL은 무한매수 전용으로 단타 매도가 잠겨 있습니다.')
         if self._hard_locked():
             raise Exception(self._hard_lock_message())
         if self._feature_enabled() is False:
@@ -2451,11 +3242,11 @@ class DomesticDaytradeEngine:
         current_price = self._current_price(symbol, market=market, fallback=self._safe_float(state.get("avg_price", 0), 0))
         if self._is_us_market(market):
             exchange = self._us_exchange(symbol)
-            order = self.struct.kis_api.sell_order(symbol, sell_qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+            order = self._broker().sell_order(symbol, sell_qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
             fill = {"filled_price": current_price, "filled_qty": sell_qty, "status": "UNKNOWN"}
             exec_price = self._safe_float(fill.get("filled_price", current_price), current_price)
         else:
-            order = self.struct.kis_api.sell_domestic_order(symbol, sell_qty, price=0, order_type="MARKET")
+            order = self._broker().sell_domestic_order(symbol, sell_qty, price=0, order_type="MARKET")
             exec_price = current_price
 
         prev_avg = self._safe_float(state.get("avg_price", 0), 0)
@@ -2507,8 +3298,8 @@ class DomesticDaytradeEngine:
     def _invalidate_kis_cache(self):
         """KIS 잔고 캐시 즉시 만료 (실시간 잔고 갱신용)"""
         import sys as _sys
-        _CACHE_KEY = "_trading_kis_balance_cache_v2"
-        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts"
+        _CACHE_KEY = "_trading_kis_balance_cache_v2" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
+        _CACHE_TS_KEY = "_trading_kis_balance_cache_ts" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
         if hasattr(_sys, _CACHE_KEY):
             delattr(_sys, _CACHE_KEY)
         if hasattr(_sys, _CACHE_TS_KEY):
@@ -2542,7 +3333,7 @@ class DomesticDaytradeEngine:
             if lookback_days > 0:
                 history_from = (datetime.datetime.strptime(d_from_str, "%Y%m%d") - datetime.timedelta(days=lookback_days)).strftime("%Y%m%d")
             try:
-                domestic_fills = self.struct.kis_api.get_domestic_fills_by_date(history_from, d_to_str)
+                domestic_fills = self._broker().get_domestic_fills_by_date(history_from, d_to_str)
                 if domestic_fills:
                     broker_sync_sources.append("domestic")
                 broker_fills.extend(domestic_fills or [])
@@ -2550,25 +3341,29 @@ class DomesticDaytradeEngine:
             except Exception as e:
                 broker_sync_errors.append(f"domestic:{str(e)}")
             try:
-                overseas_fills = self.struct.kis_api.get_overseas_fills_by_date(history_from, d_to_str)
+                overseas_fills = self._broker().get_overseas_fills_by_date(history_from, d_to_str)
                 if overseas_fills:
                     broker_sync_sources.append("overseas")
                 broker_fills.extend(overseas_fills or [])
                 broker_sync_status_by_market["US"] = True
             except Exception as e:
                 broker_sync_errors.append(f"overseas:{str(e)}")
-            try:
-                broker_trade_profit = self.struct.kis_api.get_domestic_period_trade_profit(d_from_str, d_to_str)
-                broker_trade_profit_rows = list(broker_trade_profit.get("rows", []) or [])
-                broker_trade_profit_totals = dict(broker_trade_profit.get("totals", {}) or {})
-                if broker_trade_profit_rows:
-                    broker_sync_sources.append("domestic_profit")
-            except Exception as e:
-                self._append_runtime_log(
-                    "warning",
-                    f"거래 일지 KIS 손익 동기화 실패: {str(e)}",
-                    dedup_sec=300,
-                )
+            if not (_PAPER_MODE and DomesticDaytradeEngine._KIS_PERIOD_PROFIT_UNSUPPORTED):
+                try:
+                    broker_trade_profit = self._broker().get_domestic_period_trade_profit(d_from_str, d_to_str)
+                    broker_trade_profit_rows = list(broker_trade_profit.get("rows", []) or [])
+                    broker_trade_profit_totals = dict(broker_trade_profit.get("totals", {}) or {})
+                    if broker_trade_profit_rows:
+                        broker_sync_sources.append("domestic_profit")
+                except Exception as e:
+                    error_text = str(e)
+                    if _PAPER_MODE and ("없는 서비스 코드" in error_text or "not found" in error_text.lower()):
+                        DomesticDaytradeEngine._KIS_PERIOD_PROFIT_UNSUPPORTED = True
+                    self._append_runtime_log(
+                        "warning",
+                        f"거래 일지 KIS 손익 동기화 실패: {error_text}",
+                        dedup_sec=21600 if DomesticDaytradeEngine._KIS_PERIOD_PROFIT_UNSUPPORTED else 300,
+                    )
             if broker_sync_errors:
                 level = "warning" if len(broker_fills) == 0 else "info"
                 self._append_runtime_log(
@@ -3617,7 +4412,49 @@ class DomesticDaytradeEngine:
             return max(1, min(30, value))
         else:
             value = self._safe_int(self._config("daytrade_ks_auto_max_symbols", self._config("daytrade_auto_max_symbols", "5")), 5)
-            return max(16, min(30, value))
+            return max(1, min(30, value))
+
+    def _apply_ks_market_regime_policy(self, candidates):
+        """Route new KR entries to instruments consistent with market breadth."""
+        snapshot = {"regime": "NEUTRAL", "reason": "시장 레짐 데이터 없음"}
+        if hasattr(self.strategy, "market_regime_snapshot"):
+            try:
+                snapshot = self.strategy.market_regime_snapshot() or snapshot
+            except Exception:
+                pass
+        regime = str(snapshot.get("regime", "NEUTRAL") or "NEUTRAL").upper()
+        inverse_symbols = {"114800", "252670", "251340"}
+        bull_leverage_symbols = {"122630", "233740"}
+        excluded = []
+        allowed = []
+        for item in list(candidates or []):
+            symbol = str(item.get("symbol", "") or "").strip()
+            item_market = str(item.get("market", "KS") or "KS").upper()
+            block_reason = ""
+            if regime == "RISK_OFF":
+                if symbol in bull_leverage_symbols:
+                    block_reason = "강한 하락장이라 상승 레버리지 신규 진입을 차단했습니다."
+                elif item_market == "KQ" and symbol not in inverse_symbols:
+                    block_reason = "강한 하락장이라 코스닥 개별주 신규 진입을 차단했습니다."
+            elif regime == "RISK_ON" and symbol in inverse_symbols:
+                block_reason = "강한 상승장이라 인버스 신규 진입을 차단했습니다."
+            elif regime == "NEUTRAL" and symbol in {"252670", "122630", "233740"}:
+                block_reason = "방향성이 불명확해 2배 방향성 ETF 신규 진입을 보류했습니다."
+            if block_reason:
+                excluded.append({**item, "reason": block_reason})
+                continue
+            allowed.append(item)
+
+        def priority(item):
+            symbol = str(item.get("symbol", "") or "")
+            if regime == "RISK_OFF" and symbol in inverse_symbols:
+                return 2
+            if regime == "RISK_ON" and symbol in bull_leverage_symbols:
+                return 2
+            return 1
+
+        allowed.sort(key=priority, reverse=True)
+        return allowed, excluded, snapshot
 
     def _cached_recommendation_narrow_for_auto(self, cached, filtered, target_count):
         cached = cached or {}
@@ -3653,6 +4490,15 @@ class DomesticDaytradeEngine:
             if hasattr(self.strategy, "us_candidate_universe"):
                 universe = list(self.strategy.us_candidate_universe() or [])
         elif hasattr(self.strategy, "candidate_universe"):
+            if hasattr(self.strategy, "refresh_dynamic_candidate_universe"):
+                try:
+                    self.strategy.refresh_dynamic_candidate_universe(force=False)
+                except Exception as e:
+                    self._append_runtime_log(
+                        "warning",
+                        f"국장 유동성 후보 갱신 실패: {str(e)}",
+                        dedup_sec=300,
+                    )
             universe = list(self.strategy.candidate_universe(market=market) or [])
 
         existing = {
@@ -3716,6 +4562,8 @@ class DomesticDaytradeEngine:
         }
 
     def _daytrade_market_open(self, market="KS"):
+        if _PAPER_CONTINUOUS:
+            return True
         if self._is_us_market(market):
             return self._us_market_open()
         now = self._now()
@@ -3856,6 +4704,20 @@ class DomesticDaytradeEngine:
                 allow_stale_day=True,
                 market=market,
             ) or self.strategy.latest_recommendation(allow_stale_day=True, market=market)
+
+        # PAPER operation must remain observable even when historical intraday
+        # data is temporarily unavailable. The recommendation cache can then
+        # legitimately contain an empty leaderboard, which used to leave the
+        # automatic cycle with zero symbols forever. Fill only the PAPER
+        # leaderboard from the bounded KIS liquidity universe; LIVE keeps the
+        # validation gate unchanged.
+        if _PAPER_MODE:
+            recommendation = self._expand_recommendation_with_candidate_universe(
+                recommendation,
+                market=market,
+                target_count=target_slot_count,
+                max_count=max_symbols,
+            )
         
         leaderboard = recommendation.get("leaderboard", []) if recommendation else []
         valid = [x for x in leaderboard if x.get("error") is None]
@@ -3883,7 +4745,11 @@ class DomesticDaytradeEngine:
             remaining = [item for item in valid if item not in diversified]
             valid = diversified + remaining
 
-        live_valid = [item for item in valid if self._live_strategy_allowed(item.get("strategy_id", "vrev"), market=market)]
+        live_valid = [item for item in valid if self.analysis_allowed(item.get('symbol', '')) and self._live_strategy_allowed(item.get("strategy_id", "vrev"), market=market)]
+        regime_exclusions = []
+        market_regime = {"regime": "N/A", "reason": "미장 별도 전략"}
+        if self._is_us_market(market) is False:
+            live_valid, regime_exclusions, market_regime = self._apply_ks_market_regime_policy(live_valid)
         live_quality_guard = self.strategy._build_quality_guard(
             live_valid,
             self.strategy.recommendation_training_defaults(),
@@ -3895,10 +4761,55 @@ class DomesticDaytradeEngine:
         }
         if isinstance(recommendation, dict):
             recommendation["live_quality_guard"] = live_quality_guard
+            recommendation["market_regime"] = market_regime
         valid = live_valid
 
-        excluded_by_price = []
+        excluded_by_price = list(regime_exclusions)
         quality_guard = live_quality_guard if isinstance(live_quality_guard, dict) else {}
+        paper_exploration = False
+        paper_exploration_enabled = str(
+            self._config("daytrade_paper_exploration_enabled", "true") or "true"
+        ).lower() in ("1", "true", "yes", "y", "on")
+        if (
+            _PAPER_MODE
+            and paper_exploration_enabled
+            and quality_guard.get("block_new_entries")
+            and len(valid) > 0
+        ):
+            # The fallback universe exists specifically so PAPER can collect
+            # forward evidence when historical minute training is unavailable.
+            # Previously those rows were added with trade_ready=False and then
+            # immediately rejected by the LIVE quality gate, leaving ON mode
+            # permanently unable to evaluate an entry. Keep the normal live
+            # signal/evidence/budget/regime guardrails and only bypass the
+            # missing-backtest gate for a small, auditable candidate set.
+            exploration_limit = max(
+                1,
+                min(
+                    3,
+                    self._safe_int(
+                        self._config("daytrade_paper_exploration_candidates", str(max(1, target_slot_count))),
+                        max(1, target_slot_count),
+                    ),
+                ),
+            )
+            valid = [
+                {**item, "paper_exploration": True}
+                for item in valid[:exploration_limit]
+            ]
+            paper_exploration = True
+            quality_guard = {
+                **quality_guard,
+                "block_new_entries": False,
+                "paper_exploration": True,
+                "paper_exploration_count": len(valid),
+                "training_issues": list(quality_guard.get("issues", []) or []),
+                "issues": ["PAPER 전진검증 후보 — 실시간 진입·근거·위험 조건은 그대로 적용"],
+            }
+            if isinstance(recommendation, dict):
+                recommendation["live_quality_guard"] = quality_guard
+        elif _PAPER_MODE:
+            quality_guard = {**quality_guard, "paper_exploration": False}
         if quality_guard.get("block_new_entries"):
             guard_reason = " / ".join(quality_guard.get("issues", [])[:3])
             if guard_reason == "":
@@ -3934,6 +4845,16 @@ class DomesticDaytradeEngine:
             if not symbol or symbol in seen:
                 continue
 
+            if bool(item.get("upper_limit_watch_only", False)):
+                excluded_by_price.append({
+                    "symbol": symbol,
+                    "name": item.get("name", ""),
+                    "last_price": self._safe_float(item.get("last_price", 0), 0),
+                    "max_affordable": round(max_affordable_per_share, 0),
+                    "reason": "상한가 근접 종목은 후보 관찰에는 포함하지만 추격 시장가 진입은 보류합니다.",
+                })
+                continue
+
             strategy_id = item.get("strategy_id", "vrev")
             item_market = item.get("market", "KS")
 
@@ -3944,7 +4865,7 @@ class DomesticDaytradeEngine:
             else: # 한국 시장
                 if strategy_id.startswith("us_"):
                     continue
-                if strategy_id != "vrev":
+                if strategy_id != "vrev" and not _PAPER_MODE:
                     excluded_by_price.append({
                         "symbol": symbol,
                         "name": item.get("name", ""),
@@ -4000,7 +4921,8 @@ class DomesticDaytradeEngine:
                 "avg_intraday_move_pct": self._safe_float(item.get("avg_intraday_move_pct", 0), 0),
                 "liquidity_score": self._safe_float(item.get("liquidity_score", 0), 0),
                 "last_price": last_price,
-                "source": "leaderboard",
+                "source": "paper_exploration" if item.get("paper_exploration") else "leaderboard",
+                "paper_exploration": bool(item.get("paper_exploration", False)),
                 "entry_seed_krw": (
                     round(self._minimum_entry_seed(last_price, market=item_market), 2)
                     if is_new_entry and self._is_us_market(item_market)
@@ -4009,7 +4931,11 @@ class DomesticDaytradeEngine:
                 "decision_reason": (
                     "미장은 요청 시드와 무관하게 최소 1주 진입 가능 수량으로 실시간 진입을 검토합니다."
                     if self._is_us_market(item_market)
-                    else f"점수와 조건이 맞으면 슬롯당 시드 한도 ₩{slot_seed_limit_krw:,.0f} 내에서 신규 진입을 검토합니다."
+                    else (
+                        f"PAPER 전진검증: 실시간 시세·진입 신호·근거 검증을 통과하면 슬롯당 ₩{slot_seed_limit_krw:,.0f} 내에서 진입합니다."
+                        if item.get("paper_exploration")
+                        else f"점수와 조건이 맞으면 슬롯당 시드 한도 ₩{slot_seed_limit_krw:,.0f} 내에서 신규 진입을 검토합니다."
+                    )
                 ),
             })
             if len(rows) >= max(max_symbols, len(active_positions)):
@@ -4033,6 +4959,7 @@ class DomesticDaytradeEngine:
             "excluded_by_price": excluded_by_price,
             "portfolio": portfolio,
             "recommendation": recommendation,
+            "paper_exploration": paper_exploration,
         }
 
     def _rotation_opportunity(self, candidate_payload, remaining_seed_krw=0):
@@ -4150,8 +5077,8 @@ class DomesticDaytradeEngine:
             return {
                 "executed": False,
                 "message": "미국 주식 시장(프리마켓/본장)이 열려있지 않습니다.",
-                "budget": self.shared_budget_status(requested_seed=requested_seed, market="US"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                "budget": self.shared_budget_status(requested_seed=requested_seed, market="US", use_cache_only=True),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True),
                 "results": [],
                 "candidates": [],
             }
@@ -4345,8 +5272,21 @@ class DomesticDaytradeEngine:
         """미장 활성 포지션에 대해 자동청산 감시 실행 (신규 매수 없음)"""
         if self._hard_locked():
             return {"executed": False, "executed_count": 0, "watched_count": 0, "message": self._hard_lock_message(), "hard_locked": True, "results": []}
-        with self._global_lock("engine_cycle"):
-            positions = [p for p in self.active_positions() if self._is_us_market(p.get("market", "KS"))]
+        if not self._us_market_open() and not self._us_premarket_open():
+            message = "미장 종료 — 프리마켓 또는 본장 시작 후 자동청산 감시를 재개합니다."
+            self._append_runtime_log("info", message, meta={"market": "US", "market_closed": True}, market="US")
+            return {
+                "executed": False,
+                "submitted": False,
+                "executed_count": 0,
+                "submitted_count": 0,
+                "watched_count": 0,
+                "market_closed": True,
+                "message": message,
+                "results": [],
+            }
+        with self._global_lock("exit_cycle"):
+            positions = [p for p in self.active_positions(use_live_price=False, market_filter="US") if self.analysis_allowed(p.get('symbol', ''))]
             results = []
             executed_count = 0
             watched_count = 0
@@ -4370,6 +5310,8 @@ class DomesticDaytradeEngine:
                     strategy_id=strategy_id,
                     force=False,
                     allow_buy=False,
+                    sync_broker=False,
+                    current_price_override=self._safe_float(item.get("current_price", 0), 0),
                 )
                 if outcome.get("executed"):
                     executed_count += 1
@@ -4412,10 +5354,10 @@ class DomesticDaytradeEngine:
             try:
                 if self._is_us_market(market):
                     exchange = self._us_exchange(symbol)
-                    quote = self.struct.kis_api.get_current_price(symbol, exchange=exchange)
+                    quote = self._broker().get_current_price(symbol, exchange=exchange)
                     source_label = "kis_overseas_quote"
                 else:
-                    quote = self.struct.kis_api.get_domestic_current_price(symbol)
+                    quote = self._broker().get_domestic_current_price(symbol)
                     source_label = "kis_domestic_quote"
             except Exception:
                 return bar
@@ -4444,10 +5386,10 @@ class DomesticDaytradeEngine:
             try:
                 if self._is_us_market(market):
                     exchange = self._us_exchange(symbol)
-                    quote = self.struct.kis_api.get_current_price(symbol, exchange=exchange)
+                    quote = self._broker().get_current_price(symbol, exchange=exchange)
                     default_source = "kis_overseas_quote"
                 else:
-                    quote = self.struct.kis_api.get_domestic_current_price(symbol)
+                    quote = self._broker().get_domestic_current_price(symbol)
                     default_source = "kis_domestic_quote"
                 fallback_price = self._safe_float(quote.get("price", 0), 0)
                 if fallback_price > 0:
@@ -4570,13 +5512,33 @@ class DomesticDaytradeEngine:
         state["recent_errors"] = items
         state["halt_reason"] = message
 
-    def _guardrails(self, symbol, market, seed, state, signal, session, bar, profile):
+    def _guardrails(self, symbol, market, seed, state, signal, session, bar, profile, exit_only=False):
         issues = []
         warnings = []
         action = signal.get("action", "HOLD")
         strategy_id = str(signal.get("strategy_id", "vrev") or "vrev")
         is_buy = str(action).startswith("BUY")
         is_sell = str(action).startswith("SELL")
+        operational_exit = bool(exit_only or is_sell)
+        failure_at = str(state.get("last_order_failure_at", "") or "")
+        failure_action = str(state.get("last_order_failure_action", "") or "")
+        if failure_at and (not failure_action or failure_action == str(action)):
+            try:
+                failure_ts = datetime.datetime.strptime(failure_at, "%Y-%m-%d %H:%M:%S")
+                failure_age = max(0, int((self._now() - failure_ts).total_seconds()))
+                configured_failure_cooldown = max(
+                    30,
+                    self._safe_int(self._config("daytrade_order_failure_cooldown_sec", "300"), 300),
+                )
+                # 손절 주문은 신속히 다시 시도하되 API 폭주는 막는다.
+                failure_cooldown = min(configured_failure_cooldown, 30) if is_sell else configured_failure_cooldown
+                if failure_age < failure_cooldown:
+                    issues.append(
+                        f"최근 {failure_action or action} 주문 실패 후 재시도 대기 중 "
+                        f"({failure_cooldown - failure_age}초)"
+                    )
+            except Exception:
+                pass
         connection = self.check_kis_connection()
         if connection.get("connected") is False:
             issues.append("KIS API 연결이 준비되지 않았습니다.")
@@ -4626,7 +5588,14 @@ class DomesticDaytradeEngine:
         active_budget = max(configured_budget, float(seed) * self._buy_buffer_ratio())
         if is_buy and order_value > active_budget * 1.02:
             issues.append(f"주문 금액이 현재 배정 시드 ₩{round(active_budget):,}를 초과합니다.")
-        portfolio = self.portfolio_usage()
+        # Exit monitoring already synchronizes the broker once before walking
+        # all positions. Repeating full domestic+overseas balance calls per
+        # symbol creates API bursts and can prevent the sell order itself.
+        portfolio = self.portfolio_usage(
+            use_live_price=not operational_exit,
+            sync_broker=not operational_exit,
+            budget_only=is_buy,
+        )
         committed_seed = self._safe_float(portfolio.get("active_entry_seed_krw", portfolio.get("active_cost_krw", 0)), 0)
         budget_snapshot = self.shared_budget_status(requested_seed=max(float(seed), committed_seed + order_value), use_cache_only=True)
         portfolio_limit = max(
@@ -4634,7 +5603,7 @@ class DomesticDaytradeEngine:
             self._safe_float(budget_snapshot.get("total_seed_krw", 0), 0),
             float(seed),
         )
-        daily_loss = self.daily_loss_status(requested_seed=seed)
+        daily_loss = self.daily_loss_status(requested_seed=seed, use_live_price=not operational_exit, use_cache_only=operational_exit)
         if is_buy and daily_loss.get("halt_new_buys"):
             issues.append(f"일일 손실 제한 도달: {daily_loss.get('total_pnl', 0):,.0f}원 / 제한 {daily_loss.get('daily_loss_limit_krw', 0):,.0f}원")
         elif is_buy and daily_loss.get("soft_limit_reached"):
@@ -4676,9 +5645,9 @@ class DomesticDaytradeEngine:
             "exit_watch": self._exit_watch_payload(state, signal),
         }
 
-    def active_positions(self, sync_broker=True):
+    def active_positions(self, sync_broker=True, use_live_price=True, market_filter=None):
         if sync_broker:
-            self._sync_broker_positions()
+            self._sync_broker_positions(market_filter=market_filter)
         state_map = self._load_state_map()
         rows_map = {}
         default_strategy = self.strategy.defaults().get("strategy", "vrev")
@@ -4690,13 +5659,19 @@ class DomesticDaytradeEngine:
                 continue
             symbol = state.get("symbol", "")
             market = state.get("market", "KS")
+            if market_filter is not None:
+                if str(market_filter).upper() == "US" and not self._is_us_market(market):
+                    continue
+                if str(market_filter).upper() != "US" and self._is_us_market(market):
+                    continue
             avg_price = self._safe_float(state.get("avg_price", 0), 0)
-            current_price = 0.0
-            try:
-                _session, bar = self._latest_snapshot(symbol, market=market)
-                current_price = self._safe_float(bar.get("close", 0), 0)
-            except Exception:
-                current_price = avg_price
+            current_price = self._safe_float(state.get("last_price", avg_price), avg_price)
+            if use_live_price:
+                try:
+                    _session, bar = self._latest_snapshot(symbol, market=market)
+                    current_price = self._safe_float(bar.get("close", 0), 0)
+                except Exception:
+                    current_price = avg_price
             pnl = ((current_price - avg_price) * qty) if avg_price > 0 else 0.0
             pnl_pct = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
             rows_map[self._state_key(symbol, market)] = {
@@ -4717,24 +5692,31 @@ class DomesticDaytradeEngine:
                 "broker_unmanaged_qty": self._safe_int(state.get("broker_unmanaged_qty", 0), 0),
             }
 
-        broker_rows = []
-        try:
-            domestic_rows = self.struct.kis_api.get_domestic_balance().get("holdings", []) or []
-            for item in domestic_rows:
-                row = dict(item or {})
-                row["market"] = str(row.get("market", "KS") or "KS").upper()
-                broker_rows.append(row)
-        except Exception:
-            pass
+        if use_live_price is False:
+            rows = list(rows_map.values())
+            rows.sort(key=self._active_position_sort_key)
+            return rows
 
-        try:
-            overseas_rows = self.struct.kis_api.get_balance().get("holdings", []) or []
-            for item in overseas_rows:
-                row = dict(item or {})
-                row["market"] = "US"
-                broker_rows.append(row)
-        except Exception:
-            pass
+        broker_rows = []
+        if str(market_filter or "").upper() != "US":
+            try:
+                domestic_rows = self._broker().get_domestic_balance().get("holdings", []) or []
+                for item in domestic_rows:
+                    row = dict(item or {})
+                    row["market"] = str(row.get("market", "KS") or "KS").upper()
+                    broker_rows.append(row)
+            except Exception:
+                pass
+
+        if str(market_filter or "").upper() in ("", "US"):
+            try:
+                overseas_rows = self._broker().get_balance().get("holdings", []) or []
+                for item in overseas_rows:
+                    row = dict(item or {})
+                    row["market"] = "US"
+                    broker_rows.append(row)
+            except Exception:
+                pass
 
         for item in broker_rows:
             symbol = str(item.get("symbol", "") or "").strip()
@@ -4751,7 +5733,7 @@ class DomesticDaytradeEngine:
             profit_loss = self._safe_float(item.get("profit_loss", 0), 0)
             if qty > 0 and eval_amount > 0 and (current_price <= 0 or abs((current_price * qty) - eval_amount) > max(1.0, eval_amount * 0.2)):
                 current_price = eval_amount / qty
-            if qty > 0 and purchase_amount > 0 and (avg_price <= 0 or abs((avg_price * qty) - purchase_amount) > max(1.0, purchase_amount * 0.2)):
+            if qty > 0 and purchase_amount > 0:
                 avg_price = purchase_amount / qty
             elif qty > 0 and eval_amount > 0 and abs(profit_loss) > 1e-9:
                 inferred_cost = max(0.0, eval_amount - profit_loss)
@@ -4873,7 +5855,7 @@ class DomesticDaytradeEngine:
 
         # 3. 호가 스프레드 및 슬리피지 위험 점검 (KIS API 필요)
         try:
-            hoga = self.struct.kis_api.search_realtime_hoga(symbol, market)
+            hoga = self._broker().search_realtime_hoga(symbol, market)
             if hoga:
                 ask1 = self._safe_float(hoga.get("askp1", 0), 0)
                 bid1 = self._safe_float(hoga.get("bidp1", 0), 0)
@@ -4887,13 +5869,43 @@ class DomesticDaytradeEngine:
 
         return issues
 
-    def _signal_from_state(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True):
+    def _signal_from_state(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True, allow_buy=True, current_price_override=0):
+        if str(strategy_id).startswith('paper_selective_'):
+            return self._selective_paper_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
         strategy_id = self.strategy._normalize_strategy(strategy_id)
         profile = self._profile_for(symbol, strategy_id=strategy_id, market=market)
         if sync_broker:
             self._sync_broker_positions()
         state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
-        session, bar = self._latest_snapshot(symbol, market=market)
+        if not self._is_us_market(market) and state.get("pending_buy_order_no"):
+            self._sync_pending_buy(state, symbol, market)
+            self._store_state(state)
+        override_price = max(0.0, self._safe_float(current_price_override, 0))
+        if allow_buy is False and override_price > 0:
+            anchor_price = max(
+                self._safe_float(state.get("anchor_price", 0), 0),
+                self._safe_float(state.get("avg_price", 0), 0),
+                override_price,
+            )
+            session_date = self._date_display(state.get("session_date", "")) or self._now().strftime("%Y-%m-%d")
+            session = {"date": session_date, "prev_close": anchor_price, "bars": []}
+            bar = {
+                "timestamp": self._timestamp(),
+                "date": session_date,
+                "open": anchor_price,
+                "high": max(anchor_price, override_price),
+                "low": min(anchor_price, override_price),
+                "close": override_price,
+                "vwap": anchor_price,
+                "volume": 0,
+                "rsi14": 50.0,
+                "bb_upper": 0.0,
+                "bb_lower": 0.0,
+                "price_source": "kis_broker_balance",
+                "intraday_unavailable": True,
+            }
+        else:
+            session, bar = self._latest_snapshot(symbol, market=market)
 
         # 실시간 집계 캔들 우선 사용
         agg_candle = self._aggregate_ticks_to_candle(symbol, market)
@@ -4960,7 +5972,23 @@ class DomesticDaytradeEngine:
         vwap_price = self._safe_float(bar.get("vwap", 0), 0)
         anchor_candidates = [price for price in [prev_close, session_open, vwap_price] if price > 0]
         anchor = max(anchor_candidates) if len(anchor_candidates) > 0 else current_price
-        budget_context = self._market_buy_budget(seed, current_price, market=market)
+        state_position_qty = self._safe_int(state.get("position_qty", 0), 0)
+        state_avg_price = self._safe_float(state.get("avg_price", 0), 0)
+        if allow_buy or state_position_qty <= 0:
+            budget_context = self._market_buy_budget(seed, current_price, market=market)
+        else:
+            # Exit-only heartbeat does not need buying-power, FX or balance
+            # endpoints. Those calls are slow and can consume the gateway quota
+            # needed by the actual sell order.
+            local_budget = max(self._safe_float(seed, 0), state_position_qty * max(current_price, state_avg_price, 0))
+            budget_context = {
+                "requested_seed_krw": self._safe_float(seed, 0),
+                "buy_budget": 0.0,
+                "budget_total": local_budget,
+                "budget_currency": "KRW",
+                "price_currency": "KRW",
+                "usd_krw": 0.0,
+            }
         budget_total = self._safe_float(budget_context.get("budget_total", seed), 0)
         buy_budget = self._safe_float(budget_context.get("buy_budget", seed), 0)
         buy1_trigger_pct = self._safe_float(profile.get("buy_trigger_1_pct", -0.1), -0.1)
@@ -5044,7 +6072,7 @@ class DomesticDaytradeEngine:
                 or (strategy_id == "vrev" and state.get("buy2_used") and current_price >= _rescue_target)
             )
 
-        if strategy_id == "vrev" and position_qty == 0 and state.get("buy1_used") == False and current_price <= buy1_trigger and reentry_cooldown.get("active") is False and profit_reentry_guard_buy1.get("active") is False:
+        if allow_buy and strategy_id == "vrev" and position_qty == 0 and state.get("buy1_used") == False and current_price <= buy1_trigger and reentry_cooldown.get("active") is False and profit_reentry_guard_buy1.get("active") is False:
             vrev_preflight_issues = self._vrev_preflight_check(symbol, market, bar, profile)
             if len(vrev_preflight_issues) > 0:
                 signal.update({
@@ -5059,7 +6087,7 @@ class DomesticDaytradeEngine:
                     "reason": "1차 눌림 구간 진입 신호",
                     "order_qty": self._buy_qty(buy_budget, current_price),
                 })
-        elif strategy_id == "vrev" and position_qty > 0 and carried_overnight is False and state.get("buy1_used") == True and state.get("buy2_used") == False and current_price <= buy2_trigger and sell_priority_hit is False and reentry_cooldown.get("active") is False and profit_reentry_guard_buy2.get("active") is False:
+        elif allow_buy and strategy_id == "vrev" and position_qty > 0 and carried_overnight is False and state.get("buy1_used") == True and state.get("buy2_used") == False and current_price <= buy2_trigger and sell_priority_hit is False and reentry_cooldown.get("active") is False and profit_reentry_guard_buy2.get("active") is False:
             vrev_preflight_issues = self._vrev_preflight_check(symbol, market, bar, profile)
             if len(vrev_preflight_issues) > 0:
                 signal.update({
@@ -5095,7 +6123,7 @@ class DomesticDaytradeEngine:
                         "breakout_meta": breakout_meta,
                     })
                 else:
-                    shadow_mode = profile.get("shadow_mode", True)
+                    shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
                     if shadow_mode:
                         order_qty = self._buy_qty(buy_budget, current_price)
                         breakout_meta["mock_trade"] = {
@@ -5164,7 +6192,7 @@ class DomesticDaytradeEngine:
                     "us_meta": us_meta,
                 })
             else:
-                shadow_mode = profile.get("shadow_mode", True)
+                shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
                 if shadow_mode:
                     us_meta["mock_trade"] = {
                         "price": current_price,
@@ -5193,7 +6221,7 @@ class DomesticDaytradeEngine:
             cur_volume = self._safe_int(bar.get("volume", 0), 0)
             volume_ratio = cur_volume / avg_volume if avg_volume > 0 else 0
             change_pct = (current_price - prev_close) / prev_close * 100 if prev_close > 0 else 0
-            shadow_mode = profile.get("shadow_mode", True)
+            shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
             us_meta = {
                 "change_pct": round(change_pct, 4),
                 "prev_high": round(prev_high, 4),
@@ -5222,7 +6250,7 @@ class DomesticDaytradeEngine:
             drawdown_from_high = (self._safe_float(bar.get("high", current_price), current_price) - current_price) / self._safe_float(bar.get("high", current_price), current_price) * 100 if self._safe_float(bar.get("high", current_price), current_price) > 0 else 0
             vwap = self._safe_float(bar.get("vwap", 0), 0)
             now_hour_et = (self._now() - datetime.timedelta(hours=9)).hour  # KST - 9h ≈ ET
-            shadow_mode = profile.get("shadow_mode", True)
+            shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
             us_meta = {"surge_pct": round(surge_pct, 2), "drawdown_from_high": round(drawdown_from_high, 2), "volume_ratio": round(volume_ratio, 2), "vwap": round(vwap, 4)}
             if now_hour_et >= 11 and now_hour_et < 14:
                 signal.update({"action": "HOLD", "reason": f"ET {now_hour_et}시 횡보구간 진입 금지", "us_meta": us_meta})
@@ -5244,7 +6272,7 @@ class DomesticDaytradeEngine:
             avg_volume = self._safe_int(bar.get("avg_volume", 0), 0) or 1
             cur_volume = self._safe_int(bar.get("volume", 0), 0)
             volume_ratio = cur_volume / avg_volume if avg_volume > 0 else 0
-            shadow_mode = profile.get("shadow_mode", True)
+            shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
             us_meta = {"vwap": round(vwap, 4), "volume_ratio": round(volume_ratio, 2), "current_price": round(current_price, 4)}
             if vwap <= 0:
                 signal.update({"action": "HOLD", "reason": "VWAP 데이터 없음", "us_meta": us_meta})
@@ -5298,15 +6326,14 @@ class DomesticDaytradeEngine:
                     or auto_stop_hit
                 )
                 if pending_stop_hit:
-                    pending_order_no = str(state.get("pending_sell_order_no", "") or "")
-                    pending_qty = self._safe_int(state.get("pending_sell_qty", 0), 0)
-                    if pending_order_no != "" and pending_qty > 0:
-                        try:
-                            self.struct.kis_api.cancel_domestic_order(pending_order_no, symbol, pending_qty)
-                        except Exception:
-                            pass
-                    self._clear_pending_sell(state)
-                    self._append_runtime_log("warning", f"{symbol} 손절 우선 실행을 위해 사전 예약 매도를 취소했습니다.", symbol=symbol, strategy_id=strategy_id, dedup_sec=60)
+                    self._request_pending_sell_cancel(state, symbol)
+                    signal.update({
+                        "action": "HOLD",
+                        "reason": "손절 전 기존 매도 취소 확인 중 · 중복 매도 방지",
+                        "order_qty": 0,
+                    })
+                    _has_pending = True
+                    self._append_runtime_log("warning", f"{symbol} 기존 매도 취소 확인 대기 중입니다. 확인 전 추가 매도를 보류합니다.", symbol=symbol, strategy_id=strategy_id, dedup_sec=60)
                 else:
                     signal.update({
                         "action": "HOLD",
@@ -5546,12 +6573,54 @@ class DomesticDaytradeEngine:
             "feature_snapshot": feature_snapshot,
         }
 
-    def signal_status(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True):
+    def _selective_paper_signal(self, symbol, market, seed, name, strategy_id, sync_broker, allow_buy):
+        if not _PAPER_MODE or market != 'KS' or getattr(self.struct.kis_api, 'is_real', None) is not False:
+            raise ValueError('선택형 전략은 국내 모의투자 전용입니다.')
+        rules = wiz.model('portal/trading/selective_strategy')
+        if sync_broker:
+            self._sync_broker_positions()
+        state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
+        if state.get('pending_buy_order_no'):
+            self._sync_pending_buy(state, symbol, market)
+            self._store_state(state)
+        sessions = self.strategy._prepare_dataset(symbol, market='KS', period='5d', interval='5m')
+        bar = rules.snapshot(sessions, self._now())
+        budget = max(0, self._safe_float(seed, 0))*.3
+        signal = rules.decide(strategy_id, bar, state, self._now(), budget, allow_buy=allow_buy)
+        signal.update(price_source='confirmed_5m_paper', strategy_name=self.strategy.strategy_spec(strategy_id)['name'],
+                      budget_total=budget, buy_budget=budget, requested_seed_krw=seed,
+                      position_qty=state.get('position_qty',0), avg_price=state.get('avg_price',0))
+        state['last_signal_reason'] = signal['reason']
+        state['last_price'] = signal['current_price']
+        # Existing execute_live owns broker submission, pending-fill tracking,
+        # policy/lock checks and history. Do not manufacture local fills here.
+        return dict(state=state, signal=signal, profile=self._profile_for(symbol,strategy_id,market),
+                    bar=bar, session=sessions[-1], feature_snapshot={k:bar[k] for k in
+                        ('timestamp','ema20','ema50','rsi14','vwap','volume_surge_ratio','common','breakout','pullback')})
+
+    def analysis_allowed(self, symbol):
+        if str(symbol).strip().upper() == 'SOXL':
+            return False
+        policy = getattr(self.struct, 'order_policy', None)
+        if policy is None:
+            return bool(_PAPER_MODE)
         try:
-            payload = self._signal_from_state(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id, sync_broker=sync_broker)
+            state = policy.read()
+            return state.get('symbols', {}).get(str(symbol).strip().upper(), not _PAPER_MODE) is False
+        except Exception:
+            return False
+
+    def signal_status(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True, allow_buy=True, current_price_override=0):
+        if not self.analysis_allowed(symbol):
+            return {'symbol': symbol, 'market': market, 'name': name or symbol,
+                    'state': {}, 'signal': {'action': 'HOLD', 'qty': 0, 'reason': '보호 종목 · 단타 분석 제외'},
+                    'runtime': {'issues': ['보호 종목 · 단타 분석 제외'], 'risk_status': 'LOCKED'},
+                    'profile': {}, 'bar': {}, 'session': {}, 'analysis_excluded': True}
+        try:
+            payload = self._signal_from_state(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id, sync_broker=sync_broker, allow_buy=allow_buy, current_price_override=current_price_override)
             state = payload.get("state", {})
             signal = payload.get("signal", {})
-            guardrails = self._guardrails(symbol, market, seed, state, signal, payload.get("session", {}), payload.get("bar", {}), payload.get("profile", {}))
+            guardrails = self._guardrails(symbol, market, seed, state, signal, payload.get("session", {}), payload.get("bar", {}), payload.get("profile", {}), exit_only=not allow_buy)
             state["last_signal"] = signal.get("action", "HOLD")
             state["strategy_id"] = self.strategy._normalize_strategy(strategy_id)
             state["halt_reason"] = guardrails.get("issues", [""])[0] if guardrails.get("issues") else ""
@@ -5656,7 +6725,7 @@ class DomesticDaytradeEngine:
         except Exception as e:
             return {"connected": False, "message": f"KIS API 연동 오류: {str(e)}"}
 
-    def _append_order(self, state, action, qty, price, order, strategy_id="vrev", reason=""):
+    def _append_order(self, state, action, qty, price, order, strategy_id="vrev", reason="", status="", filled_qty=0, filled_price=0):
         orders = list(state.get("orders", []) or [])[-19:]
         orders.append({
             "timestamp": self._timestamp(),
@@ -5665,8 +6734,15 @@ class DomesticDaytradeEngine:
             "price": round(float(price), 4),
             "order_no": order.get("order_no", ""),
             "order_type": order.get("order_type", "MARKET"),
+            "exchange": order.get("exchange", ""),
+            "market_session": order.get("market_session", ""),
+            "ord_dvsn": order.get("ord_dvsn", ""),
+            "org_branch_no": order.get("org_branch_no", ""),
             "strategy_id": self.strategy._normalize_strategy(strategy_id),
             "reason": reason,
+            "status": str(status or "").upper(),
+            "filled_qty": max(0, self._safe_int(filled_qty, 0)),
+            "filled_price": round(max(0.0, self._safe_float(filled_price, 0)), 4),
         })
         state["orders"] = orders
 
@@ -5684,6 +6760,8 @@ class DomesticDaytradeEngine:
         signal = status.get("signal", {}) if isinstance(status, dict) else {}
         runtime = status.get("runtime", {}) if isinstance(status, dict) else {}
         state = status.get("state", {}) if isinstance(status, dict) else {}
+        bar = status.get("bar", {}) if isinstance(status, dict) else {}
+        feature_snapshot = status.get("feature_snapshot", {}) if isinstance(status, dict) else {}
         payload = {
             "action": signal.get("action", "HOLD"),
             "reason": signal.get("reason", ""),
@@ -5704,6 +6782,20 @@ class DomesticDaytradeEngine:
             "stop_touch_price": round(self._safe_float(signal.get("stop_touch_price", 0), 0), 4),
             "break_even_price": round(self._safe_float(signal.get("break_even_price", 0), 0), 4),
             "price_source": signal.get("price_source", ""),
+            "evidence": {
+                "strategy_id": signal.get("strategy_id", state.get("strategy_id", "vrev")),
+                "reason": signal.get("reason", ""),
+                "price_source": signal.get("price_source", bar.get("price_source", "")),
+                "current_price": round(self._safe_float(signal.get("current_price", bar.get("close", 0)), 0), 4),
+                "anchor_price": round(self._safe_float(signal.get("anchor_price", 0), 0), 4),
+                "avg_price": round(self._safe_float(state.get("avg_price", 0), 0), 4),
+                "rsi14": round(self._safe_float(bar.get("rsi14", feature_snapshot.get("rsi14", 0)), 0), 4),
+                "vwap": round(self._safe_float(bar.get("vwap", feature_snapshot.get("vwap", 0)), 0), 4),
+                "volume": self._safe_int(bar.get("volume", feature_snapshot.get("volume", 0)), 0),
+                "risk_status": runtime.get("risk_status", "SAFE"),
+                "issues": list(runtime.get("issues", []) or []),
+                "warnings": list(runtime.get("warnings", []) or []),
+            },
         }
         if isinstance(extra, dict):
             payload.update(extra)
@@ -5714,16 +6806,18 @@ class DomesticDaytradeEngine:
         side = str(side or "").upper()
         if order_no == "":
             return {
-                "filled_price": self._safe_float(fallback_price, 0),
-                "filled_qty": self._safe_int(fallback_qty, 0),
-                "status": "UNKNOWN",
+                "filled_price": 0,
+                "filled_qty": 0,
+                "status": "ACCEPTED_UNVERIFIED",
             }
         try:
-            fills = self.struct.kis_api.get_domestic_fills_today(symbol)
+            fills = self._broker().get_domestic_fills_today(symbol)
         except Exception:
             fills = []
         for fill in fills or []:
-            if str(fill.get("order_no", "") or "") != order_no:
+            if not self._same_order_no(fill.get("order_no", ""), order_no):
+                continue
+            if (order or {}).get('exchange') and fill.get('exchange') != order['exchange']:
                 continue
             if str(fill.get("side", "") or "").upper() != side:
                 continue
@@ -5733,10 +6827,44 @@ class DomesticDaytradeEngine:
                 "status": str(fill.get("status", "") or "UNKNOWN"),
             }
         return {
-            "filled_price": self._safe_float(fallback_price, 0),
-            "filled_qty": self._safe_int(fallback_qty, 0),
-            "status": "UNKNOWN",
+            "filled_price": 0,
+            "filled_qty": 0,
+            "status": "ACCEPTED_UNVERIFIED",
         }
+
+    def _log_order_pending(self, symbol, intended_action, qty, price, order, message, strategy_id="vrev", runtime=None, name="", market="KS"):
+        """Persist broker acceptance without representing it as a fill."""
+        market = self._market_key(market=market, symbol=symbol)
+        intended_action = str(intended_action or "ORDER").upper()
+        payload = {
+            "symbol": symbol,
+            "market": market,
+            "name": name or self.strategy.symbol_name(symbol),
+            "action": f"{intended_action}_PENDING",
+            "intended_action": intended_action,
+            "execution_status": "ACCEPTED_UNVERIFIED",
+            "qty": self._safe_int(qty, 0),
+            "price": round(self._safe_float(price, 0), 4),
+            "order": order or {},
+            "runtime": runtime or {},
+            "message": message,
+        }
+        try:
+            self.struct.db("trade_log").insert({
+                "cycle_id": f"daytrade:{market.lower()}:{symbol}",
+                "symbol": symbol,
+                "event_type": f"{self._dt_event_type(action=intended_action, market=market, symbol=symbol)}_PENDING",
+                "action": "PENDING",
+                "order_no": str((order or {}).get("order_no", "") or ""),
+                "order_price": self._safe_float(price, 0),
+                "order_qty": self._safe_int(qty, 0),
+                "filled_price": 0,
+                "filled_qty": 0,
+                "message": message,
+                "raw_response": self._safe_json_dumps(payload),
+            })
+        except Exception as e:
+            self._append_runtime_log("warning", f"{symbol} 주문 접수 로그 저장 실패: {str(e)}", symbol=symbol, strategy_id=strategy_id, market=market)
 
     def _log_execution(self, symbol, action, qty, price, order, message, strategy_id="vrev", runtime=None, name="", filled_price=None, filled_qty=None, breakout_meta=None):
         strategy_id = self.strategy._normalize_strategy(strategy_id)
@@ -5780,6 +6908,39 @@ class DomesticDaytradeEngine:
         except Exception as e:
             self._append_runtime_log("warning", f"{symbol} 거래 로그 저장 실패: {str(e)}", symbol=symbol, strategy_id=strategy_id, market=market)
         self._append_runtime_log("info", message, symbol=symbol, strategy_id=strategy_id, meta=(runtime_payload or {}), market=market)
+
+    def _log_order_failure(self, symbol, intended_action, qty, price, message, strategy_id="vrev", runtime=None, name="", market="KS"):
+        """Persist a PAPER/LIVE broker rejection without pretending it filled."""
+        market = self._market_key(market=market, symbol=symbol)
+        intended_action = str(intended_action or "ORDER").upper()
+        payload = {
+            "symbol": symbol,
+            "market": market,
+            "name": name or self.strategy.symbol_name(symbol),
+            "action": f"{intended_action}_ERROR",
+            "intended_action": intended_action,
+            "execution_status": "REJECTED",
+            "qty": self._safe_int(qty, 0),
+            "price": round(self._safe_float(price, 0), 4),
+            "runtime": runtime or {},
+            "message": message,
+        }
+        try:
+            self.struct.db("trade_log").insert({
+                "cycle_id": f"daytrade:{market.lower()}:{symbol}",
+                "symbol": symbol,
+                "event_type": f"{self._dt_event_type(action=intended_action, market=market, symbol=symbol)}_ERROR",
+                "action": "ERROR",
+                "order_no": "",
+                "order_price": self._safe_float(price, 0),
+                "order_qty": self._safe_int(qty, 0),
+                "filled_price": 0,
+                "filled_qty": 0,
+                "message": message,
+                "raw_response": self._safe_json_dumps(payload),
+            })
+        except Exception as e:
+            self._append_runtime_log("warning", f"{symbol} 주문 실패 로그 저장 실패: {str(e)}", symbol=symbol, strategy_id=strategy_id, market=market)
 
     def _execute_live_legacy_tail(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True):
         strategy_id = self.strategy._normalize_strategy(strategy_id)

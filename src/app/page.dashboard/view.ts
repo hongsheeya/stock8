@@ -10,7 +10,9 @@ interface Toast {
     timestamp: Date;
 }
 
-const DASHBOARD_CACHE_KEY = '__wizDashboardState';
+// Bump when the cached dashboard payload shape/normalization changes.  This
+// prevents a previously stored duplicate cycle list from surviving a deploy.
+let DASHBOARD_CACHE_KEY = '__stock8AccountDashboardV3';
 
 export class Component implements OnInit {
     @Input() public legacyMode: boolean = false;
@@ -29,6 +31,7 @@ export class Component implements OnInit {
     public usdBuyingPower: number = 0;
     public usdSyncOk: boolean = false;
     public usdSyncMessage: string = '';
+    public get usdQueryDeferred(): boolean { return !this.usdSyncOk && this.usdSyncMessage === '빠른 로딩 모드'; }
     public usdSyncSource: string = '';
     public krwBalance: number = 0;
     public krwOrderableCash: number = 0;
@@ -38,6 +41,7 @@ export class Component implements OnInit {
     public krwBuyingPowerUsd: number = 0;
     public portfolioValue: number = 0;
     public totalAsset: number = 0;
+    public totalAssetVerified: boolean = false;
     public exchangeRate: number = 0;
     public balanceSyncOk: boolean = false;
     public balanceSyncMessage: string = '';
@@ -45,6 +49,11 @@ export class Component implements OnInit {
     // Engine status
     public engineStatus: any = { active_cycles: 0, holding_cycles: 0, paused_cycles: 0, pending_extension_cycles: 0, completed_cycles: 0, auto_trade: false };
     public apiConnected: boolean = false;
+    public paperReady: boolean = false;
+    public connectionMessage: string = '';
+    public readinessVerifiedAt: string = '';
+    public automationState: any = { code: 'off', label: '자동매매 OFF', message: '', enabled: false, active_cycles: 0, active_targets: 0 };
+    public autoTradeChanging: boolean = false;
     public setupRequired: boolean = false;
     public privacyLocked: boolean = false;
     public setupMessage: string = '';
@@ -128,6 +137,7 @@ export class Component implements OnInit {
     // ─── Profit Summary State ───
     public profitPeriod: string = '1W';
     public profitLoading: boolean = false;
+    public profitSnapshotReady: boolean = false;
     public profitData: any = {
         realized_profit: 0, unrealized_profit: 0, total_profit: 0,
         total_invested: 0, total_return: 0,
@@ -249,6 +259,44 @@ export class Component implements OnInit {
         return emptyNumbers && emptyLists && disconnected;
     }
 
+    private normalizeInfiniteBuyCycles(rows: any): any[] {
+        const bySymbol = new Map<string, any>();
+        for (const raw of Array.isArray(rows) ? rows : []) {
+            const cycle = raw || {};
+            const symbol = String(cycle.symbol || '').trim().toUpperCase();
+            if (!symbol) continue;
+            const current = bySymbol.get(symbol);
+            const score = (item: any): [number, number, number, string] => [
+                Number(item?.total_qty || 0) > 0 ? 1 : 0,
+                Number(item?.total_spent || 0) > 0 ? 1 : 0,
+                Number(item?.current_round || 0),
+                String(item?.updated || item?.created || ''),
+            ];
+            const nextScore = score(cycle);
+            const currentScore = score(current);
+            const wins = !current
+                || nextScore[0] > currentScore[0]
+                || (nextScore[0] === currentScore[0] && nextScore[1] > currentScore[1])
+                || (nextScore[0] === currentScore[0] && nextScore[1] === currentScore[1] && nextScore[2] > currentScore[2])
+                || (nextScore[0] === currentScore[0] && nextScore[1] === currentScore[1] && nextScore[2] === currentScore[2] && nextScore[3] >= currentScore[3]);
+            if (wins) bySymbol.set(symbol, cycle);
+        }
+        return Array.from(bySymbol.values());
+    }
+
+    private normalizeInfiniteBuySummary(summary: any, cycles: any[]): any {
+        const normalized = Array.isArray(cycles) ? cycles : [];
+        const countStatus = (status: string) => normalized.filter((cycle: any) => String(cycle?.status || '').toUpperCase() === status).length;
+        return {
+            ...(summary || {}),
+            total: normalized.length,
+            active: countStatus('ACTIVE'),
+            holding: countStatus('HOLDING'),
+            paused: countStatus('PAUSED'),
+            pending_extension: countStatus('PENDING_EXTENSION'),
+        };
+    }
+
     private dashboardSessionKey(): string {
         const session: any = this.service?.auth?.session || {};
         return String(session.id || session.user?.id || session.profile?.id || session.data?.id || session.email || session.user?.email || '').trim();
@@ -295,6 +343,7 @@ export class Component implements OnInit {
     }
 
     public get showDaytradeQuickLink(): boolean {
+        if (this.isMock) return this.showAdminControls;
         return this.showAdminControls && this.daytradeRuntime?.daytrade_feature_enabled === true;
     }
 
@@ -326,21 +375,21 @@ export class Component implements OnInit {
         if (this.destroyed) return;
         await this.service.auth.allow("/access");
         if (this.destroyed) return;
+        const account = await wiz.call('account_context');
+        if (account.code !== 200) throw new Error('Account context unavailable');
+        this.isMock = account.data.is_mock;
+        DASHBOARD_CACHE_KEY = '__stock8AccountDashboardV3:' + account.data.mode;
         const restored = this.restoreCachedState();
         if (restored) {
             this.loading = false;
             await this.renderIfAlive();
         }
+        // The saved P/L read is independent of slow live balance/quote calls.
+        if (this.legacyMode !== true) void this.loadProfitSummary();
         await this.load(restored, false);
         if (this.destroyed) return;
         this.startPolling();
 
-        if (this.legacyMode !== true) {
-            setTimeout(() => {
-                if (this.destroyed) return;
-                void this.loadProfitSummary();
-            }, 50);
-        }
     }
 
     ngOnDestroy() {
@@ -422,14 +471,29 @@ export class Component implements OnInit {
         }
 
         try {
-            const automationResult = await this.kickDueAutomation(forceRefresh);
-            if (this.destroyed || seq !== this.dashboardLoadSeq) return;
-            const refreshOverview = forceRefresh || this.shouldForceOverviewAfterAutomation(automationResult);
-            const { code, data } = await wiz.call("overview", {
+            // Initial paint must not wait for LOC/daytrade automation.
+            // The independent worker result is reflected by the next poll.
+            void this.kickDueAutomation(forceRefresh);
+            const refreshOverview = forceRefresh;
+            const overviewRequest = wiz.call("overview", {
                 force_refresh: refreshOverview ? 'true' : 'false',
                 _ts: Date.now(),
             });
+            let overviewResponse: any = await Promise.race([
+                overviewRequest,
+                new Promise((resolve) => window.setTimeout(() => resolve({ code: 202, data: { delayed: true } }), 4000)),
+            ]);
+            if (overviewResponse?.code === 202 && overviewResponse?.data?.delayed) {
+                // Keep cached/default dashboard controls usable while the slow
+                // account request finishes. Do not launch overlapping polls.
+                this.loading = false;
+                await this.renderIfAlive();
+                overviewResponse = await overviewRequest;
+            }
+            const { code, data } = overviewResponse;
             if (this.destroyed || seq !== this.dashboardLoadSeq) return;
+            if (code !== 200) throw new Error(data?.message || '계좌 조회 응답 지연');
+            if (data?.degraded) this.addToast('error', '계좌 갱신 지연', '마지막 확인값입니다. 최신 잔고 확인을 기다리고 있습니다.');
             if (code === 200) {
                 if (this.shouldIgnoreEmptyOverview(data)) {
                     this.lastRefresh = new Date();
@@ -451,9 +515,15 @@ export class Component implements OnInit {
                 this.exchangeRate = data.exchange_rate || 0;
                 this.krwBuyingPowerUsd = data.krw_buying_power_usd || 0;
                 this.orderableCash = data.buying_power_orderable !== undefined && data.buying_power_orderable !== null ? data.buying_power_orderable : this.krwOrderableCash;
-                this.buyingPower = data.buying_power !== undefined && data.buying_power !== null ? data.buying_power : this.orderableCash;
-                this.portfolioValue = data.portfolio_value || 0;
-                this.totalAsset = data.total_asset || 0;
+                const incomingBuyingPower = Number(data.buying_power || 0);
+                const incomingPortfolioValue = Number(data.portfolio_value || 0);
+                const incomingTotalAsset = Number(data.total_asset || 0);
+                // Zero is a valid broker result after liquidation/reset. Do not
+                // keep yesterday's non-zero localStorage value indefinitely.
+                this.buyingPower = Number.isFinite(incomingBuyingPower) ? incomingBuyingPower : 0;
+                this.portfolioValue = Number.isFinite(incomingPortfolioValue) ? incomingPortfolioValue : 0;
+                this.totalAsset = Number.isFinite(incomingTotalAsset) ? incomingTotalAsset : 0;
+                this.totalAssetVerified = data.total_asset_verified === true;
                 this.balanceSyncOk = data.balance_sync_ok === true;
                 this.balanceSyncMessage = data.balance_sync_message || '';
                 this.balanceSyncSource = data.balance_sync_source || '';
@@ -467,10 +537,28 @@ export class Component implements OnInit {
                 this.balanceDiagnostics = data.balance_diagnostics || [];
                 this.apiConnected = data.api_connected || false;
                 this.isMock = data.is_mock || false;
-                this.cycles = data.cycles || [];
-                this.infiniteBuyCycles = data.infinite_buy_cycles || data.cycles || [];
+                this.paperReady = data.paper_ready === true || (this.isMock && this.apiConnected);
+                this.connectionMessage = data.connection_message || '';
+                this.readinessVerifiedAt = data.readiness_verified_at || '';
+                this.automationState = data.automation_state || this.automationState;
+                this.infiniteBuyCycles = this.normalizeInfiniteBuyCycles(data.infinite_buy_cycles || data.cycles || []);
+                this.cycles = this.infiniteBuyCycles;
+                // 캐시된 automation_state가 최신 engine_status보다 오래된 경우
+                // 상단 제목은 OFF, 토글은 ON으로 갈라져 사용자에게 잘못 보였다.
+                const autoTradeEnabled = this.engineStatus?.auto_trade === true;
+                const activeCycleCount = this.infiniteBuyCycles.filter((cycle: any) => String(cycle?.status || '').toUpperCase() === 'ACTIVE').length;
+                this.automationState = {
+                    ...this.automationState,
+                    enabled: autoTradeEnabled,
+                    active_cycles: activeCycleCount,
+                    code: autoTradeEnabled ? (activeCycleCount > 0 ? 'running' : 'waiting') : 'off',
+                    label: autoTradeEnabled ? (activeCycleCount > 0 ? '자동 운용 중' : '자동 감시 대기') : '자동매매 OFF',
+                    message: autoTradeEnabled
+                        ? (activeCycleCount > 0 ? `활성 사이클 ${activeCycleCount}개와 단타 포지션을 감시하고 있습니다.` : '자동매매는 켜져 있으며 진입·청산 조건을 감시하고 있습니다.')
+                        : '대시보드에서 자동매매를 켜면 현재 계정의 주문 감시를 시작합니다.',
+                };
                 this.syncSeedDrafts();
-                this.infiniteBuySummary = data.infinite_buy_summary || this.infiniteBuySummary;
+                this.infiniteBuySummary = this.normalizeInfiniteBuySummary(data.infinite_buy_summary || this.infiniteBuySummary, this.infiniteBuyCycles);
                 this.fireGateBridge = data.fire_gate_bridge || this.fireGateBridge;
                 this.holdings = data.holdings || [];
                 this.daytradePositions = data.daytrade_positions || [];
@@ -511,6 +599,7 @@ export class Component implements OnInit {
             }
         } catch (e) {
             console.error("Dashboard load error:", e);
+            this.addToast('error', '계좌 갱신 지연', '마지막 확인값을 유지합니다. 현재 잔고로 확정하지 마세요.');
         }
 
         if (this.destroyed || seq !== this.dashboardLoadSeq) return;
@@ -631,13 +720,25 @@ export class Component implements OnInit {
 
         try {
             const todayRes = await wiz.call("profit_summary", {
-                period: "1D",
+                period: this.profitPeriod || "1D",
                 force_refresh: forceRefresh ? 'true' : 'false',
                 _ts: forceRefresh ? Date.now() : undefined,
             });
             if (this.destroyed || seq !== this.profitSeq) return;
             if (todayRes?.code === 200) {
+                if (todayRes.data?.snapshot_available === false) {
+                    this.profitSnapshotReady = false;
+                    this.profitSyncMessage = todayRes.data.message || '최초 집계 중';
+                    this.profitLoading = false;
+                    await this.renderIfAlive();
+                    setTimeout(() => { if (!this.destroyed && seq === this.profitSeq) void this.loadProfitSummary(); }, 2000);
+                    return;
+                }
                 this.profitData = todayRes.data || this.profitData;
+                this.profitSnapshotReady = true;
+                if (todayRes.data?.refreshing) {
+                    setTimeout(() => { if (!this.destroyed && seq === this.profitSeq) void this.loadProfitSummary(); }, 2000);
+                }
                 if ((todayRes.data || {}).setup_required === true || (todayRes.data || {}).privacy_locked === true) {
                     this.setupRequired = true;
                     this.privacyLocked = true;
@@ -652,7 +753,7 @@ export class Component implements OnInit {
                     await this.renderIfAlive();
                     return;
                 }
-                if ((todayRes.data || {}).message) this.profitSyncMessage = todayRes.data.message;
+                this.profitSyncMessage = todayRes.data?.message || '';
                 this.profitLastRefresh = new Date();
                 this.profitLastRefreshKst = todayRes.data?.server_time_kst || this.profitLastRefreshKst;
                 this.profitLastServerRefreshMs = Date.now();
@@ -664,29 +765,8 @@ export class Component implements OnInit {
             this.profitLoading = false;
             await this.renderIfAlive();
 
-            const chartPeriod = this.profitPeriod || "1W";
-            if (chartPeriod === "1D") {
-                this.profitChartData = todayRes?.data || this.profitChartData;
-            } else {
-                try {
-                    const chartRes = await wiz.call("profit_summary", {
-                        period: chartPeriod,
-                        force_refresh: forceRefresh ? 'true' : 'false',
-                        _ts: forceRefresh ? Date.now() : undefined,
-                    });
-                    if (this.destroyed || seq !== this.profitSeq) return;
-                    if (chartRes?.code === 200) {
-                        this.profitChartData = chartRes.data || this.profitChartData;
-                        if ((chartRes.data || {}).message) this.profitSyncMessage = chartRes.data.message;
-                        this.profitLastRefresh = new Date();
-                        this.profitLastRefreshKst = chartRes.data?.server_time_kst || this.profitLastRefreshKst;
-                        this.profitLastServerRefreshMs = Date.now();
-                        this.persistCachedState();
-                    }
-                } catch (chartError: any) {
-                    console.error("Profit chart load error:", chartError);
-                }
-            }
+            // One response includes both totals and the selected-period series.
+            this.profitChartData = todayRes?.data || this.profitChartData;
         } catch (e: any) {
             console.error("Profit summary load error:", e);
             this.applyLiveUnrealizedFromOverview();
@@ -700,7 +780,11 @@ export class Component implements OnInit {
 
     public async setProfitPeriod(period: string) {
         this.profitPeriod = period;
-        await this.loadProfitSummary(true);
+        ++this.profitSeq;
+        this.profitSnapshotReady = false;
+        // Discard the previous period's response before loading this period.
+        if (this.profitLoadPromise) await this.profitLoadPromise;
+        await this.loadProfitSummary();
     }
 
     public profitChangeClass(val: number): string {
@@ -1123,31 +1207,39 @@ export class Component implements OnInit {
     }
 
     public async toggleAutoTrade() {
-        if (this.isMock) {
-            this.addToast('warning', this.t('dash.demo_mode'), this.t('dash.demo_desc'));
-            return;
-        }
+        if (this.autoTradeChanging) return;
+        this.autoTradeChanging = true;
+        await this.renderIfAlive();
         try {
             const { code, data } = await wiz.call("toggle_auto_trade");
             if (code === 200) {
                 this.engineStatus.auto_trade = data?.auto_trade === true;
                 this.engineStatus.loc_auto_schedule_enabled = data?.loc_auto_schedule_enabled === true;
                 this.infiniteBuySummary.loc_auto_enabled = data?.loc_auto_schedule_enabled === true;
+                this.automationState = {
+                    ...this.automationState,
+                    code: data?.automation_state || (this.engineStatus.auto_trade ? 'running' : 'off'),
+                    label: this.engineStatus.auto_trade ? (Number(data?.active_cycles || 0) > 0 ? '자동 운용 중' : '대기 중') : '자동매매 OFF',
+                    message: data?.message || '',
+                    enabled: this.engineStatus.auto_trade,
+                    active_cycles: Number(data?.active_cycles || 0),
+                };
                 const state = this.engineStatus.auto_trade ? 'ON' : 'OFF';
                 this.addToast(this.engineStatus.auto_trade ? 'success' : 'warning',
-                    '무한매수 매매', `무한매수 매매 ${state}`);
+                    'PAPER 자동매매', data?.message || `PAPER 자동매매 ${state}`);
             } else {
                 this.addToast('error', this.t('engine.auto_trading'), data?.message || '자동매매 설정 변경 실패');
             }
         } catch (e: any) {
             this.addToast('error', this.t('engine.auto_trading'), e?.message || '자동매매 설정 변경 중 오류가 발생했습니다.');
         }
+        this.autoTradeChanging = false;
         await this.renderIfAlive();
     }
 
     public async toggleAutomationItem(item: any) {
         if (!item?.key || this.automationSaving[item.key]) return;
-        if (this.isMock) {
+        if (this.isMock && item.key !== 'infinite_buy') {
             this.addToast('warning', this.t('dash.demo_mode'), this.t('dash.demo_desc'));
             return;
         }
@@ -1385,9 +1477,21 @@ export class Component implements OnInit {
             this.setupMessage = String(state.setupMessage || '');
             this.engineStatus = state.engineStatus || this.engineStatus;
             this.apiConnected = state.apiConnected === true;
-            this.cycles = Array.isArray(state.cycles) ? state.cycles : [];
-            this.infiniteBuyCycles = Array.isArray(state.infiniteBuyCycles) ? state.infiniteBuyCycles : this.cycles;
-            this.infiniteBuySummary = state.infiniteBuySummary || this.infiniteBuySummary;
+            this.infiniteBuyCycles = this.normalizeInfiniteBuyCycles(Array.isArray(state.infiniteBuyCycles) ? state.infiniteBuyCycles : state.cycles);
+            this.cycles = this.infiniteBuyCycles;
+            const cachedAutoTradeEnabled = this.engineStatus?.auto_trade === true;
+            const cachedActiveCycleCount = this.infiniteBuyCycles.filter((cycle: any) => String(cycle?.status || '').toUpperCase() === 'ACTIVE').length;
+            this.automationState = {
+                ...this.automationState,
+                enabled: cachedAutoTradeEnabled,
+                active_cycles: cachedActiveCycleCount,
+                code: cachedAutoTradeEnabled ? (cachedActiveCycleCount > 0 ? 'running' : 'waiting') : 'off',
+                label: cachedAutoTradeEnabled ? (cachedActiveCycleCount > 0 ? '자동 운용 중' : '자동 감시 대기') : '자동매매 OFF',
+                message: cachedAutoTradeEnabled
+                    ? (cachedActiveCycleCount > 0 ? `활성 사이클 ${cachedActiveCycleCount}개와 단타 포지션을 감시하고 있습니다.` : '자동매매는 켜져 있으며 진입·청산 조건을 감시하고 있습니다.')
+                    : '대시보드에서 자동매매를 켜면 현재 계정의 주문 감시를 시작합니다.',
+            };
+            this.infiniteBuySummary = this.normalizeInfiniteBuySummary(state.infiniteBuySummary || this.infiniteBuySummary, this.infiniteBuyCycles);
             this.fireGateBridge = state.fireGateBridge || this.fireGateBridge;
             this.holdings = Array.isArray(state.holdings) ? state.holdings : [];
             this.daytradePositions = Array.isArray(state.daytradePositions) ? state.daytradePositions : [];
@@ -1397,6 +1501,7 @@ export class Component implements OnInit {
             this.tradePreviews = Array.isArray(state.tradePreviews) ? state.tradePreviews : [];
             this.tradePreviewApiConnected = state.tradePreviewApiConnected === true;
             this.profitData = state.profitData || this.profitData;
+            this.profitSnapshotReady = !!state.profitData?.server_time_kst;
             this.profitChartData = state.profitChartData || this.profitChartData;
             this.daytradeRuntime = state.daytradeRuntime || this.daytradeRuntime;
             this.automationControls = Array.isArray(state.automationControls) ? state.automationControls : this.automationControls;

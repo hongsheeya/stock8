@@ -14,10 +14,12 @@ Trading Scheduler API
 """
 import json
 import datetime
+import os
 import threading
 
 _TIME = wiz.model("portal/trading/kst")
-_DAYTRADE_HARD_LOCKED = True
+_TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_DAYTRADE_HARD_LOCKED = str(os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
 _DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 _LOC_RESERVATION_START_HHMM = 1000
 _LOC_RESERVATION_END_STANDARD_HHMM = 2320

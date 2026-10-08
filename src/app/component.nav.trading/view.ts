@@ -5,9 +5,10 @@ import { Service } from '@wiz/libs/portal/season/service';
 import { i18n } from '@wiz/libs/portal/trading/i18n';
 
 declare const wiz: any;
-const DASHBOARD_CACHE_KEY = '__wizDashboardState';
+let DASHBOARD_CACHE_KEY = '__stock8AccountDashboardV3';
 
 export class Component implements OnInit, OnDestroy {
+    public accountMode = '';
     public now: Date = new Date();
     private clockInterval: any;
     private routerSub: Subscription;
@@ -34,6 +35,14 @@ export class Component implements OnInit, OnDestroy {
     public async ngOnInit() {
         this.loadThemePreference();
         await this.service.init(this);
+        const account = await wiz.call('account_context', {}, {timeout: 5000});
+        if (account.code !== 200) {
+            this.accountMode = 'ERROR';
+            await this.service.render();
+            return;
+        }
+        this.accountMode = account.data.mode;
+        DASHBOARD_CACHE_KEY = '__stock8AccountDashboardV3:' + this.accountMode;
         this.refreshAdminPreviewMode();
         await this.loadDaytradeAccess(false);
 
@@ -292,7 +301,7 @@ export class Component implements OnInit, OnDestroy {
         if (this.daytradeAccess?.daytrade_hard_locked === true) return false;
         if (this.daytradeAccess?.daytrade_feature_enabled !== true) return false;
         if (this.effectiveAdminMode) return true;
-        return this.daytradeAccess?.daytrade_access_enabled === true;
+        return false;
     }
 
     private async loadDaytradeAccess(render: boolean = true) {

@@ -1,0 +1,12 @@
+{
+    "id": "page.live.settings",
+    "mode": "page",
+    "title": "/settings/live",
+    "namespace": "live.settings",
+    "category": "trading",
+    "viewuri": "/settings/live",
+    "preview": "",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-live-settings()"
+}

@@ -207,6 +207,64 @@ class _KisApiStub:
 
 
 class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
+	def test_paper_history_boundary_requires_explicit_valid_date(self):
+		engine = engine_module.Engine(_StructStub([], [], {"paper_history_start_date": "2026-09-24"}))
+		self.assertEqual(str(engine._paper_history_start_date()), "2026-09-24")
+		engine.struct.configs["paper_history_start_date"] = "invalid"
+		with self.assertRaises(ValueError):
+			engine._paper_history_start_date()
+		engine.struct.configs["paper_history_start_date"] = ""
+		self.assertIsNone(engine._paper_history_start_date())
+
+	def test_duplicate_scoped_rows_collapse_and_real_holding_cycle_wins(self):
+		struct = _StructStub([
+			{"id": "user-watch", "symbol": "TQQQ", "created": "2026-09-01", "updated": "2026-09-01"},
+			{"id": "broker-watch", "symbol": "TQQQ", "created": "2026-09-02", "updated": "2026-09-02"},
+		], [
+			{"id": "user-empty", "symbol": "TQQQ", "status": "ACTIVE", "total_qty": 0, "total_spent": 0, "current_round": 0, "updated": "2026-09-02"},
+			{"id": "broker-real", "symbol": "TQQQ", "status": "ACTIVE", "total_qty": 3, "total_spent": 210, "current_round": 1, "updated": "2026-09-01"},
+		])
+		engine = engine_module.Engine(struct)
+
+		watchlist = engine._logical_watchlist_rows(struct.db("etf_watchlist").rows())
+		cycle = engine._best_cycle("TQQQ", [engine_module.STATUS_ACTIVE])
+
+		self.assertEqual([row["id"] for row in watchlist], ["broker-watch"])
+		self.assertEqual(cycle["id"], "broker-real")
+
+	def test_active_cycle_dashboard_feed_collapses_duplicate_symbol(self):
+		struct = _StructStub([], [
+			{"id": "user-empty", "symbol": "SOXL", "status": "ACTIVE", "total_qty": 0, "total_spent": 0, "current_round": 0, "updated": "2026-09-02"},
+			{"id": "broker-real", "symbol": "SOXL", "status": "ACTIVE", "total_qty": 3, "total_spent": 319.85, "current_round": 1, "updated": "2026-09-01"},
+		])
+		engine = engine_module.Engine(struct)
+
+		cycles = engine.get_active_cycles()
+
+		self.assertEqual(len(cycles), 1)
+		self.assertEqual(cycles[0]["id"], "broker-real")
+
+	def test_external_sell_records_fill_without_starting_new_cycle(self):
+		from unittest.mock import Mock
+		struct = _StructStub([], [{
+			"id": "historical", "symbol": "TQQQ", "status": "ACTIVE",
+			"total_qty": 2, "total_spent": 200, "avg_price": 100,
+			"current_round": 1, "total_commission": 0,
+		}])
+		engine = engine_module.Engine(struct)
+		engine._ensure_runtime_schema = lambda: None
+		engine._get_commission_rates = lambda: {}
+		engine._calc_sell_commission = lambda amount, rates: 0
+		engine._log_event = Mock()
+		engine._sync_trade_to_firegate = Mock()
+		engine._auto_start_next_cycle_after_completion = Mock()
+		trade = engine.execute_sell("historical", 110, 2, order_type="EXTERNAL", source="KIS", broker_order_no="history-1")
+		engine._auto_start_next_cycle_after_completion.assert_not_called()
+		self.assertEqual(struct.db("trading_cycle").get(id="historical")["status"], "COMPLETED")
+		self.assertEqual(len(struct.db("cycle_trade").rows()), 1)
+		self.assertEqual(trade["broker_order_no"], "history-1")
+		self.assertNotIn("next_cycle_id", trade)
+
 	def test_engine_exposes_default_kis_api_loader(self):
 		struct = _StructStub([], [])
 		kis_api = object()
@@ -215,6 +273,36 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 
 		self.assertTrue(hasattr(engine, "_load_kis_api"))
 		self.assertIs(engine._load_kis_api(), kis_api)
+
+	def test_recalculation_sells_remove_cost_not_sale_proceeds(self):
+		struct = _StructStub([], [{"id": "c1", "symbol": "SOXL", "status": "ACTIVE", "total_investment": 2000, "division_count": 20}])
+		struct._db["cycle_trade"] = _FakeDB([
+			{"id": "buy", "cycle_id": "c1", "action": "BUY", "status": "FILLED", "filled_qty": 10, "filled_price": 100},
+			{"id": "sell", "cycle_id": "c1", "action": "SELL", "status": "FILLED", "filled_qty": 2, "filled_price": 150},
+		])
+		engine = engine_module.Engine(struct)
+		engine._recalculate_cycle_from_trades("c1")
+		self.assertEqual(struct.db("trading_cycle").get(id="c1")["avg_price"], 100)
+		self.assertEqual(struct.db("trading_cycle").get(id="c1")["total_spent"], 800)
+		self.assertEqual(struct.db("cycle_trade").get(id="sell")["avg_buy_price"], 100)
+		self.assertEqual(struct.db("cycle_trade").get(id="sell")["profit_rate"], 50)
+
+	def test_verified_basis_anchor_survives_later_recalculation(self):
+		import json
+		struct = _StructStub([], [{"id": "c1", "symbol": "SOXL", "status": "ACTIVE", "total_investment": 15000, "division_count": 20}], configs={
+			"cycle_bookkeeping_anchor:c1": json.dumps({"verified": True, "trade_id": "sell", "qty_before": 60, "avg_before": 158.6427})})
+		struct._db["cycle_trade"] = _FakeDB([
+			{"id": "old-incomplete", "cycle_id": "c1", "action": "BUY", "status": "FILLED", "filled_qty": 51, "filled_price": 150},
+			{"id": "sell", "cycle_id": "c1", "action": "SELL", "status": "FILLED", "filled_qty": 15, "filled_price": 163, "commission": 6.11},
+			{"id": "later", "cycle_id": "c1", "action": "BUY", "status": "FILLED", "filled_qty": 1, "filled_price": 160},
+		])
+		engine = engine_module.Engine(struct)
+		for _ in range(2):
+			engine._recalculate_cycle_from_trades("c1")
+			self.assertEqual(struct.db("cycle_trade").get(id="sell")["total_qty_after"], 45)
+			self.assertEqual(struct.db("cycle_trade").get(id="sell")["avg_buy_price"], 158.6427)
+			self.assertEqual(struct.db("trading_cycle").get(id="c1")["total_qty"], 46)
+		self.assertEqual(len(struct.db("cycle_trade").rows()), 3)
 
 	def test_trade_insert_falls_back_while_legacy_schema_is_migrating(self):
 		struct = _StructStub([], [])

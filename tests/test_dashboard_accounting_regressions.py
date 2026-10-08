@@ -115,7 +115,7 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         self.assertFalse(state["configured"])
         self.assertIn("한국투자증권 App Key", state["message"])
 
-    def test_broker_setup_rejects_sticky_connection_success(self):
+    def test_broker_setup_accepts_recent_connection_success(self):
         _SessionStub.current_user_id = "user-with-old-success"
         original = dashboard_api._kis_connection_status
         dashboard_api._kis_connection_status = lambda _trading, ttl_sec=None: {
@@ -133,6 +133,9 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
                     "kis_app_key": "app-key",
                     "kis_app_secret": "app-secret",
                     "kis_account_no": "12345678-01",
+                    "kis_paper_app_key": "paper-app-key",
+                    "kis_paper_app_secret": "paper-app-secret",
+                    "kis_paper_account_no": "12345678-01",
                 }
                 return values.get(key, default)
 
@@ -141,9 +144,46 @@ class DashboardAccountingRegressionTests(unittest.TestCase):
         finally:
             dashboard_api._kis_connection_status = original
 
-        self.assertFalse(state["allowed"])
+        self.assertTrue(state["allowed"])
         self.assertTrue(state["configured"])
-        self.assertFalse(state["connected"])
+        self.assertTrue(state["connected"])
+
+    def test_dashboard_uses_matching_paper_readiness_without_network_revalidation(self):
+        _SessionStub.current_user_id = "paper-user"
+        dashboard_api._KIS_STATUS_CACHE.clear()
+
+        class _Broker:
+            @staticmethod
+            def _readiness_scope():
+                return "matching-scope"
+
+            @staticmethod
+            def validate_paper_readiness():
+                raise AssertionError("dashboard must not repeat the full readiness chain")
+
+        class _Trading:
+            broker_api = _Broker()
+
+            @staticmethod
+            def get_config(key, default=""):
+                values = {
+                    "broker_provider": "kis",
+                    "kis_paper_readiness_scope": "matching-scope",
+                    "kis_paper_readiness_verified_at": "2026-08-14T13:43:29",
+                }
+                return values.get(key, default)
+
+        result = dashboard_api._kis_connection_status(_Trading(), ttl_sec=0)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["persistent"])
+        self.assertEqual(result["message"], "KIS READY")
+
+    def test_internal_response_exception_is_not_exposed_to_dashboard(self):
+        self.assertEqual(
+            dashboard_api._connection_message("season.core.exception.response"),
+            "KIS 계좌 연결 상태를 확인해주세요.",
+        )
 
     def test_extract_firegate_authoritative_symbols_ignores_manual_portfolios(self):
         symbols = dashboard_api._extract_firegate_authoritative_symbols([
