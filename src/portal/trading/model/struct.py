@@ -12,12 +12,18 @@ import datetime as _dt
 import contextlib
 import inspect
 import json as _json
+import os as _os
 import sys as _sys
 import threading
 import time
 
 _TIME = wiz.model("portal/trading/kst")
-DAYTRADE_HARD_LOCKED = True
+TRADING_MODE = str(_os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+if TRADING_MODE not in ("PAPER", "LIVE"):
+    raise RuntimeError("TRADING_MODE must be PAPER or LIVE")
+PAPER_MODE = TRADING_MODE == "PAPER"
+DAYTRADE_HARD_LOCKED = str(_os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+PAPER_DAYTRADE_FULL_ACCESS = PAPER_MODE and not DAYTRADE_HARD_LOCKED
 DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 DAYTRADE_ENABLE_KEYS = {
     "daytrade_feature_enabled",
@@ -30,6 +36,9 @@ DAYTRADE_ENABLE_KEYS = {
 }
 
 USER_SCOPED_CONFIG_KEYS = {
+    "daytrade_feature_enabled", "daytrade_auto_enabled", "daytrade_exit_watch_enabled",
+    "daytrade_us_auto_enabled", "daytrade_us_exit_watch_enabled", "us_daytrade_auto_enabled",
+    "us_daytrade_exit_watch_enabled", "daytrade_default_seed", "daytrade_us_default_seed",
     "broker_provider",
     "kis_app_key",
     "kis_app_secret",
@@ -38,6 +47,20 @@ USER_SCOPED_CONFIG_KEYS = {
     "kis_is_real",
     "kis_access_token",
     "kis_token_expires",
+    "kis_paper_app_key",
+    "kis_paper_app_secret",
+    "kis_paper_account_no",
+    "kis_paper_access_token",
+    "kis_paper_token_expires",
+    "kis_paper_readiness_scope",
+    "kis_paper_readiness_verified_at",
+    "kis_live_app_key",
+    "kis_live_app_secret",
+    "kis_live_account_no",
+    "kis_live_access_token",
+    "kis_live_token_expires",
+    "kis_reservation_pending",
+    "kis_reservation_unseen_receipts",
     "toss_client_id",
     "toss_client_secret",
     "toss_account_seq",
@@ -87,7 +110,7 @@ _LOC_RESERVATION_START_HHMM = 1000
 _LOC_RESERVATION_END_STANDARD_HHMM = 2320
 _LOC_RESERVATION_END_SUMMER_HHMM = 2220
 _LOC_RESERVATION_VERIFY_VERSION = "firegate-authoritative-v3"
-_LOC_RESERVATION_PROCESS_LOCK = threading.Lock()
+_LOC_RESERVATION_PROCESS_LOCK = _sys.__dict__.setdefault('_stock8_loc_reservation_process_lock', threading.Lock())
 
 
 class _UserScopedDb:
@@ -557,6 +580,8 @@ class Struct:
         if not Struct._cfg_ready:
             self._load_config_cache()
         self._seal_daytrade_runtime()
+        self._initialize_paper_full_access()
+        self._initialize_paper_watchlist()
 
         # 서버 상주형 단타 자동매매 워커 시작
         self._ensure_background_worker()
@@ -599,6 +624,11 @@ class Struct:
 
     def _lookup_config_value(self, storage_key, missing=_CONFIG_MISSING):
         """캐시/DB에서 실제 저장 키 기준으로 조회한다."""
+        # WIZ model classes may live in different request/worker caches. Credentials
+        # must reflect the committed database, never another instance's old value.
+        if storage_key.startswith('user:') or storage_key.startswith(('kis_', 'toss_')):
+            row = self.orm.use("trading_config", module="trading").get(key=storage_key)
+            return row.get("value", "") if row else missing
         if not Struct._cfg_ready:
             self._load_config_cache()
         if storage_key in Struct._cfg:
@@ -624,8 +654,8 @@ class Struct:
                 db.update({"value": str(value), "description": description, "is_secret": is_secret, "updated": now}, id=existing["id"])
             else:
                 db.insert({"key": storage_key, "value": str(value), "description": description, "is_secret": is_secret, "created": now, "updated": now})
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError("설정 저장 실패: DB 반영을 확인하지 못했습니다.") from exc
         Struct._cfg[storage_key] = str(value)
 
     def get_config(self, key, default=None):
@@ -654,6 +684,8 @@ class Struct:
     def set_config(self, key, value, description="", is_secret=False):
         """config 쓰기 → DB 반영 + 캐시 즉시 갱신"""
         key = str(key or "")
+        if PAPER_MODE and key == "broker_provider":
+            value = "kis"
         if DAYTRADE_HARD_LOCKED and key in DAYTRADE_ENABLE_KEYS:
             value = "false"
         storage_keys = [key]
@@ -708,8 +740,65 @@ class Struct:
             except Exception:
                 Struct._cfg[key] = "false"
 
+    def _initialize_paper_full_access(self):
+        """Enable every PAPER automation lane once, while preserving later user toggles."""
+        if PAPER_DAYTRADE_FULL_ACCESS is False:
+            return
+        allocation_marker = "paper_dynamic_allocation_initialized_v1"
+        if str(self.get_config(allocation_marker, "false") or "false").lower() != "true":
+            allocation_defaults = {
+                "daytrade_dynamic_allocation_enabled": "true",
+                "daytrade_dynamic_base_ratio": "0.60",
+                "daytrade_dynamic_min_ratio": "0.45",
+                "daytrade_dynamic_max_ratio": "0.80",
+            }
+            for key, value in allocation_defaults.items():
+                self._write_config_value(key, value, description="PAPER dynamic allocation default")
+            self._write_config_value(allocation_marker, "true", description="PAPER dynamic allocation defaults applied")
+        marker = "paper_full_access_initialized_v2"
+        if str(self.get_config(marker, "false") or "false").lower() == "true":
+            return
+        defaults = {
+            "auto_trade_enabled": "true",
+            "loc_auto_schedule_enabled": "true",
+            "auto_start_next_cycle_enabled": "true",
+            "daytrade_feature_enabled": "true",
+            "daytrade_auto_enabled": "true",
+            "daytrade_exit_watch_enabled": "true",
+            "daytrade_us_auto_enabled": "true",
+            "daytrade_us_exit_watch_enabled": "true",
+            "daytrade_daily_loss_halt_enabled": "true",
+            "daytrade_daily_loss_limit_krw": "1000000",
+            "daytrade_max_gross_exposure_ratio": "1.0",
+            "daytrade_auto_max_symbols": "5",
+            "daytrade_ks_auto_max_symbols": "5",
+            "daytrade_us_auto_max_symbols": "5",
+        }
+        for key, value in defaults.items():
+            # Do not start a worker halfway through Struct construction. The normal
+            # constructor tail starts it once all PAPER defaults are persisted.
+            self._write_config_value(key, value, description="PAPER full-access default")
+        self._write_config_value(marker, "true", description="PAPER full-access defaults applied")
+
+    def _initialize_paper_watchlist(self):
+        """Activate existing PAPER auto targets once; later user toggles are preserved."""
+        if PAPER_DAYTRADE_FULL_ACCESS is False:
+            return
+        marker = "paper_watchlist_auto_activated_v1"
+        if str(self.get_config(marker, "false") or "false").lower() == "true":
+            return
+        try:
+            db = self.orm.use("etf_watchlist", module="trading")
+            for row in db.rows(dump=1000) or []:
+                if str(row.get("cycle_mode", "auto") or "auto").lower() == "auto" and not bool(row.get("is_active", False)):
+                    db.update({"is_active": True, "updated": _kst_now()}, id=row.get("id"))
+        finally:
+            self._write_config_value(marker, "true", description="PAPER watchlist auto targets activated")
+
     def _worker_state(self):
         key = "_trading_daytrade_worker_state"
+        if not PAPER_MODE:
+            key += ':' + self.live_data_scope
         state = getattr(_sys, key, None)
         if isinstance(state, dict) is False:
             state = {
@@ -722,6 +811,9 @@ class Struct:
                 "last_result": {},
                 "last_firegate_sync_at": "",
                 "last_firegate_sync_ts": 0.0,
+                "loc_async_thread": None,
+                "loc_async_started_ts": 0.0,
+                "loc_async_result": None,
             }
             setattr(_sys, key, state)
         return state
@@ -778,7 +870,7 @@ class Struct:
                 "message": "예약 검증은 FireGate 원본 기준으로 수행하므로 KIS 체결 동기화는 별도 루틴에서 처리합니다.",
             }
         else:
-            external_result = self.run_due_external_cycle_sync(force=True)
+            external_result = self.run_due_external_cycle_sync(force=False)
         if symbol_filter and self._callable_accepts_kwarg(getattr(self, "run_due_firegate_sync", None), "symbol_filter"):
             firegate_result = self.run_due_firegate_sync(symbol_filter=symbol_filter)
         else:
@@ -786,19 +878,28 @@ class Struct:
         return external_result, firegate_result
 
     def _ensure_background_worker(self):
+        if _os.environ.get("STOCK8_BUILD_ONLY") == "1" or "build" in _sys.argv:
+            return
+        if not PAPER_MODE:
+            self._ensure_live_policy_workers()
+            return
         state = self._worker_state()
         with Struct._worker_lock:
             worker = state.get("thread")
             cached_engine_id = int(state.get("engine_id", 0) or 0)
             cached_daytrade_id = int(state.get("daytrade_model_id", 0) or 0)
-            current_engine_id = id(self._daytrade_engine_model())
-            current_daytrade_id = id(self._daytrade_model())
-            if worker is not None and worker.is_alive() and cached_engine_id == current_engine_id and cached_daytrade_id == current_daytrade_id and cached_engine_id > 0:
+            # HTTP requests may construct a fresh Struct/model wrapper while
+            # the process-wide worker is healthy. Comparing object identities
+            # here used to bump the generation on every dashboard refresh,
+            # causing the active worker to exit before its first trading cycle.
+            if worker is not None and worker.is_alive():
                 Struct._worker_started = True
                 Struct._worker_thread = worker
                 Struct._worker_engine_id = cached_engine_id
                 Struct._worker_daytrade_id = cached_daytrade_id
                 return
+            current_engine_id = id(self._daytrade_engine_model())
+            current_daytrade_id = id(self._daytrade_model())
             generation = int(state.get("generation", 0) or 0) + 1
             state["generation"] = generation
             state["engine_id"] = current_engine_id
@@ -813,6 +914,118 @@ class Struct:
             Struct._worker_daytrade_id = current_daytrade_id
             Struct._worker_force_run = True
 
+    @property
+    def live_data_scope(self):
+        import hashlib
+        account = str(getattr(self.broker_api, 'account_no', '') or '')
+        return hashlib.sha256((self.broker_provider + ':' + account).encode()).hexdigest()[:24]
+
+    def _ensure_live_policy_workers(self):
+        """LIVE never runs against the legacy global/admin credential fallback.
+
+        Resume only explicitly approved account policies under their owner's
+        session. Entry research, exits and LOC have separate workers so a slow
+        recommendation must not block exit checks.
+        """
+        registry_key = '_stock8_live_policy_workers'
+        with Struct._worker_lock:
+            registry = getattr(_sys, registry_key, None)
+            if registry is not None:
+                return
+            registry = {'jobs': {}, 'error': ''}
+            setattr(_sys, registry_key, registry)
+
+        def account_job(policy_key, owner, job):
+            import flask
+            state = registry['jobs'][(policy_key, job)]
+            with wiz.server.app.flask.test_request_context('/'):
+                flask.session['id'] = owner
+                trading = None
+                while True:
+                    try:
+                        if trading is None:
+                            trading = Struct()
+                        # Resolve account every time: edited credentials must
+                        # not silently inherit a previous account's permission.
+                        if trading.order_policy._key() != policy_key:
+                            state['status'] = 'account_changed'
+                            return
+                        policy = trading.order_policy.read()
+                        lane = 'infinite_buy' if job in ('loc', 'sync') else ('daytrade_us' if job.endswith('_us') else 'daytrade_ks')
+                        state['status'] = 'off'
+                        if policy.get(lane) is True and (lane == 'infinite_buy' or trading.order_policy.daytrade_allowed()):
+                            state['status'] = 'checking'
+                            if job == 'sync':
+                                # Read broker fills independently of reservation blocks.
+                                # Bounded lookback avoids replaying months on each poll.
+                                result = trading.engine.sync_external_cycle_trades(lookback_days=2, recent_only=True)
+                                trading.engine.sync_firegate_strategy_metadata()
+                                state['message'] = str(result.get('message', '') or '')
+                                state['result_status'] = result.get('status', '')
+                            elif job == 'loc':
+                                result = trading.run_due_loc_automation()
+                                if isinstance(result, dict):
+                                    state['message'] = str(result.get('message', '') or '')
+                                    state['schedule_window'] = result.get('schedule_window', '')
+                                    state['result_status'] = result.get('status', '')
+                            else:
+                                for market in (('US',) if job.endswith('_us') else ('KS',)):
+                                    seed_key = 'daytrade_us_default_seed' if market == 'US' else 'daytrade_default_seed'
+                                    seed = float(trading.get_config(seed_key, '5000000') or '5000000')
+                                    if job.startswith('exit'):
+                                        trading.daytrade_engine.execute_exit_watch(requested_seed=seed, market=market)
+                                    else:
+                                        trading.daytrade_engine.auto_cycle(requested_seed=seed, market=market)
+                            state['status'] = 'waiting'
+                        state['last_check'] = _kst_now().isoformat()
+                        state['error'] = ''
+                    except Exception as exc:
+                        state['status'] = 'error'
+                        state['error'] = str(exc)[:200]
+                    time.sleep(300 if job == 'sync' else (15 if job.startswith('exit') else 30))
+
+        def dispatch():
+            while True:
+                try:
+                    # This ORM accepts field predicates, not Django-style
+                    # key__startswith. Unknown fields are silently ignored.
+                    rows = self.orm.use('trading_config', module='trading').rows(
+                        key=lambda field: field.startswith('order_policy_v1:'), dump=10000) or []
+                    for row in rows:
+                        if not str(row.get('key', '')).startswith('order_policy_v1:'):
+                            continue
+                        try:
+                            policy = _json.loads(row.get('value', '{}'))
+                            if not isinstance(policy, dict):
+                                continue
+                        except (ValueError, TypeError):
+                            # A corrupt account must not starve healthy accounts.
+                            continue
+                        owner = str(policy.get('owner_user_id', '') or '')
+                        if not owner or not any(policy.get(k) is True for k in ('infinite_buy', 'daytrade_ks', 'daytrade_us')):
+                            continue
+                        if not self.orm.use('user').get(id=owner):
+                            continue
+                        for job in ('loc', 'sync', 'exit_ks', 'entry_ks', 'exit_us', 'entry_us'):
+                            if job not in ('loc', 'sync') and not self._current_user_is_admin(owner):
+                                continue
+                            key = (row['key'], job)
+                            existing = registry['jobs'].get(key, {})
+                            if existing.get('thread') and existing['thread'].is_alive():
+                                continue
+                            state = {'status': 'starting', 'error': ''}
+                            thread = threading.Thread(target=account_job, args=(row['key'], owner, job), daemon=True, name='stock8-live-' + job)
+                            state['thread'] = thread
+                            registry['jobs'][key] = state
+                            thread.start()
+                    registry['error'] = ''
+                except Exception as exc:
+                    registry['error'] = str(exc)[:200]
+                time.sleep(5)
+        thread = threading.Thread(target=dispatch, daemon=True, name='stock8-live-policy-dispatch')
+        registry['thread'] = thread
+        thread.start()
+
     def _worker_interval_sec(self):
         try:
             value = int(float(self.get_config("daytrade_auto_interval_sec", "15") or 15))
@@ -824,11 +1037,180 @@ class Struct:
         try:
             import json as _json
             fs = wiz.project.fs()
-            fs.makedirs("data/daytrade")
+            data_root = "data/paper/daytrade" if PAPER_MODE else "data/live/daytrade"
+            fs.makedirs(data_root)
             safe_payload = _json.loads(_json.dumps(payload or {}, ensure_ascii=False, default=str))
-            fs.write.json("data/daytrade/worker_status.json", safe_payload)
+            fs.write.json(f"{data_root}/worker_status.json", safe_payload)
         except Exception:
             pass
+
+    def _poll_or_start_loc_automation(self, state, verify=False, reason="worker"):
+        """Run slow FireGate/LOC work off the main day-trading loop.
+
+        A single daemon job is allowed at a time. If FireGate is slow, the job
+        remains visible as timed out, but KR/US entry and exit checks continue.
+        """
+        thread = state.get("loc_async_thread")
+        if thread is not None and thread.is_alive():
+            elapsed = max(0, int(time.time() - float(state.get("loc_async_started_ts", 0.0) or 0.0)))
+            try:
+                timeout_sec = max(15, int(float(self.get_config("loc_worker_soft_timeout_sec", "45") or 45)))
+            except Exception:
+                timeout_sec = 45
+            return {
+                "enabled": True,
+                "executed": False,
+                "running": True,
+                "timed_out": elapsed >= timeout_sec,
+                "elapsed_sec": elapsed,
+                "reason": reason,
+                "message": (
+                    f"FireGate/LOC 응답이 {elapsed}초 이상 지연 중입니다. 단타 순환은 독립적으로 계속됩니다."
+                    if elapsed >= timeout_sec else
+                    "LOC 예약을 FireGate 기준으로 검증/복구하는 중"
+                ),
+            }
+
+        completed = state.get("loc_async_result")
+        if isinstance(completed, dict):
+            state["loc_async_result"] = None
+            state["loc_async_thread"] = None
+            return completed
+
+        def run_loc_job():
+            try:
+                state["loc_async_result"] = self.run_due_loc_automation(
+                    verify=verify,
+                    reason=reason,
+                ) or {"enabled": True, "executed": False, "message": "LOC 자동화 결과 없음"}
+            except Exception as exc:
+                state["loc_async_result"] = {
+                    "enabled": True,
+                    "executed": False,
+                    "status": "error",
+                    "message": str(exc),
+                }
+
+        state["loc_async_started_ts"] = time.time()
+        state["loc_async_result"] = None
+        thread = threading.Thread(
+            target=run_loc_job,
+            daemon=True,
+            name="trading-loc-worker",
+        )
+        state["loc_async_thread"] = thread
+        thread.start()
+        return {
+            "enabled": True,
+            "executed": False,
+            "running": True,
+            "timed_out": False,
+            "elapsed_sec": 0,
+            "reason": reason,
+            "message": "LOC 예약을 FireGate 기준으로 검증/복구하는 중",
+        }
+
+    def _poll_or_start_external_cycle_sync(self, state, force=False):
+        """Run slow broker-history reconciliation outside the trading loop.
+
+        Period P&L and overseas history endpoints can take tens of seconds or
+        retry repeatedly in PAPER. Exit monitoring must never wait for them.
+        """
+        thread = state.get("external_sync_async_thread")
+        if thread is not None and thread.is_alive():
+            elapsed = max(0, int(time.time() - float(state.get("external_sync_async_started_ts", 0.0) or 0.0)))
+            return {
+                "enabled": True,
+                "executed": False,
+                "running": True,
+                "elapsed_sec": elapsed,
+                "message": "브로커 체결 내역을 백그라운드에서 동기화하는 중",
+                "scheduled_window": "08:00-10:00 KST",
+            }
+
+        completed = state.get("external_sync_async_result")
+        if isinstance(completed, dict):
+            state["external_sync_async_result"] = None
+            state["external_sync_async_thread"] = None
+            return completed
+
+        def run_sync_job():
+            try:
+                state["external_sync_async_result"] = self.run_due_external_cycle_sync(force=force)
+            except Exception as exc:
+                state["external_sync_async_result"] = {
+                    "enabled": True,
+                    "executed": False,
+                    "status": "error",
+                    "message": str(exc),
+                    "scheduled_window": "08:00-10:00 KST",
+                }
+
+        state["external_sync_async_started_ts"] = time.time()
+        state["external_sync_async_result"] = None
+        thread = threading.Thread(
+            target=run_sync_job,
+            daemon=True,
+            name="trading-external-sync-worker",
+        )
+        state["external_sync_async_thread"] = thread
+        thread.start()
+        return {
+            "enabled": True,
+            "executed": False,
+            "running": True,
+            "elapsed_sec": 0,
+            "message": "브로커 체결 내역을 백그라운드에서 동기화하는 중",
+            "scheduled_window": "08:00-10:00 KST",
+        }
+
+    def _poll_or_start_daytrade_auto(self, state, market="KS"):
+        """Keep candidate discovery/training away from the exit heartbeat."""
+        market_key = "us" if str(market or "KS").upper() == "US" else "ks"
+        thread_key = f"{market_key}_auto_async_thread"
+        result_key = f"{market_key}_auto_async_result"
+        started_key = f"{market_key}_auto_async_started_ts"
+        thread = state.get(thread_key)
+        if thread is not None and thread.is_alive():
+            elapsed = max(0, int(time.time() - float(state.get(started_key, 0.0) or 0.0)))
+            return {
+                "executed": False,
+                "running": True,
+                "elapsed_sec": elapsed,
+                "message": f"{'미장' if market_key == 'us' else '국장'} 후보 탐색을 백그라운드에서 실행 중",
+            }
+
+        completed = state.get(result_key)
+        if isinstance(completed, dict):
+            state[result_key] = None
+            state[thread_key] = None
+            return completed
+
+        def run_auto_job():
+            try:
+                state[result_key] = self._run_daytrade_auto_once(market=market_key.upper())
+            except Exception as exc:
+                state[result_key] = {
+                    "executed": False,
+                    "status": "error",
+                    "message": str(exc),
+                }
+
+        state[started_key] = time.time()
+        state[result_key] = None
+        thread = threading.Thread(
+            target=run_auto_job,
+            daemon=True,
+            name=f"trading-{market_key}-auto-worker",
+        )
+        state[thread_key] = thread
+        thread.start()
+        return {
+            "executed": False,
+            "running": True,
+            "elapsed_sec": 0,
+            "message": f"{'미장' if market_key == 'us' else '국장'} 후보 탐색을 백그라운드에서 시작",
+        }
 
     def _us_auto_enabled(self):
         if DAYTRADE_HARD_LOCKED:
@@ -857,8 +1239,13 @@ class Struct:
         return True
 
     def _daytrade_feature_enabled(self):
+        uid = self._current_user_id()
+        if not uid or not self._current_user_is_admin(uid):
+            return False
         if DAYTRADE_HARD_LOCKED:
             return False
+        if PAPER_DAYTRADE_FULL_ACCESS:
+            return True
         return str(self.get_config("daytrade_feature_enabled", "false") or "false").lower() in ("1", "true", "yes", "y", "on")
 
     def _kr_exit_watch_effective_enabled(self):
@@ -1257,6 +1644,18 @@ class Struct:
             return {"enabled": False, "executed": False, "message": "무한매수 매매 OFF"}
         if loc_enabled is False:
             return {"enabled": False, "executed": False, "message": "LOC 자동 예약 비활성"}
+        if self.get_config('kis_reservation_pending', ''):
+            state = self._worker_state()
+            if time.time() - state.get('pending_inspected_at', 0) >= 300:
+                state['pending_inspected_at'] = time.time()
+                try:
+                    state['pending_inspection'] = self.broker_api.inspect_pending_reservation()
+                except Exception as exc:
+                    state['pending_inspection'] = {'status': 'query_failed', 'message': '접수 여부 자동 조회 실패: ' + str(exc)[:160]}
+            return {"enabled": True, "executed": False, "waiting": True,
+                    "blocked": True, "status": "reconciliation_required",
+                    "message": state.get('pending_inspection', {}).get('message', '예약·주문·체결 자동 대조 대기'),
+                    "schedule_window": schedule_window}
         if market_day.weekday() >= 5:
             return {"enabled": True, "executed": False, "waiting": True, "message": "주말이라 LOC 자동 예약 대기 중입니다.", "scheduled_at": scheduled_at, "schedule_window": schedule_window}
         try:
@@ -1793,6 +2192,18 @@ class Struct:
                 firegate_last_sync_ts = float(state.get("last_firegate_sync_ts", 0.0) or 0.0)
                 now_ts = time.time()
                 now_kst = _kst_now()
+                # Fill history must continue after a fully sold holding disappears.
+                # Keep slow gateway reads off the exit-watch thread.
+                reconcile_thread = state.get("reconcile_thread")
+                if (reconcile_thread is None or not reconcile_thread.is_alive()) and now_ts - float(state.get("last_reconcile_ts", 0)) >= 60:
+                    state["last_reconcile_ts"] = now_ts
+                    def reconcile_history():
+                        try:
+                            self.daytrade_engine.reconcile_order_history(max_dates=2)
+                        except Exception:
+                            pass
+                    state["reconcile_thread"] = threading.Thread(target=reconcile_history, daemon=True, name="stock8-fill-reconcile")
+                    state["reconcile_thread"].start()
                 maintenance_enabled = self._background_maintenance_enabled()
                 maintenance_interval_sec = self._background_maintenance_interval_sec()
                 maintenance_last_ts = float(state.get("last_background_maintenance_ts", 0.0) or 0.0)
@@ -1833,8 +2244,12 @@ class Struct:
                     run_started_at = _kst_now().strftime("%Y-%m-%d %H:%M:%S")
 
                     def publish_result():
-                        verification_state = self._loc_reservation_verification_state()
-                        state["last_run_at"] = run_started_at
+                        # Publishing heartbeat progress must stay purely local.
+                        # Reading the LOC verification store here can block on
+                        # every intermediate update and previously prevented the
+                        # exit watcher from starting at all.
+                        verification_state = state.get("loc_reservation_verification_snapshot", {}) or {}
+                        state["last_run_at"] = _kst_now().strftime("%Y-%m-%d %H:%M:%S")
                         state["last_result"] = {
                             "interval_sec": interval,
                             "last_run_at": state["last_run_at"],
@@ -1865,6 +2280,31 @@ class Struct:
                         Struct._worker_last_result = state["last_result"]
                         self._write_worker_status_snapshot(state["last_result"])
 
+                    # Risk exits are the heartbeat's first responsibility. Slow
+                    # recommendation, history, FireGate and maintenance work is
+                    # never allowed to delay an already-open position check.
+                    if exit_watch_enabled:
+                        result["exit_watch"] = {"executed": False, "running": True, "message": "국장 단타 자동청산 감시 중"}
+                        publish_result()
+                        seed = float(self.get_config("daytrade_default_seed", "5000000") or 5000000)
+                        result["exit_watch"] = self.daytrade_engine.execute_exit_watch(requested_seed=seed, market="KS")
+                        publish_result()
+
+                    if us_exit_watch_enabled:
+                        result["us_exit_watch"] = {"executed": False, "running": True, "message": "미장 단타 자동청산 감시 중"}
+                        publish_result()
+                        us_seed = float(self.get_config("daytrade_us_default_seed", self.get_config("daytrade_default_seed", "5000000")) or 5000000)
+                        result["us_exit_watch"] = self.daytrade_engine.execute_exit_watch(requested_seed=us_seed, market="US")
+                        publish_result()
+
+                    # Candidate discovery/backtests are intentionally detached
+                    # from exit monitoring; they can take minutes on cold data.
+                    if enabled:
+                        result["auto_cycle"] = self._poll_or_start_daytrade_auto(state, market="KS")
+                    if us_enabled:
+                        result["us_auto_cycle"] = self._poll_or_start_daytrade_auto(state, market="US")
+                    publish_result()
+
                     if maintenance_due:
                         result["maintenance"] = {"executed": False, "running": True, "message": "백그라운드 DB 최적화/요약 정리 중", "interval_sec": maintenance_interval_sec}
                         publish_result()
@@ -1884,49 +2324,28 @@ class Struct:
                     if loc_schedule_enabled:
                         loc_reason = "5min_reservation_verify" if loc_reservation_retry_due else "worker"
                         result["loc_automation"] = {
-                            "enabled": True,
-                            "executed": False,
-                            "running": True,
+                            **self._poll_or_start_loc_automation(
+                                state,
+                                verify=loc_reservation_retry_due,
+                                reason=loc_reason,
+                            ),
                             "verified": bool(loc_reservation_retry_due),
-                            "reason": loc_reason,
-                            "message": "LOC 예약을 FireGate 기준으로 검증/복구하는 중",
                             "schedule_window": _loc_reservation_window_label(now_kst),
                             "schedule_key": _loc_schedule_key(now_kst),
                             "verification_version": _LOC_RESERVATION_VERIFY_VERSION,
                         }
-                        publish_result()
-                        result["loc_automation"] = self.run_due_loc_automation(verify=loc_reservation_retry_due, reason=loc_reason)
                         if loc_reservation_retry_due:
                             state["last_loc_reservation_check_bucket"] = loc_reservation_bucket
                             state["last_loc_reservation_check_at"] = _kst_now().strftime("%Y-%m-%d %H:%M:%S")
                     publish_result()
 
-                    if external_cycle_sync_due:
-                        result["external_cycle_sync"] = {"executed": False, "running": True, "message": "브로커 체결 내역을 사이클에 반영하는 중", "scheduled_window": "08:00-10:00 KST"}
+                    if (
+                        external_cycle_sync_due
+                        or state.get("external_sync_async_thread") is not None
+                        or isinstance(state.get("external_sync_async_result"), dict)
+                    ):
+                        result["external_cycle_sync"] = self._poll_or_start_external_cycle_sync(state)
                         publish_result()
-                        result["external_cycle_sync"] = self.run_due_external_cycle_sync()
-                        publish_result()
-
-                    if us_enabled:
-                        result["us_auto_cycle"] = {"executed": False, "running": True, "message": "미장 단타 자동순환 점검 중"}
-                        publish_result()
-                        result["us_auto_cycle"] = self._run_daytrade_auto_once(market="US")
-                    if us_exit_watch_enabled:
-                        result["us_exit_watch"] = {"executed": False, "running": True, "message": "미장 단타 자동청산 감시 중"}
-                        publish_result()
-                        us_seed = float(self.get_config("daytrade_us_default_seed", self.get_config("daytrade_default_seed", "5000000")) or 5000000)
-                        result["us_exit_watch"] = self.daytrade_engine.execute_exit_watch(requested_seed=us_seed, market="US")
-                    publish_result()
-
-                    if enabled:
-                        result["auto_cycle"] = {"executed": False, "running": True, "message": "국장 단타 자동순환 점검 중"}
-                        publish_result()
-                        result["auto_cycle"] = self._run_daytrade_auto_once(market="KS")
-                    if exit_watch_enabled:
-                        result["exit_watch"] = {"executed": False, "running": True, "message": "국장 단타 자동청산 감시 중"}
-                        publish_result()
-                        seed = float(self.get_config("daytrade_default_seed", "5000000") or 5000000)
-                        result["exit_watch"] = self.daytrade_engine.execute_exit_watch(requested_seed=seed, market="KS")
                     last_run_ts = time.time()
                     Struct._worker_force_run = False
                     state["force_run"] = False
@@ -1964,6 +2383,19 @@ class Struct:
 
     def worker_status(self):
         self._ensure_background_worker()
+        if not PAPER_MODE:
+            policy = self.order_policy.status()
+            registry = getattr(_sys, '_stock8_live_policy_workers', {})
+            worker = registry.get('thread')
+            alive = bool(worker and worker.is_alive())
+            checks = [item.get('last_check', '') for item in policy.get('workers', {}).values()]
+            return {'started': alive, 'alive': alive, 'interval_sec': 15,
+                    'enabled': policy['daytrade_ks'], 'us_enabled': policy['daytrade_us'],
+                    'exit_watch_enabled': policy['daytrade_ks'], 'us_exit_watch_enabled': policy['daytrade_us'],
+                    'loc_schedule_enabled': policy['infinite_buy'],
+                    'daytrade_feature_enabled': policy['daytrade'], 'daytrade_hard_locked': DAYTRADE_HARD_LOCKED,
+                    'last_run_at': max(checks, default=''), 'result': policy.get('workers', {}),
+                    'error': registry.get('error', '')}
         state = self._worker_state()
         verification_state = self._loc_reservation_verification_state()
         worker = state.get("thread")
@@ -2135,6 +2567,14 @@ class Struct:
         return wiz.model(f"portal/trading/{name}")
 
     @property
+    def order_policy(self):
+        return wiz.model('portal/trading/order_policy')(self)
+
+    @property
+    def daytrade_broker(self):
+        return self.order_policy.bind(self.kis_api, 'daytrade')
+
+    @property
     def kis_api(self):
         """한국투자증권 API Sub-Struct"""
         if self._kis_api_obj is None:
@@ -2150,6 +2590,8 @@ class Struct:
 
     @property
     def broker_provider(self):
+        if PAPER_MODE:
+            return "kis"
         provider = str(self.get_config("broker_provider", "kis") or "kis").strip().lower()
         if provider not in ("kis", "toss"):
             provider = "kis"

@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 
 _TIME = wiz.model("portal/trading/kst")
+_TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_PAPER_MODE = _TRADING_MODE == "PAPER"
 try:
     _SESSION_MODEL = wiz.model("portal/season/session")
 except Exception:
@@ -43,17 +45,18 @@ _LOC_RESERVATION_END_STANDARD_HHMM = 2320
 _LOC_RESERVATION_END_SUMMER_HHMM = 2220
 _STRUCT_CACHE = {"obj": None, "error": None, "error_at": 0.0}
 _STRUCT_ERROR_TTL_SEC = 5.0
-_KIS_STATUS_CACHE = {"checked_at": 0.0, "result": None, "last_success_at": 0.0}
+_DASHBOARD_SHARED = _sys.__dict__.setdefault('_stock8_dashboard_shared_v1', {})
+_KIS_STATUS_CACHE = _DASHBOARD_SHARED.setdefault('kis_status', {})
 _KIS_STATUS_SUCCESS_TTL_SEC = 20.0
 _KIS_STATUS_FAILURE_TTL_SEC = 3.0
 _KIS_STICKY_SUCCESS_GRACE_SEC = 180.0
-_OVERVIEW_CACHE = {}
-_TRADE_PREVIEW_CACHE = {}
-_PROFIT_SUMMARY_CACHE = {}
-_US_LIVE_PRICE_CACHE = {}
+_OVERVIEW_CACHE = _DASHBOARD_SHARED.setdefault('overview', {})
+_TRADE_PREVIEW_CACHE = _DASHBOARD_SHARED.setdefault('preview', {})
+_PROFIT_SUMMARY_CACHE = _DASHBOARD_SHARED.setdefault('profit', {})
+_US_LIVE_PRICE_CACHE = _DASHBOARD_SHARED.setdefault('us_price', {})
 _DUE_AUTOMATION_LAST_BUCKET = ""
-_CACHE_LOCK = threading.Lock()
-_SINGLEFLIGHT_EVENTS = {}
+_CACHE_LOCK = _DASHBOARD_SHARED.setdefault('lock', threading.Lock())
+_SINGLEFLIGHT_EVENTS = _DASHBOARD_SHARED.setdefault('singleflight', {})
 _OVERVIEW_TTL_SEC = 30.0
 _TRADE_PREVIEW_TTL_SEC = 12.0
 _PROFIT_SUMMARY_TTL_SEC = 30.0
@@ -169,6 +172,13 @@ def _dashboard_cache_scope():
     return f"user:{user_id}" if user_id else "anon"
 
 
+def _connection_message(value, fallback="KIS 계좌 연결 상태를 확인해주세요."):
+    message = str(value or "").strip()
+    if not message or "season.core.exception.response" in message.lower():
+        return fallback
+    return message
+
+
 def _broker_setup_state(trading, require_connection=False):
     user_id = _session_user_id()
     if not user_id:
@@ -182,7 +192,7 @@ def _broker_setup_state(trading, require_connection=False):
         }
 
     try:
-        provider = str(trading.get_config("broker_provider", "kis") or "kis").strip().lower()
+        provider = "kis" if _PAPER_MODE else str(trading.get_config("broker_provider", "kis") or "kis").strip().lower()
     except Exception:
         provider = "kis"
     if provider not in ("kis", "toss"):
@@ -195,11 +205,12 @@ def _broker_setup_state(trading, require_connection=False):
         if str(trading.get_config("toss_client_secret", "") or "").strip() == "":
             missing.append("토스증권 클라이언트 비밀키")
     else:
-        if str(trading.get_config("kis_app_key", "") or "").strip() == "":
+        kis_prefix = "kis_paper" if _PAPER_MODE else "kis_live"
+        if str(trading.get_config(f"{kis_prefix}_app_key", "") or "").strip() == "":
             missing.append("한국투자증권 App Key")
-        if str(trading.get_config("kis_app_secret", "") or "").strip() == "":
+        if str(trading.get_config(f"{kis_prefix}_app_secret", "") or "").strip() == "":
             missing.append("한국투자증권 App Secret")
-        if str(trading.get_config("kis_account_no", "") or "").strip() == "":
+        if str(trading.get_config(f"{kis_prefix}_account_no", "") or "").strip() == "":
             missing.append("한국투자증권 계좌번호")
 
     if missing:
@@ -214,8 +225,7 @@ def _broker_setup_state(trading, require_connection=False):
 
     if require_connection:
         status = _kis_connection_status(trading, ttl_sec=0)
-        sticky_only = status.get("sticky") is True and status.get("raw_success") is False
-        if status.get("success") is not True or sticky_only:
+        if status.get("success") is not True:
             return {
                 "allowed": False,
                 "user_id": user_id,
@@ -223,7 +233,7 @@ def _broker_setup_state(trading, require_connection=False):
                 "configured": True,
                 "connected": False,
                 "message": "증권사 API 연결이 확인되지 않아 개인정보 보호를 위해 대시보드 자산/수익/보유내역을 표시하지 않습니다. 설정에서 연결 테스트를 완료해주세요.",
-                "connection_message": str(status.get("message", "") or ""),
+                "connection_message": _connection_message(status.get("message", "")),
             }
 
     return {
@@ -238,6 +248,8 @@ def _broker_setup_state(trading, require_connection=False):
 
 def _require_dashboard_access(require_connection=True):
     trading = _require_trading()
+    if _PAPER_MODE:
+        require_connection = False
     setup_state = _broker_setup_state(trading, require_connection=require_connection)
     if setup_state.get("allowed") is not True:
         message = setup_state.get("message", "")
@@ -387,6 +399,8 @@ def _filter_rows_by_symbols(rows, symbols):
 
 
 def _sync_external_cycle_trades_if_due(trading, force=False, symbol_filter=""):
+    if not _PAPER_MODE:
+        return {'status': 'deferred', 'synced_count': 0, 'message': '체결 동기화는 서버 워커에서 처리합니다.'}
     key = f"_dashboard_external_cycle_sync_ts:{str(symbol_filter or '').upper()}"
     bucket_key = f"_dashboard_external_cycle_sync_bucket:{str(symbol_filter or '').upper()}"
     now_ts = time.monotonic()
@@ -817,6 +831,41 @@ def _apply_live_us_prices_to_holdings(trading, holdings, refresh=False):
     return updated
 
 
+def _reconcile_broker_assets(domestic, present):
+    """Reconcile cash-account snapshots without FX estimates or duplicate KRW cash.
+
+    Only attest the checked cash-account identities. Loans/unsupported schemas
+    remain unverified rather than silently applying a guessed balance formula.
+    """
+    d = ((domestic or {}).get("raw", {}) or {}).get("output2", {})
+    d = d[0] if isinstance(d, list) and d else d
+    p = ((present or {}).get("raw", {}) or {}).get("output3", {})
+    required_d = ("nass_amt", "dnca_tot_amt", "prvs_rcdl_excc_amt", "evlu_amt_smtl_amt", "tot_loan_amt")
+    required_p = ("tot_asst_amt", "tot_dncl_amt", "evlu_amt_smtl_amt", "ustl_sll_amt_smtl", "ustl_buy_amt_smtl", "tot_loan_amt")
+    fail = {"verified": False, "total": None, "source": "unverified"}
+    if not isinstance(d, dict) or not isinstance(p, dict):
+        return fail
+    try:
+        import math
+        dv = {k: float(str(d[k]).replace(",", "")) for k in required_d}
+        pv = {k: float(str(p[k]).replace(",", "")) for k in required_p}
+        if not all(math.isfinite(v) for v in list(dv.values()) + list(pv.values())):
+            return fail
+    except (KeyError, ValueError, TypeError):
+        return fail
+    if dv['tot_loan_amt'] != 0 or pv['tot_loan_amt'] != 0:
+        return fail
+    if abs(dv['dnca_tot_amt'] - pv['tot_dncl_amt']) > 1:
+        return fail
+    if abs(dv['nass_amt'] - dv['evlu_amt_smtl_amt'] - dv['prvs_rcdl_excc_amt']) > 2:
+        return fail
+    foreign_identity = pv['tot_dncl_amt'] + pv['evlu_amt_smtl_amt'] + pv['ustl_sll_amt_smtl'] - pv['ustl_buy_amt_smtl']
+    if abs(pv['tot_asst_amt'] - foreign_identity) > 2:
+        return fail
+    return {"verified": True, "total": round(dv['nass_amt'] + pv['tot_asst_amt'] - pv['tot_dncl_amt']),
+            "source": "KIS:nass_amt+tot_asst_amt-shared_tot_dncl_amt"}
+
+
 def _select_total_asset_krw(summary_total_asset_krw=0, present_total_asset_krw=0, direct_total_asset_krw=0, fallback_total_asset_krw=0):
     summary = _safe_float(summary_total_asset_krw, 0)
     if summary > 0:
@@ -1054,9 +1103,51 @@ def _kis_connection_status(trading, ttl_sec=None):
     scope = _dashboard_cache_scope()
     status_cache = _KIS_STATUS_CACHE.setdefault(scope, {"checked_at": 0.0, "result": None, "last_success_at": 0.0})
     try:
-        provider = str(trading.get_config("broker_provider", "kis") or "kis").lower()
+        provider = "kis" if _PAPER_MODE else str(trading.get_config("broker_provider", "kis") or "kis").lower()
     except Exception:
         provider = "kis"
+
+    # The settings page already performs the complete read-only validation
+    # chain. Dashboard refreshes must honor that credential-scoped result
+    # instead of repeating six network calls and turning a transient failure
+    # into a false disconnected state.
+    if _PAPER_MODE and provider == "kis":
+        try:
+            broker = getattr(trading, "broker_api", None) or trading.kis_api
+            verified_scope = str(trading.get_config("kis_paper_readiness_scope", "") or "")
+            current_scope = str(broker._readiness_scope() or "")
+            if verified_scope and verified_scope == current_scope:
+                result = {
+                    "success": True,
+                    "raw_success": True,
+                    "persistent": True,
+                    "broker_provider": provider,
+                    "message": "KIS READY",
+                    "verified_at": str(trading.get_config("kis_paper_readiness_verified_at", "") or ""),
+                }
+                status_cache["checked_at"] = now
+                status_cache["last_success_at"] = now
+                status_cache["result"] = dict(result)
+                return result
+            # Connection readiness and a particular balance TR response are
+            # separate states. A valid credential-scoped token means the
+            # PAPER connection is ready; transient VTS balance failures are
+            # exposed through balance_sync_ok instead of false disconnects.
+            if broker.app_key and broker.app_secret and broker.account_no and broker.has_valid_cached_token(60):
+                result = {
+                    "success": True,
+                    "raw_success": True,
+                    "persistent": True,
+                    "broker_provider": provider,
+                    "message": "KIS PAPER TOKEN READY",
+                    "verified_at": "cached_token",
+                }
+                status_cache["checked_at"] = now
+                status_cache["last_success_at"] = now
+                status_cache["result"] = dict(result)
+                return result
+        except Exception:
+            pass
     cached = status_cache.get("result")
     checked_at = float(status_cache.get("checked_at", 0.0) or 0.0)
     if isinstance(cached, dict) and str(cached.get("broker_provider", "kis") or "kis").lower() == provider:
@@ -1084,7 +1175,7 @@ def _kis_connection_status(trading, ttl_sec=None):
         }
     status_cache["checked_at"] = now
     status_cache["result"] = dict(result)
-    if result.get("success"):
+    if result.get("success") and not result.get("sticky"):
         status_cache["last_success_at"] = now
     return dict(result)
 
@@ -1123,7 +1214,7 @@ def _safe_active_cycles(trading):
         return []
 
 
-def _attach_loc_buy_status(trading, cycles, with_summary=False):
+def _attach_loc_buy_status(trading, cycles, with_summary=False, live_refresh=True):
     cycles = [dict(cycle or {}) for cycle in (cycles or [])]
     summary = {
         "total": len(cycles),
@@ -1144,6 +1235,26 @@ def _attach_loc_buy_status(trading, cycles, with_summary=False):
         summary["loc_buy_last_date"] = str(trading.get_config("loc_buy_auto_schedule_last_date", "") or "")
     except Exception:
         pass
+    if live_refresh is False:
+        # Reservation queries and per-cycle price probes belong to the worker.
+        # Keep the dashboard's first paint local-only.
+        for cycle in cycles:
+            status = str(cycle.get("status", "") or "").upper()
+            if status == "ACTIVE":
+                summary["active"] += 1
+            elif status == "HOLDING":
+                summary["holding"] += 1
+            elif status == "PAUSED":
+                summary["paused"] += 1
+            elif status == "PENDING_EXTENSION":
+                summary["pending_extension"] += 1
+            cycle.setdefault("loc_buy_status", "deferred")
+            cycle.setdefault("loc_buy_status_label", "백그라운드 확인")
+            cycle.setdefault("loc_buy_message", "자동 워커에서 예약 상태를 확인합니다.")
+            cycle.setdefault("loc_buy_order_no", "")
+            cycle.setdefault("loc_buy_qty", 0)
+            cycle.setdefault("loc_buy_price", 0)
+        return (cycles, summary) if with_summary else cycles
     now_kst = _TIME.now()
     schedule_key = (now_kst - datetime.timedelta(days=1)).strftime("%Y-%m-%d") if now_kst.hour < 7 else now_kst.strftime("%Y-%m-%d")
     loc_window_state = _loc_reservation_window_state(now_kst)
@@ -1381,6 +1492,7 @@ def _safe_watchlist_info(trading):
 
 
 def _empty_overview_payload(message=""):
+    message = _connection_message(message, "KIS 계좌 연결 상태를 확인해주세요.")
     return {
         "setup_required": True,
         "privacy_locked": True,
@@ -1422,6 +1534,7 @@ def _empty_overview_payload(message=""):
         },
         "daytrade_runtime": {
             "started": False,
+            "daytrade_feature_enabled": False,
             "us_enabled": False,
             "last_run_at": "",
             "us_auto_cycle_executed": False,
@@ -1430,7 +1543,18 @@ def _empty_overview_payload(message=""):
             "us_exit_watch_message": "",
         },
         "api_connected": False,
-        "is_mock": False,
+        "is_mock": _PAPER_MODE,
+        "paper_ready": False,
+        "connection_message": message,
+        "readiness_verified_at": "",
+        "automation_state": {
+            "code": "blocked",
+            "label": "연결 확인 필요",
+            "message": str(message or "KIS 계좌 연결을 먼저 확인해주세요."),
+            "enabled": False,
+            "active_cycles": 0,
+            "active_targets": 0,
+        },
         "holdings_source": "fallback",
         "cycles": [],
         "holdings": [],
@@ -1668,6 +1792,7 @@ def _build_overview_payload(force_refresh=False):
     fire_gate_bridge, authoritative_symbols = _firegate_overview_scope(trading, force_refresh=force_refresh)
 
     api_connected = False
+    connection_result = {}
     usd_buying_power = 0
     usd_sync_ok = False
     usd_sync_message = ""
@@ -1676,6 +1801,8 @@ def _build_overview_payload(force_refresh=False):
     krw_buying_power_usd = 0
     exchange_rate = 0
     total_asset_krw = 0
+    present = {}
+    domestic_balance = {}
     present_portfolio_eval_krw = 0
     unsettled_buy_krw = 0
     unsettled_sell_krw = 0
@@ -1688,6 +1815,7 @@ def _build_overview_payload(force_refresh=False):
     krw_orderable_gap = 0
     holdings_data = []
     domestic_holdings_data = []
+    domestic_withdrawable_krw = 0
     portfolio_value = 0
     overseas_portfolio_value_source = "none"
     domestic_portfolio_value_krw = 0
@@ -1698,23 +1826,28 @@ def _build_overview_payload(force_refresh=False):
     try:
         kis = getattr(trading, "broker_api", None) or trading.kis_api
         test_result = _kis_connection_status(trading)
+        connection_result = dict(test_result or {})
         api_connected = test_result.get("success", False)
-        if api_connected is not True:
+        if api_connected is not True and not _PAPER_MODE:
             message = "증권사 API 연결이 확인되지 않아 개인정보 보호를 위해 대시보드 자산/수익/보유내역을 표시하지 않습니다. 설정에서 연결 테스트를 완료해주세요."
             detail = str(test_result.get("message", "") or "").strip()
             if detail:
                 message = f"{message} ({detail})"
-            payload = _empty_overview_payload(message)
-            payload["broker_provider"] = setup_state.get("broker_provider", "")
-            payload["broker_configured"] = True
-            payload["broker_connected"] = False
-            return payload
+            # A failed read is not a confirmed empty account. The overview
+            # boundary preserves a scoped snapshot or returns a retryable error.
+            raise RuntimeError(message)
 
         if api_connected:
             balance = None
+            # Dashboard reads must fail fast. Worker/order paths keep their
+            # own retry policy, while this UI path performs at most one short
+            # attempt per endpoint and falls back to cached/local state.
+            def _dashboard_kis_call(method_name, *args, **kwargs):
+                with kis.request_options(timeout=3.0 if force_refresh else 2.6, retries=0):
+                    return getattr(kis, method_name)(*args, **kwargs)
 
             try:
-                present = kis.get_present_balance()
+                present = _dashboard_kis_call("get_present_balance")
                 meta = present.get("meta", {})
                 exchange_rate = float(present.get("usd_krw", 0))
                 krw_balance = float(present.get("withdrawable_krw", present.get("krw_balance", 0)))
@@ -1739,13 +1872,16 @@ def _build_overview_payload(force_refresh=False):
                 krw_buying_power_usd = krw_balance / exchange_rate
 
             try:
-                balance = kis.get_balance()
+                # Holdings are essential data, not an optional force-refresh probe.
+                # The overview cache bounds polling; never substitute an empty
+                # account simply because this is the initial/automatic load.
+                balance = _dashboard_kis_call("get_balance")
             except Exception as e:
                 _log("error", f"get_balance failed: {e}")
                 balance = None
 
             try:
-                domestic_balance = kis.get_domestic_balance()
+                domestic_balance = _dashboard_kis_call("get_domestic_balance")
                 domestic_holdings_data = domestic_balance.get("holdings", []) or []
                 domestic_withdrawable_krw = float(domestic_balance.get("withdrawable_krw", 0) or 0)
                 if domestic_withdrawable_krw > krw_balance:
@@ -1768,7 +1904,7 @@ def _build_overview_payload(force_refresh=False):
                 if isinstance(output2, list):
                     output2 = output2[0] if len(output2) > 0 else {}
                 if isinstance(output2, dict):
-                    for key in ["scts_evlu_amt", "evlu_amt_smtl_amt"]:
+                    for key in ["evlu_amt_smtl_amt"]:
                         try:
                             amt = float(str(output2.get(key, 0) or 0).replace(",", ""))
                         except Exception:
@@ -1776,7 +1912,7 @@ def _build_overview_payload(force_refresh=False):
                         if amt > domestic_summary_eval_krw:
                             domestic_summary_eval_krw = amt
                     if domestic_portfolio_value_krw <= 0:
-                        for key in ["scts_evlu_amt", "tot_evlu_amt", "tot_evlu_pfls_amt", "evlu_amt_smtl_amt"]:
+                        for key in ["evlu_amt_smtl_amt"]:
                             try:
                                 amt = float(str(output2.get(key, 0) or 0).replace(",", ""))
                             except Exception:
@@ -1799,7 +1935,11 @@ def _build_overview_payload(force_refresh=False):
                 order_symbol = "005930"
                 if len(domestic_holdings_data) > 0:
                     order_symbol = str((domestic_holdings_data[0] or {}).get("symbol", order_symbol) or order_symbol)
-                domestic_power = kis.get_domestic_buying_power_info(symbol=order_symbol, order_type="MARKET") or {}
+                domestic_power = (_dashboard_kis_call("get_domestic_buying_power_info", symbol=order_symbol, order_type="MARKET") or {}) if force_refresh else {
+                    "ok": domestic_withdrawable_krw > 0,
+                    "amount": domestic_withdrawable_krw,
+                    "source": "domestic_balance.withdrawable_krw",
+                }
                 if domestic_power.get("ok") is True:
                     krw_orderable_cash = float(domestic_power.get("amount", domestic_power.get("executable_amount", 0)) or 0)
                     krw_orderable_source = str(domestic_power.get("source", "") or "")
@@ -1843,7 +1983,10 @@ def _build_overview_payload(force_refresh=False):
                     balance_sync_message = "원화 잔액 API 동기화 실패: 보유자산 조회만 성공했습니다"
 
             try:
-                usd_info = kis.get_buying_power_info()
+                # Buying-power probes duplicate balance calls and are the
+                # slowest VTS endpoints. Initial loads derive a safe display
+                # value; explicit refresh still performs the authoritative TR.
+                usd_info = _dashboard_kis_call("get_buying_power_info") if force_refresh else {"ok": False, "amount": usd_cash_balance, "source": "balance.cash_balance", "message": "빠른 로딩 모드"}
                 usd_orderable = float(usd_info.get("amount", 0) or 0)
                 usd_sync_ok = usd_info.get("ok") is True
                 usd_sync_message = usd_info.get("message", "")
@@ -1859,11 +2002,14 @@ def _build_overview_payload(force_refresh=False):
                 if usd_sync_source == "":
                     usd_sync_source = "balance.cash_balance"
     except Exception:
-        pass
+        # Let the scoped overview fallback handle failures; never publish zero
+        # balances and a disconnected flag as a successful fresh response.
+        raise
 
     engine_status = _safe_engine_status(trading)
     daytrade_runtime = {
         "started": False,
+        "daytrade_feature_enabled": False,
         "us_enabled": False,
         "last_run_at": "",
         "us_auto_cycle_executed": False,
@@ -1878,6 +2024,7 @@ def _build_overview_payload(force_refresh=False):
         us_exit = last_result.get("us_exit_watch", {}) or {}
         daytrade_runtime = {
             "started": bool(worker.get("started", False)),
+            "daytrade_feature_enabled": bool(getattr(trading, "_daytrade_feature_enabled", lambda: False)()),
             "us_enabled": bool(worker.get("us_enabled", False)),
             "last_run_at": str(worker.get("last_run_at", "") or ""),
             "us_auto_cycle_executed": bool(us_auto.get("executed", False)),
@@ -1888,13 +2035,18 @@ def _build_overview_payload(force_refresh=False):
     except Exception:
         pass
 
-    external_cycle_sync = _sync_external_cycle_trades_if_due(trading, force=force_refresh)
+    external_cycle_sync = _sync_external_cycle_trades_if_due(trading, force=True) if force_refresh else {
+        "executed": False,
+        "deferred": True,
+        "message": "백그라운드 워커에서 동기화",
+    }
     cycles = _safe_active_cycles(trading)
     if len(authoritative_symbols) > 0:
         cycles = _filter_rows_by_symbols(cycles, authoritative_symbols)
         engine_status = _scoped_engine_status(engine_status, cycles)
-    cycles = _refresh_cycle_prices_for_display(trading, cycles, refresh=force_refresh)
-    cycles, infinite_buy_summary = _attach_loc_buy_status(trading, cycles, with_summary=True)
+    if force_refresh:
+        cycles = _refresh_cycle_prices_for_display(trading, cycles, refresh=True)
+    cycles, infinite_buy_summary = _attach_loc_buy_status(trading, cycles, with_summary=True, live_refresh=force_refresh)
 
     holdings = []
     holdings_source = "broker"
@@ -1971,7 +2123,6 @@ def _build_overview_payload(force_refresh=False):
     direct_cash_asset_krw = round(krw_balance + usd_cash_balance_krw, 0)
     direct_total_asset = round(direct_cash_asset_krw + portfolio_value_krw, 0)
     orderable_plus_portfolio = round((krw_orderable_cash if krw_orderable_cash > 0 else krw_balance) + portfolio_value_krw, 0)
-    present_plus_domestic = round(total_asset_krw + domestic_portfolio_value_krw, 0) if total_asset_krw > 0 and domestic_portfolio_value_krw > 0 else 0
     total_asset = direct_total_asset
     cash_asset_krw = direct_cash_asset_krw
     total_asset_source = "reconciled(direct_cash+portfolio)"
@@ -1982,11 +2133,6 @@ def _build_overview_payload(force_refresh=False):
         total_asset = combined_asset if overseas_portfolio_value_krw > 0 else round(domestic_summary_total_asset_krw, 0)
         cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
         total_asset_source = "domestic_balance.total_asset_krw+live_us_eval-unsettled_us_buy"
-        cash_asset_source = "derived(total_asset-portfolio)"
-    elif present_plus_domestic > 0:
-        total_asset = present_plus_domestic
-        cash_asset_krw = round(max(0.0, total_asset - portfolio_value_krw), 0)
-        total_asset_source = "present_balance.total_asset_krw+domestic_eval"
         cash_asset_source = "derived(total_asset-portfolio)"
     elif present_total_asset_rounded > 0 and portfolio_value_krw <= present_total_asset_rounded:
         total_asset = present_total_asset_rounded
@@ -2009,6 +2155,12 @@ def _build_overview_payload(force_refresh=False):
                 cash_asset_source = "derived(daytrade_engine.total_asset_krw-portfolio)"
         except Exception:
             pass
+    asset_reconciliation = _reconcile_broker_assets(domestic_balance, present)
+    if asset_reconciliation['verified']:
+        total_asset = asset_reconciliation['total']
+        total_asset_source = asset_reconciliation['source']
+        cash_asset_krw = round(total_asset - portfolio_value_krw, 0)
+        cash_asset_source = 'derived(reconciled_broker_assets-portfolio)'
     recent_logs = _safe_recent_logs(trading)
     for log in recent_logs:
         if log.get("created"):
@@ -2026,10 +2178,27 @@ def _build_overview_payload(force_refresh=False):
             "cycle_mode": w.get("cycle_mode", "auto"),
         })
 
+    active_cycle_count = sum(1 for cycle in cycles if str(cycle.get("status", "") or "").upper() == "ACTIVE")
+    active_target_count = len(watchlist_info)
+    auto_trade_enabled = bool(engine_status.get("auto_trade", False))
+    if not api_connected and not _PAPER_MODE:
+        automation_state = {"code": "blocked", "label": "연결 확인 필요", "message": "KIS 계좌 연결을 먼저 확인해주세요."}
+    elif not auto_trade_enabled:
+        automation_state = {"code": "off", "label": "자동매매 OFF", "message": "대시보드에서 자동매매를 켜면 현재 계정의 주문 감시를 시작합니다."}
+    elif active_cycle_count <= 0:
+        automation_state = {"code": "waiting", "label": "대기 중", "message": "자동매매는 켜졌지만 활성 무한매수 사이클이 없습니다."}
+    else:
+        automation_state = {"code": "running", "label": "자동 운용 중", "message": f"활성 사이클 {active_cycle_count}개를 감시하고 있습니다."}
+    automation_state.update({
+        "enabled": auto_trade_enabled,
+        "active_cycles": active_cycle_count,
+        "active_targets": active_target_count,
+    })
+
     daytrade_positions = []
     daytrade_position_summary = {"count": 0, "eval_amount_krw": 0.0, "cost_amount_krw": 0.0, "pnl_krw": 0.0}
     try:
-        positions = trading.daytrade_engine.active_positions(sync_broker=True) or []
+        positions = trading.daytrade_engine.active_positions(sync_broker=bool(force_refresh)) or []
     except Exception:
         try:
             positions = trading.daytrade_engine.active_positions_from_state() or []
@@ -2106,6 +2275,7 @@ def _build_overview_payload(force_refresh=False):
         "portfolio_value": round(portfolio_value_krw, 0),
         "total_asset": round(total_asset, 0),
         "total_asset_source": total_asset_source,
+        "total_asset_verified": asset_reconciliation['verified'],
         "portfolio_value_domestic_krw": round(domestic_portfolio_value_krw, 0),
         "portfolio_value_overseas_krw": round(overseas_portfolio_value_krw, 0),
         "portfolio_value_overseas_source": overseas_portfolio_value_source,
@@ -2121,7 +2291,11 @@ def _build_overview_payload(force_refresh=False):
         "engine_status": engine_status,
         "daytrade_runtime": daytrade_runtime,
         "api_connected": api_connected,
-        "is_mock": False,
+        "is_mock": _PAPER_MODE,
+        "paper_ready": bool(api_connected or setup_state.get("configured", False)) if _PAPER_MODE else (connection_result.get("persistent") is True or api_connected),
+        "connection_message": _connection_message(connection_result.get("message", ""), "KIS READY" if api_connected else "KIS 계좌 연결 상태를 확인해주세요."),
+        "readiness_verified_at": str(connection_result.get("verified_at", "") or ""),
+        "automation_state": automation_state,
         "holdings_source": holdings_source,
         "cycles": cycles,
         "infinite_buy_cycles": cycles,
@@ -2147,7 +2321,9 @@ def overview():
     cache_key = _dashboard_cache_scope()
     try:
         trading_for_access = _require_trading()
-        setup_state = _broker_setup_state(trading_for_access, require_connection=True)
+        # PAPER should remain operable during a transient token/balance failure.
+        # Credentials and mock-only TR IDs are still checked at actual order time.
+        setup_state = _broker_setup_state(trading_for_access, require_connection=False)
         if setup_state.get("allowed") is not True:
             message = setup_state.get("message", "")
             detail = str(setup_state.get("connection_message", "") or "").strip()
@@ -2186,19 +2362,16 @@ def overview():
                 fallback_payload["degraded"] = True
                 fallback_payload["degraded_message"] = str(e)
                 return fallback_payload
-            payload = _empty_overview_payload(message=str(e))
-            payload["degraded"] = True
-            payload["degraded_message"] = str(e)
-            return payload
+            wiz.response.status(503, message="계좌 조회 지연 — 마지막 확인값을 유지합니다. 잠시 후 다시 조회해주세요.")
 
-    payload, is_leader = _singleflight(f"dashboard:overview:{cache_key}", _builder, timeout_sec=45.0)
+    payload, is_leader = _singleflight(f"dashboard:overview:{cache_key}", _builder, timeout_sec=8.0)
     if is_leader is False:
         cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, cache_key, _OVERVIEW_TTL_SEC)
         if isinstance(cached_payload, dict):
             cached_payload["cached"] = True
             cached_payload["cache_age_sec"] = cache_age
             wiz.response.status(200, **cached_payload)
-        payload = _builder()
+        return wiz.response.status(503, message='계좌 조회가 이미 진행 중입니다. 잠시 후 다시 확인해주세요.')
     wiz.response.status(200, **payload)
 
 def cycle_detail():
@@ -2371,9 +2544,58 @@ def _generate_mock_profit_summary(period):
     }
 
 
+def _profit_store(trading):
+    scope = ':'.join((_TRADING_MODE, _session_user_id(), trading.live_data_scope))
+    return wiz.model('portal/trading/profit_cache')(trading.db('trading_config'), scope), scope
+
+
+def _fast_profit_summary(trading, period, date_from='', date_to='', force_refresh=False):
+    store, scope = _profit_store(trading)
+    name = json.dumps([period, date_from, date_to])
+    entry = store.read('view:' + name)
+    age = time.time() - entry['at'] if entry else None
+    needs_refresh = force_refresh or entry is None or age >= 30
+    jobs = _DASHBOARD_SHARED.setdefault('profit_jobs', {})
+    if needs_refresh:
+        # One refresh per account; UI requests never wait for this job.
+        import flask
+        with _CACHE_LOCK:
+            job = jobs.get(scope, {})
+            if not job.get('running') and time.monotonic() - job.get('retry_at', 0) >= 5:
+                job = {'running': True, 'error': '', 'retry_at': time.monotonic()}
+                jobs[scope] = job
+
+                @flask.copy_current_request_context
+                def refresh():
+                    try:
+                        result = _profit_summary_data(period, date_from=date_from, date_to=date_to)
+                        if result.get('setup_required') or result.get('aggregation_complete') is not True:
+                            raise RuntimeError('체결 대조 미완료 — 마지막 확정 집계를 유지합니다.')
+                        store.write('view:' + name, result)
+                    except Exception as exc:
+                        job['error'] = _connection_message(exc)
+                    finally:
+                        job['retry_at'] = time.monotonic()
+                        job['running'] = False
+
+                threading.Thread(target=refresh, daemon=True, name='profit-read-model').start()
+    job = jobs.get(scope, {})
+    if entry:
+        result = entry['payload']
+        result.update(cached=True, cache_age_sec=round(age, 2), refreshing=bool(job.get('running')),
+                      stale=needs_refresh, snapshot_available=True)
+        result['message'] = job.get('error') or ('저장된 집계 표시 · 최신 체결 대조 중' if needs_refresh else '')
+        return result
+    return dict(period=period, snapshot_available=False, refreshing=bool(job.get('running')),
+                setup_required=False, privacy_locked=False,
+                message=job.get('error') or '최초 수익 집계 중 — 완료 후 자동으로 표시합니다.')
+
+
 def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     trading = _require_trading()
-    setup_state = _broker_setup_state(trading, require_connection=True)
+    # Historical realized P/L remains readable during a transient broker
+    # outage. Live valuation below reports its own connection availability.
+    setup_state = _broker_setup_state(trading, require_connection=False)
     if setup_state.get("allowed") is not True:
         message = setup_state.get("message", "")
         detail = str(setup_state.get("connection_message", "") or "").strip()
@@ -2418,6 +2640,7 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     live_total_asset_ref = 0.0
     live_unsettled_buy_krw = 0.0
     live_unsettled_sell_krw = 0.0
+    present_balance = None
     if api_connected:
         try:
             present_balance = kis.get_present_balance()
@@ -2538,19 +2761,20 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     daytrade_position_count = 0
     daytrade_daily_breakdown = {}
     ib_daily_realized_breakdown = {}
+    daytrade_summary = {}
     try:
         # ALL 기간(filter_from="")일 때 date_from=""이면 period_trade_summary가 오늘 하루만 계산함
         # → 전체 거래 내역이 조회되도록 안전한 초기 날짜 전달
         dt_date_from = filter_from.replace("-", "") if filter_from else "20250101"
         dt_date_to = filter_to.replace("-", "") if filter_to else ""
         try:
-            daytrade_summary = trading.daytrade_engine.period_trade_summary(
-                date_from=dt_date_from,
-                date_to=dt_date_to,
-                sync_broker=True,
-                broker_lookback_days=7,
-                include_valuation=api_connected and filter_to == today_str,
-            ) or {}
+            profit_store, _ = _profit_store(trading)
+            def load_partition(start, end, current):
+                return trading.daytrade_engine.period_trade_summary(
+                    date_from=start, date_to=end, sync_broker=True,
+                    broker_lookback_days=7, include_valuation=current and api_connected) or {}
+            daytrade_summary = profit_store.summary(dt_date_from, dt_date_to,
+                today_str.replace('-', ''), load_partition)
         except Exception:
             daytrade_summary = trading.daytrade_engine.period_trade_summary(
                 date_from=dt_date_from,
@@ -2618,7 +2842,7 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
     # 실계좌 현재 총자산 확보 (차트 최신점/ALL 손익 보정 공용)
     if api_connected:
         try:
-            present = kis.get_present_balance()
+            present = present_balance if isinstance(present_balance, dict) else kis.get_present_balance()
             live_exchange_rate = float(present.get("usd_krw", 0) or 0)
             live_total_asset_krw = float(present.get("total_asset_krw", 0) or 0)
             live_withdrawable_krw = float(present.get("withdrawable_krw", present.get("krw_balance", 0)) or 0)
@@ -2675,7 +2899,7 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
                 if isinstance(output2, list):
                     output2 = output2[0] if len(output2) > 0 else {}
                 if isinstance(output2, dict):
-                    for key in ["scts_evlu_amt", "tot_evlu_amt", "tot_evlu_pfls_amt", "evlu_amt_smtl_amt"]:
+                    for key in ["evlu_amt_smtl_amt"]:
                         amt = float(str(output2.get(key, 0) or 0).replace(",", ""))
                         if amt > domestic_eval_krw:
                             domestic_eval_krw = amt
@@ -2708,6 +2932,10 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
             else:
                 live_total_asset = direct_live_total_asset
                 live_asset_source = "direct(krw+domestic_eval+usd_cash+usd_eval)"
+            profit_asset_reconciliation = _reconcile_broker_assets(domestic_balance, present)
+            if profit_asset_reconciliation['verified']:
+                live_total_asset = profit_asset_reconciliation['total']
+                live_asset_source = profit_asset_reconciliation['source']
             if live_total_asset <= 0:
                 try:
                     engine_budget = trading.daytrade_engine.shared_budget_status(requested_seed=0, use_cache_only=True, market="KS") or {}
@@ -2862,6 +3090,7 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
         api_connected=api_connected,
         setup_required=False,
         privacy_locked=False,
+        aggregation_complete=bool(daytrade_summary.get('broker_sync_ok', False)),
         server_time_kst=_TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
         session_anchor_9am=session_anchor,
         exchange_rate=round(exchange_rate, 4),
@@ -2903,97 +3132,69 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
 
 def profit_summary():
     """기간별 수익 요약"""
+    read_started = time.perf_counter()
     period = wiz.request.query("period", "ALL")
     date_from = wiz.request.query("date_from", "")
     date_to = wiz.request.query("date_to", "")
     force_refresh = _truthy(wiz.request.query("force_refresh", "false"))
     cache_key = json.dumps({"scope": _dashboard_cache_scope(), "period": period, "date_from": date_from, "date_to": date_to}, sort_keys=True)
+    trading_for_access = _require_trading()
+    access_result = None
     try:
-        trading_for_access = _require_trading()
-        setup_state = _broker_setup_state(trading_for_access, require_connection=True)
+        setup_state = _broker_setup_state(trading_for_access, require_connection=False)
         if setup_state.get("allowed") is not True:
             message = setup_state.get("message", "")
             detail = str(setup_state.get("connection_message", "") or "").strip()
             if detail:
                 message = f"{message} ({detail})"
-            result = _empty_profit_summary_payload(period=period, message=message)
-            _cache_set(_PROFIT_SUMMARY_CACHE, cache_key, result)
-            wiz.response.status(200, **result)
+            access_result = _empty_profit_summary_payload(period=period, message=message)
     except Exception as e:
         _dump_error("profit_summary_access", e)
-        result = _empty_profit_summary_payload(period=period, message=str(e))
-        result["fallback"] = True
-        wiz.response.status(200, **result)
-    if force_refresh is False:
-        cached_payload, cache_age = _cache_get(_PROFIT_SUMMARY_CACHE, cache_key, _PROFIT_SUMMARY_TTL_SEC)
-        if isinstance(cached_payload, dict):
-            cached_payload["cached"] = True
-            cached_payload["cache_age_sec"] = cache_age
-            wiz.response.status(200, **cached_payload)
-    try:
-        result = _profit_summary_data(period, date_from=date_from, date_to=date_to, force_refresh=force_refresh)
-        _cache_set(_PROFIT_SUMMARY_CACHE, cache_key, result)
-    except Exception as e:
-        _dump_error("profit_summary", e)
-        result = dict(
-            period=period,
-            currency="KRW",
-            api_connected=False,
-            session_anchor_9am="",
-            exchange_rate=0,
-            realized_profit=0,
-            unrealized_profit=0,
-            total_profit=0,
-            total_invested=0,
-            total_return=0,
-            completed_cycles=0,
-            avg_cycle_return=0,
-            best_cycle_return=0,
-            worst_cycle_return=0,
-            cycle_realized_profit=0,
-            cycle_unrealized_profit=0,
-            daytrade_realized_profit=0,
-            daytrade_unrealized_profit=0,
-            daytrade_total_profit=0,
-            ib_realized_profit=0,
-            ib_unrealized_profit=0,
-            ib_realized_cycle_count=0,
-            realized_return=0,
-            unrealized_return=0,
-            base_asset=0,
-            base_asset_source="error_fallback",
-            first_snapshot_date="",
-            elapsed_days=0,
-            live_asset_source="",
-            live_total_asset=0,
-            daytrade_trade_count=0,
-            daytrade_position_count=0,
-            daily_return_avg=0,
-            daily_return_best=0,
-            daily_return_worst=0,
-            latest_daily_return_rate=0,
-            asset_change_prev_day=0,
-            snapshots=[],
-            fallback=True,
-            message=str(e),
-        )
+        access_result = _empty_profit_summary_payload(period=period, message=_connection_message(e))
+        access_result["fallback"] = True
+    # WIZ completes a response by raising ResponseException. Do not catch it
+    # as a broker error or replace the useful failure reason with internals.
+    if access_result is not None:
+        wiz.response.status(200, **access_result)
+    result = _fast_profit_summary(trading_for_access, period, date_from, date_to, force_refresh)
+    result['read_model_ms'] = round((time.perf_counter() - read_started) * 1000, 2)
     wiz.response.status(200, **result)
 
 
 def toggle_auto_trade():
     """자동매매 토글"""
-    trading = _require_dashboard_access(require_connection=True)
+    trading = _require_dashboard_access(require_connection=not _PAPER_MODE)
     current_auto = str(trading.get_config("auto_trade_enabled", "false") or "false").lower() == "true"
     current_loc = str(trading.get_config("loc_auto_schedule_enabled", "true") or "true").lower() == "true"
     new_enabled = not (current_auto and current_loc)
     new_val = "true" if new_enabled else "false"
     trading.set_config("auto_trade_enabled", new_val, description="자동매매 활성화")
     trading.set_config("loc_auto_schedule_enabled", new_val, description="무한매수 LOC 자동 예약 활성화")
-    wiz.response.status(200, auto_trade=new_enabled, loc_auto_schedule_enabled=new_enabled)
+    active_cycles = trading.engine.get_active_cycles() or []
+    active_count = sum(1 for cycle in active_cycles if str(cycle.get("status", "") or "").upper() == "ACTIVE")
+    if new_enabled and active_count <= 0:
+        message = "PAPER 자동매매를 켰습니다. 활성 무한매수 사이클이 없어 현재는 대기 상태입니다."
+        state = "waiting"
+    elif new_enabled:
+        message = f"PAPER 자동매매를 켰습니다. 활성 사이클 {active_count}개를 감시합니다."
+        state = "running"
+    else:
+        message = "PAPER 자동매매를 껐습니다. 신규 주문 감시가 중지됩니다."
+        state = "off"
+    wiz.response.status(200,
+        auto_trade=new_enabled,
+        loc_auto_schedule_enabled=new_enabled,
+        automation_state=state,
+        active_cycles=active_count,
+        message=message,
+    )
 
 def run_due_automation():
     """대시보드 폴링 시점에 서버 자동화와 같은 LOC 예약 검증 경로를 호출."""
     try:
+        if not _PAPER_MODE:
+            trading = _require_dashboard_access(require_connection=False)
+            return wiz.response.status(200, executed=False, status='worker_managed', worker=trading.worker_status())
         global _DUE_AUTOMATION_LAST_BUCKET
         trading = _require_dashboard_access(require_connection=True)
         now = _TIME.now()
@@ -3282,6 +3483,13 @@ def retry_loc_buy_reservation():
     if not symbol:
         wiz.response.status(400, message="symbol is required")
     trading = _require_trading()
+    now = _TIME.now()
+    if not _loc_reservation_window_open(now):
+        wiz.response.status(409, message=f"예약 접수 가능시간은 {_loc_reservation_window_label(now)}입니다. 현재는 재예약하지 않으며 기존 주문도 취소하지 않습니다.")
+        return
+    if trading.get_config('kis_reservation_pending', ''):
+        wiz.response.status(409, message="이전 예약의 접수 여부 확인이 필요합니다. 중복 주문 방지를 위해 재예약 및 기존 주문 취소를 보류합니다.")
+        return
     external_sync = {}
     firegate_sync = {}
     try:
@@ -3337,3 +3545,5 @@ def get_watchlist_defaults():
         target_profit=float(etf.get("target_profit", 10.0)),
         cycle_mode=etf.get("cycle_mode", "auto"),
     )
+def account_context():
+    wiz.response.status(200, wiz.model("portal/trading/account_context").context())

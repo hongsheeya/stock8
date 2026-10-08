@@ -1,0 +1,12 @@
+{
+    "id": "page.live",
+    "mode": "page",
+    "title": "/live",
+    "namespace": "live",
+    "category": "trading",
+    "viewuri": "/live",
+    "preview": "",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-live()"
+}

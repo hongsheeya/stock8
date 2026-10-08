@@ -357,6 +357,8 @@ def _select_pull_portfolios(portfolios, symbol_filter=""):
     rows = []
     seen = set()
     for item in portfolios or []:
+        if item.get("stock8Archived"):
+            continue
         symbol = _portfolio_symbol(item)
         if not symbol:
             continue
@@ -966,6 +968,7 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 for tx in existing_transactions
                 if str(tx.get("source", "")) == INFINITYSTOCK_SOURCE
             }
+            synced_trade_ids.update(str(value) for value in portfolio.get("reconciledSourceTradeIds", []) or [])
             try:
                 trades = trade_db.rows(cycle_id=cycle.get("id"), orderby="created", order="ASC", dump=1000) or []
             except Exception:
@@ -1392,6 +1395,8 @@ class FireGateBridge:
     def find_portfolio(self, symbol, include_stopped=False, source=None, source_cycle_id=None, portfolio_group=None):
         symbol = _normalize_symbol(symbol)
         for item in self.list_portfolios():
+            if item.get("stock8Archived"):
+                continue
             if _normalize_symbol(item.get("ticker")) != symbol:
                 continue
             if source is not None and str(item.get("source", "") or "") != str(source):
@@ -1427,6 +1432,18 @@ class FireGateBridge:
             source_cycle_id=source_cycle_id if source_cycle_id else None,
             portfolio_group=portfolio_group if portfolio_group and not source_cycle_id else None,
         )
+        # A migrated local cycle ID is not a new investment. Do not silently
+        # create a second managed portfolio beside an existing running one.
+        # Manual portfolios remain separate and are never adopted/overwritten.
+        if not existing and source and source_cycle_id:
+            conflicts = [row for row in self.list_portfolios()
+                         if _normalize_symbol(row.get("ticker")) == _normalize_symbol(symbol)
+                         and str(row.get("source", "") or "") == str(source)
+                         and _firegate_running(row)]
+            if conflicts:
+                raise FireGateBridgeError(
+                    f"{symbol}: 기존 실행 중인 FireGate 포트폴리오와 사이클 연결이 다릅니다. "
+                    "중복 생성하지 않았습니다. 기존 기록을 대조해 연결을 복구하세요.")
         payload = build_v4_portfolio(
             symbol,
             seed,
@@ -1518,6 +1535,8 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
             or str((trade or {}).get("broker_order_no", "") or "").strip()
         )
         if source_trade_id:
+            if source_trade_id in {str(value) for value in portfolio.get("reconciledSourceTradeIds", []) or []}:
+                return {"synced": False, "reason": "reconciled", "portfolio_id": portfolio.get("id")}
             for tx in bridge.list_transactions(portfolio.get("id")):
                 if str(tx.get("source", "")) == INFINITYSTOCK_SOURCE and str(tx.get("sourceTradeId", "")) == source_trade_id:
                     return {"synced": False, "reason": "duplicate", "portfolio_id": portfolio.get("id")}

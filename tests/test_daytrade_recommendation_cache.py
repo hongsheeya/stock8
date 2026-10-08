@@ -4,6 +4,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest.mock import Mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -37,7 +38,7 @@ class _FsStub:
         self.read = _ReadStub(payload)
 
     def exists(self, path):
-        return str(path).endswith("data/daytrade/ks/recommendation.json")
+        return str(path).endswith("data/paper/daytrade/ks/recommendation.json")
 
 
 class _StructStub:
@@ -53,6 +54,30 @@ daytrade_spec.loader.exec_module(daytrade)
 
 
 class DaytradeRecommendationCacheTests(unittest.TestCase):
+    def test_expired_recommendation_retrains_instead_of_reusing_stale_rejection(self):
+        service = self._service(None)
+        stale = {'selected':{'strategy_id':'vrev','market':'KS'}, 'leaderboard':[], 'generated_date':'2026-05-25'}
+        service.latest_recommendation = Mock(side_effect=lambda **kw: stale if kw.get('allow_stale_day') else None)
+        service.auto_train = Mock(return_value={'generated_date':'2026-05-26','leaderboard':[{'symbol':'TEST'}]})
+        result = service.recommend(seed=1000000, max_age_sec=3600, market='KS')
+        self.assertEqual(result['generated_date'],'2026-05-26')
+        service.auto_train.assert_called_once()
+        self.assertEqual(service.latest_recommendation.call_count,1)
+
+    def test_fresh_recommendation_does_not_repeat_training(self):
+        service = self._service(None)
+        fresh = {'selected':{'strategy_id':'vrev','market':'KS'},'leaderboard':[]}
+        service.latest_recommendation = Mock(return_value=fresh)
+        service.auto_train = Mock()
+        self.assertEqual(service.recommend(seed=1000000,max_age_sec=3600),fresh)
+        service.auto_train.assert_not_called()
+
+    def test_missing_or_invalid_timestamp_is_not_fresh(self):
+        for timestamp in ('','invalid'):
+            payload = {'generated_date':'2026-05-26','generated_at':timestamp,
+                       'selected':{'symbol':'028260','strategy_id':'vrev','market':'KS'}}
+            self.assertIsNone(self._service(payload).latest_recommendation(max_age_sec=3600))
+
     def _service(self, payload):
         service = daytrade.Daytrade(_StructStub())
         service._fs = lambda: _FsStub(payload)
@@ -126,6 +151,21 @@ class DaytradeRecommendationCacheTests(unittest.TestCase):
         self.assertEqual(len(learned), 1)
         self.assertEqual(learned[0]["name"], "삼성SDS")
         self.assertEqual(learned[0]["source"], "profile_book")
+
+    def test_candidate_universe_always_includes_directional_etfs(self):
+        service = self._service(None)
+
+        symbols = {row.get("symbol") for row in service.candidate_universe(market="KS")}
+
+        self.assertTrue({"114800", "252670", "251340", "122630", "233740"}.issubset(symbols))
+
+    def test_market_regime_uses_breadth_not_one_kosdaq_mover(self):
+        service = self._service(None)
+        falling = [{"prdy_ctrt": str(value)} for value in (-2.4, -2.1, -1.8, -1.5, -1.3, -1.1, -0.9, 0.2, 0.4, -0.7)]
+        rising = [{"prdy_ctrt": str(value)} for value in (2.4, 2.1, 1.8, 1.5, 1.3, 1.1, 0.9, -0.2, -0.4, 0.7)]
+
+        self.assertEqual(service._classify_domestic_market_regime(falling)["regime"], "RISK_OFF")
+        self.assertEqual(service._classify_domestic_market_regime(rising)["regime"], "RISK_ON")
 
     def test_latest_recommendation_with_selection_key_still_rejects_mismatch(self):
         payload = {

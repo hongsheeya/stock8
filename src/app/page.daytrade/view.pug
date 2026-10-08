@@ -1,25 +1,19 @@
 // 로딩
-div(*ngIf="loading", class="flex items-center justify-center h-full")
+div(*ngIf="loading", class="daytrade-loading flex items-center justify-center h-full")
     div(class="text-center")
         div(class="animate-spin rounded-full h-8 w-8 border-2 border-indigo-400 border-t-transparent mx-auto mb-3")
-        p(class="text-sm text-slate-400") 단타 연구실 로딩 중...
+        p(class="text-sm text-slate-400") 단타 화면을 준비하고 있습니다…
 
 // 메인
 div(*ngIf="!loading", class="space-y-4")
+    wiz-component-trading-controls(#tradeControls="", [positions]="activePositions", [daytradeOnly]="true", market="KS")
+    div(*ngIf="bootstrapDelayed", class="daytrade-delayed-banner")
+        strong 화면을 먼저 열었습니다.
+        span 계좌·시세 데이터는 백그라운드에서 이어서 불러오는 중입니다.
 
-    // ═══ 시장 탭 ═══
-    div(class="flex items-center gap-1 p-1 rounded-lg bg-white/5 border border-white/10 w-fit")
-        button((click)="switchMarketMode('KS')",
-            class="px-4 py-1.5 rounded-md text-[13px] font-medium transition-colors",
-            [class]="marketMode === 'KS' ? 'bg-indigo-500/80 text-white' : 'text-slate-400 hover:text-white'")
-            | 국장
-        button((click)="switchMarketMode('US')",
-            class="px-4 py-1.5 rounded-md text-[13px] font-medium transition-colors",
-            [class]="marketMode === 'US' ? 'bg-blue-500/80 text-white' : 'text-slate-400 hover:text-white'")
-            | 미장
 
     // ═══ 최상단 자동매매 제어 ═══
-    div(*ngIf="marketMode === 'KS'",
+    div(*ngIf="marketMode === 'KS' && tradeControls.state?.mode === 'PAPER'",
         class="glass-card p-4 border",
         [class]="autoEnabled ? 'border-emerald-400/20 bg-emerald-500/5' : 'border-red-400/20 bg-red-500/5'")
         div(class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between")
@@ -57,22 +51,22 @@ div(*ngIf="!loading", class="space-y-4")
                 button((click)="toggleSearch()",
                     class="px-3 py-2 rounded-lg border text-[13px] transition-colors",
                     [class]="showSearch ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300' : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'")
-                    | {{symbol}} · {{selectedName || '현재 후보'}}
-                span(class="px-2 py-1 rounded-full text-[11px] font-semibold",
+                    | {{tradeControls.locked(symbol) ? '분석 대상 선택' : symbol + ' · ' + (selectedName || '현재 후보')}}
+                span(*ngIf="!tradeControls.locked(symbol)", class="px-2 py-1 rounded-full text-[11px] font-semibold",
                     [class]="signalBadgeClass(signalAction)") {{signalAction}}
         div(class="flex items-center gap-2")
             button((click)="toggleDailyLog()",
                 class="px-3 py-2 rounded-lg border text-[13px] transition-colors",
                 [class]="showDailyLog ? 'bg-amber-500/20 border-amber-400/30 text-amber-300' : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'")
                 | 오늘 일지
-            button((click)="toggleAutoEnabled()",
+            button(*ngIf="false", (click)="toggleAutoEnabled()",
                 [disabled]="togglingAuto",
                 class="px-4 py-2 rounded-lg border text-[13px] font-semibold transition-colors disabled:opacity-50",
                 [class]="autoEnabled ? 'bg-emerald-500/20 border-emerald-400/30 text-emerald-300 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-emerald-500/20 hover:border-emerald-400/30 hover:text-emerald-300'")
                 | {{togglingAuto ? '변경 중...' : (autoEnabled ? '자동매매 ON · 중지' : '자동매매 OFF · 시작')}}
             button((click)="toggleAdvancedControls()",
                 class="px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-[13px] text-slate-300 hover:bg-white/10 transition-colors")
-                | {{advancedControlsCollapsed ? '고급 설정' : '고급 설정 접기'}}
+                | {{advancedControlsCollapsed ? '상세 설정·분석' : '상세 접기'}}
 
     div(*ngIf="marketMode === 'KS' && !advancedControlsCollapsed",
         class="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-3")
@@ -344,6 +338,7 @@ div(*ngIf="!loading", class="space-y-4")
                     span(class="text-slate-500") {{order.order_no}}
         div(*ngIf="!dailyLogLoading && !dailyLog", class="py-6 text-center text-[13px] text-slate-500") 일지 데이터를 불러올 수 없습니다.
 
+    wiz-component-trading-controls([positions]="activePositions", [locksOnly]="true", [showLocks]="true", [market]="marketMode")
     div(*ngIf="activePositionCount > 0 && marketMode === 'KS'", class="glass-card p-4")
         div(class="flex items-center justify-between mb-3")
             div(class="flex items-center gap-2")
@@ -401,13 +396,13 @@ div(*ngIf="!loading", class="space-y-4")
         div([class]="advancedControlsCollapsed ? 'xl:col-span-3 space-y-4' : 'xl:col-span-2 space-y-4'")
 
             // ── 매매 계획 ──
-            div(class="glass-card p-4")
+            div(class="glass-card p-4", *ngIf="!tradeControls.locked(symbol)")
                 div(class="flex items-center justify-between mb-3")
                     h2(class="text-sm font-semibold text-white") 매매 계획
                     button((click)="refreshLiveStatus()",
                         [disabled]="liveRefreshing",
                         class="px-2 py-1 rounded border border-white/10 text-[11px] text-slate-400 hover:text-white transition-colors disabled:opacity-50")
-                        | {{liveRefreshing ? '...' : '🔄 새로고침 (KIS 실지 반영)'}}
+                        | {{liveRefreshing ? '...' : '🔄 새로고침 (KIS 시세 반영)'}}
                 // 시드/예산 요약
                 div(*ngIf="tradePlan", class="space-y-3")
                     div(*ngIf="budgetStatus", class="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]")
@@ -474,7 +469,19 @@ div(*ngIf="!loading", class="space-y-4")
                     | 종목을 선택하면 매매 계획이 표시됩니다.
 
             // ── 시그널 상태 + 실행 ──
-            div(class="glass-card p-4")
+            section(class="signal-overview", *ngIf="!tradeControls.locked(symbol)")
+                div(class="signal-overview-heading")
+                    div
+                        small {{selectedName || symbol}} · 현재 판단
+                        h2 {{chartSignal ? investorDecisionLabel() : '시세 확인 중'}}
+                    button((click)="toggleAdvancedControls()") {{advancedControlsCollapsed ? '판단 근거·상세' : '상세 접기'}}
+                p {{chartSignal ? signalReason : '아직 판단에 필요한 데이터를 받지 못했습니다.'}}
+                div(class="signal-overview-facts")
+                    span 현재가 {{chartSignal?.current_price > 0 ? '₩' + formatNumber(chartSignal.current_price) : '확인 중'}}
+                    span(*ngIf="chartSignal?.order_qty > 0") 신호 수량 {{chartSignal.order_qty}}주
+                p(class="signal-permission") {{signalPermissionText(tradeControls.state)}}
+                small 신호는 체결 결과가 아닙니다. 실제 매매 결과는 거래이력에서 확인하세요.
+            div(*ngIf="!advancedControlsCollapsed", class="glass-card p-4")
                 div(class="flex items-center justify-between mb-3")
                     div(class="flex items-center gap-2")
                         h2(class="text-sm font-semibold text-white") 실시간 시그널
@@ -486,7 +493,7 @@ div(*ngIf="!loading", class="space-y-4")
                         span(class="px-3 py-1 rounded-full text-[12px] font-bold",
                             [class]="signalBadgeClass(signalAction)") {{signalAction}}
                         span(class="px-3 py-1 rounded-full text-[11px] font-semibold",
-                            [class]="riskBadgeClass(runtimeStatus?.risk_status || 'SAFE')") {{runtimeStatus?.risk_status || 'SAFE'}}
+                            [class]="riskBadgeClass(runtimeStatus?.risk_status || 'UNKNOWN')") 엔진 점검: {{runtimeStatus?.risk_status || '확인 중'}}
                 // 시그널 정보
                 div(*ngIf="chartSignal", class="space-y-3")
                     div(class="flex flex-wrap items-center gap-2 text-[11px]")
@@ -530,8 +537,8 @@ div(*ngIf="!loading", class="space-y-4")
                             div(class="mt-1 text-[11px] text-slate-300 break-words") {{investorDecisionSummary()}}
                             div(class="mt-2 text-[10px] text-indigo-200 break-words") {{investorDecisionPriceText()}}
                         div(class="rounded-lg bg-amber-500/10 border border-amber-400/20 px-3 py-3")
-                            div(class="text-[11px] text-amber-300 font-semibold mb-1") 위험 해석
-                            div(class="text-white font-semibold text-[13px]") {{runtimeStatus.risk_status || 'SAFE'}}
+                            div(class="text-[11px] text-amber-300 font-semibold mb-1") 엔진 점검 · 투자 안전도와 별개
+                            div(class="text-white font-semibold text-[13px]") {{runtimeStatus.risk_status || '확인 중'}}
                             div(class="mt-1 text-[11px] text-slate-300 break-words") {{investorRiskSummary()}}
                         div(class="rounded-lg bg-emerald-500/10 border border-emerald-400/20 px-3 py-3")
                             div(class="text-[11px] text-emerald-300 font-semibold mb-1") 투자자 액션
@@ -605,6 +612,8 @@ div(*ngIf="!loading", class="space-y-4")
                             span(class="text-slate-300 font-semibold") 자동매매 상태
                             span(class="text-[10px] text-slate-500") 서버 백그라운드 워커 기준
                         div(class="text-[11px] text-slate-500 mb-2") 현재 총 시드 ₩{{formatNumber(totalSeedKrw)}} · 사용 ₩{{formatNumber(usedSeedKrw)}} · 남음 ₩{{formatNumber(remainingSeedKrw)}}
+                        div(class="text-[11px] text-slate-500 mb-2", *ngIf="budgetStatus?.budget_updated_at") 주문가능 ₩{{formatNumber(budgetStatus.available_before_reserve)}} · 무한매수 확보 ₩{{formatNumber(budgetStatus.applied_reserve_krw)}} · 갱신 {{budgetStatus.budget_updated_at | date:'HH:mm:ss'}}
+                        div(class="text-[12px] text-amber-600 mb-2", *ngIf="budgetStatus?.budget_status === 'ready' && remainingSeedKrw <= 0") 신규 매수 대기 — 무한매수 확보금과 현재 단타 사용액을 제외한 가용 시드가 없습니다.
                         div(class="grid grid-cols-2 gap-2 text-[11px]")
                             div(class="rounded bg-black/20 px-2 py-2")
                                 div(class="text-slate-500") 워커 상태
@@ -802,10 +811,10 @@ div(*ngIf="!loading", class="space-y-4")
                         span 주가가 트리거 가격에 도달하면 BUY/SELL 시그널이 활성화됩니다.
                     div(class="flex items-start gap-2")
                         span(class="text-indigo-400 font-bold shrink-0") 4.
-                        span 시그널 활성 시 「실행」 버튼으로 실제 KIS API 주문을 전송합니다.
+                        span 시그널 활성 시 「실행」 버튼으로 KIS 모의투자 주문을 전송합니다.
                     div(class="flex items-start gap-2 mt-1 text-amber-300/70")
                         span(class="font-bold shrink-0") ⚠
-                        span 학습/추천은 과거 데이터 백테스트입니다. 실거래는 시그널 발생 시에만 가능합니다.
+                        span 학습/추천은 과거 데이터 백테스트이며, 주문은 PAPER 모의계좌에서만 실행됩니다.
 
     // ═══ 미장 (US) 섹션 ═══
     div(*ngIf="marketMode === 'US'", class="space-y-4")

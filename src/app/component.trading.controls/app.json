@@ -1,0 +1,12 @@
+{
+    "id": "component.trading.controls",
+    "mode": "component",
+    "title": "trading.controls",
+    "namespace": "trading.controls",
+    "category": "trading",
+    "viewuri": "",
+    "preview": "",
+    "controller": "user",
+    "layout": "",
+    "template": "wiz-component-trading-controls([publicpositions]=\"\", [publicdaytradeOnly]=\"\", [publicmarket]=\"\", [publicshowLocks]=\"\", [publiclocksOnly]=\"\")"
+}

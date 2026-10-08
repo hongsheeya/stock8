@@ -7,6 +7,8 @@ import datetime
 import contextlib
 import math
 import time
+import os
+import json
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -72,7 +74,9 @@ class Engine:
     def _load_kis_api(self):
         """Return the selected broker API client used by order/sync routines."""
         try:
-            return getattr(self.struct, "broker_api", None) or getattr(self.struct, "kis_api", None)
+            broker = getattr(self.struct, "broker_api", None) or getattr(self.struct, "kis_api", None)
+            policy = getattr(self.struct, 'order_policy', None)
+            return policy.bind(broker, 'infinite_buy') if policy is not None else broker
         except Exception:
             return None
 
@@ -164,6 +168,55 @@ class Engine:
 
     def _watchlist_db(self):
         return self.struct.db("etf_watchlist")
+
+    @staticmethod
+    def _logical_watchlist_rows(rows):
+        """Collapse scoped/legacy duplicates to one row per instrument."""
+        by_symbol = {}
+        for row in rows or []:
+            symbol = str((row or {}).get("symbol", "") or "").upper().strip()
+            if not symbol:
+                continue
+            current = by_symbol.get(symbol)
+            row_stamp = str((row or {}).get("updated") or (row or {}).get("created") or "")
+            current_stamp = str((current or {}).get("updated") or (current or {}).get("created") or "")
+            if current is None or row_stamp >= current_stamp:
+                by_symbol[symbol] = row
+        return list(by_symbol.values())
+
+    @staticmethod
+    def _cycle_holding_score(cycle):
+        cycle = cycle or {}
+        try:
+            qty = int(float(cycle.get("total_qty", 0) or 0))
+        except Exception:
+            qty = 0
+        try:
+            spent = float(cycle.get("total_spent", 0) or 0)
+        except Exception:
+            spent = 0.0
+        try:
+            current_round = int(float(cycle.get("current_round", 0) or 0))
+        except Exception:
+            current_round = 0
+        return (
+            qty > 0,
+            spent > 0,
+            current_round,
+            str(cycle.get("updated") or cycle.get("created") or ""),
+        )
+
+    def _best_cycle(self, symbol, statuses):
+        cycle_db = self._cycle_db()
+        for status in statuses:
+            try:
+                rows = cycle_db.rows(symbol=symbol, status=status, orderby="updated", order="DESC", dump=200) or []
+            except Exception:
+                row = cycle_db.get(symbol=symbol, status=status)
+                rows = [row] if row else []
+            if rows:
+                return max(rows, key=self._cycle_holding_score)
+        return None
 
     def _snapshot_db(self):
         return self.struct.db("account_snapshot")
@@ -698,6 +751,10 @@ class Engine:
         had_sell = False
         applied_rows = 0
         audit_only_rows = 0
+        try:
+            anchor = json.loads(self.struct.get_config(f"cycle_bookkeeping_anchor:{cycle_id}", "{}") or "{}")
+        except Exception:
+            anchor = {}
 
         for row in rows:
             action = str((row or {}).get("action", "") or "").upper()
@@ -726,6 +783,13 @@ class Engine:
             except Exception:
                 commission = 0.0
 
+            # A verified broker basis anchor repairs an incomplete historical
+            # ledger without inventing a buy fill. Apply it only at its exact
+            # confirmed trade, then carry the corrected basis forward.
+            if anchor.get("trade_id") == row.get("id") and anchor.get("verified") is True:
+                total_qty = int(anchor["qty_before"])
+                total_spent = float(anchor["avg_before"]) * total_qty
+            avg_before = total_spent / total_qty if total_qty > 0 else 0.0
             if action == ACTION_BUY:
                 applied_rows += 1
                 buy_round += 1
@@ -736,7 +800,7 @@ class Engine:
                 applied_rows += 1
                 had_sell = True
                 total_qty -= qty
-                total_spent -= amount
+                total_spent -= avg_before * qty
                 total_commission += commission
 
             running_qty = max(total_qty, 0)
@@ -745,9 +809,11 @@ class Engine:
             try:
                 trade_db.update({
                     "round": buy_round,
-                    "avg_buy_price": round(running_avg, 6),
+                    "avg_buy_price": round(avg_before if action == ACTION_SELL else running_avg, 6),
                     "total_qty_after": running_qty,
                     "total_spent_after": round(running_spent, 4),
+                    **({"profit_rate": round((amount - commission - avg_before * qty) / (avg_before * qty) * 100, 2)}
+                       if action == ACTION_SELL and avg_before > 0 and qty > 0 else {}),
                 }, id=row["id"])
             except Exception:
                 pass
@@ -767,6 +833,11 @@ class Engine:
         remaining_investment = float(cycle.get("total_investment", 0) or 0) - total_spent
         avg_price = (total_spent / total_qty) if total_qty > 0 else 0.0
         status = str(cycle.get("status", STATUS_ACTIVE) or STATUS_ACTIVE)
+        if self._firegate_reservation_authority_required() or (self._get_config_value('fire_gate_bridge', '') and cycle.get('t_value') is not None):
+            # Ledger fill count is not FireGate's fractional strategy T value.
+            buy_round = int(max(0, float(cycle.get('t_value', 0) or 0)))
+            if status == STATUS_PENDING_EXTENSION and buy_round < division_count:
+                status = STATUS_ACTIVE
         if total_qty <= 0 and had_sell:
             status = STATUS_COMPLETED
         elif status == STATUS_COMPLETED and total_qty > 0:
@@ -924,7 +995,19 @@ class Engine:
         holding = cycle_db.rows(status=STATUS_HOLDING, order="ASC", orderby="started_at") or []
         paused = cycle_db.rows(status=STATUS_PAUSED, order="ASC", orderby="started_at") or []
         pending = cycle_db.rows(status=STATUS_PENDING_EXTENSION, order="ASC", orderby="started_at") or []
-        return active + holding + paused + pending
+        # A signed-in user's empty shell cycle and a legacy/background broker
+        # cycle can both be visible through the compatibility DB wrapper.  They
+        # represent one instrument, so expose only the authoritative cycle to
+        # every consumer (dashboard, status counters, preview and scheduler).
+        by_symbol = {}
+        for cycle in active + holding + paused + pending:
+            symbol = str((cycle or {}).get("symbol", "") or "").upper().strip()
+            if not symbol:
+                continue
+            current = by_symbol.get(symbol)
+            if current is None or self._cycle_holding_score(cycle) > self._cycle_holding_score(current):
+                by_symbol[symbol] = cycle
+        return list(by_symbol.values())
 
     # =========================================================================
     # 매수 판단 로직
@@ -1608,7 +1691,9 @@ class Engine:
                         action=ACTION_SELL,
                         message=f"전량 매도 체결: {filled_qty}주 @ ${filled_price:.2f}, 수수료 ${sell_commission:.2f}, 순수익률 {profit_rate:.2f}%")
         self._sync_trade_to_firegate(cycle_id, trade_data)
-        next_cycle = self._auto_start_next_cycle_after_completion(cycle_db.get(id=cycle_id))
+        # Importing historical broker fills is bookkeeping, not consent to
+        # start another live cycle after the last historical sell.
+        next_cycle = None if str(order_type).upper() == "EXTERNAL" else self._auto_start_next_cycle_after_completion(cycle_db.get(id=cycle_id))
         if next_cycle:
             trade_data["next_cycle_id"] = next_cycle.get("id", "")
             trade_data["next_cycle_number"] = next_cycle.get("cycle_number", "")
@@ -2414,6 +2499,10 @@ class Engine:
         return active
 
     def rebuild_loc_reservations(self, symbols=None):
+        if self._get_config_value('kis_reservation_pending', ''):
+            return {"status": "reconciliation_required", "error_count": 1,
+                    "message": "이전 예약 접수 여부 확인 필요: 기존 예약 취소 및 신규 주문을 시작하지 않습니다.",
+                    "buy": [], "sell": [], "symbols": list(symbols or [])}
         symbols = [str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()]
         symbols = list(dict.fromkeys(symbols))
         if not symbols:
@@ -2638,12 +2727,10 @@ class Engine:
         return self._now().strftime("%Y-%m-%d")
 
     def _find_external_cycle(self, symbol):
-        cycle_db = self._cycle_db()
-        for status in [STATUS_ACTIVE, STATUS_HOLDING, STATUS_PENDING_EXTENSION, STATUS_PAUSED]:
-            cycle = cycle_db.get(symbol=symbol, status=status)
-            if cycle:
-                return cycle
-        return None
+        return self._best_cycle(
+            symbol,
+            [STATUS_ACTIVE, STATUS_HOLDING, STATUS_PENDING_EXTENSION, STATUS_PAUSED],
+        )
 
     def _external_sync_target_symbols(self, symbol_filter=""):
         symbol_filter = str(symbol_filter or "").upper().strip()
@@ -3040,7 +3127,39 @@ class Engine:
             })
         return {"reconciled": reconciled, "aligned": aligned, "unresolved": unresolved, "errors": errors}
 
-    def sync_external_cycle_trades(self, lookback_days=7, symbol_filter=""):
+    def _paper_history_start_date(self):
+        """Explicit broker trade-date boundary for a new PAPER account run.
+
+        Never infer an account reset from an empty/failed balance response.
+        Invalid configured boundaries fail closed instead of importing history.
+        """
+        if os.environ.get("TRADING_MODE", "PAPER").upper() != "PAPER":
+            return None
+        value = str(self._get_config_value("paper_history_start_date", "") or "").strip()
+        if not value:
+            return None
+        return datetime.datetime.strptime(value, "%Y-%m-%d").date()
+
+    def sync_firegate_strategy_metadata(self):
+        """Restore strategy T separately from broker quantity/cost accounting."""
+        if not self._firegate_reservation_authority_required() and not self._get_config_value('fire_gate_bridge', ''):
+            return
+        context = self._load_firegate_authoritative_states()
+        if context.get('error'):
+            raise RuntimeError(context['error'])
+        for symbol, state in context.get('states', {}).items():
+            if state.get('_firegate_ambiguous'):
+                continue
+            cycle = self._find_external_cycle(symbol)
+            if not cycle:
+                continue
+            data = {key: state[key] for key in ('current_round', 't_value', 'division_count')}
+            # Never undo a user's pause/holding choice or recreate a closed cycle.
+            if cycle.get('status') in (STATUS_ACTIVE, STATUS_PENDING_EXTENSION):
+                data['status'] = state['status']
+            self._cycle_db().update(data, id=cycle['id'])
+
+    def sync_external_cycle_trades(self, lookback_days=7, symbol_filter="", recent_only=False):
         """
         KIS 해외 체결내역 중 사이트 밖에서 체결된 SOXL/TQQQ 등 무한매수 보유 종목을
         현재 사이클에 반영한다. broker_order_no 기준으로 중복 반영을 막는다.
@@ -3077,10 +3196,13 @@ class Engine:
                     else:
                         text = str(date_source or "")[:10]
                         cycle_date = datetime.datetime.strptime(text, "%Y-%m-%d").date() if text else None
-                    if cycle_date:
+                    if cycle_date and not recent_only:
                         start = min(start, cycle_date - datetime.timedelta(days=2))
         except Exception:
             pass
+        paper_start = self._paper_history_start_date()
+        if paper_start:
+            start = max(start, paper_start)
         start_date = start.strftime("%Y%m%d")
         end_date = today.strftime("%Y%m%d")
         trade_db = self._trade_db()
@@ -3101,6 +3223,13 @@ class Engine:
                 "history_verification": history_check,
             }
         orders = history_check.get("orders", []) or []
+        if paper_start:
+            # Also filter responses: a broad/cached broker result must never
+            # recreate cycles from the previous account generation.
+            boundary = paper_start.strftime("%Y%m%d")
+            orders = [row for row in orders
+                      if str(row.get("order_date", "")).replace("-", "")[:8] >= boundary
+                      and len(str(row.get("order_date", "")).replace("-", "")) >= 8]
 
         raw_order_count = len(orders)
         broker_holdings = self._broker_holdings_by_symbol(kis_api, symbols)
@@ -3366,6 +3495,8 @@ class Engine:
         한투 미국주식 예약주문 가능시간(10:00 KST부터, 서머타임 22:20/일반 23:20까지)에 실행하여 장중 체결 유도
         1회차 포함 LOC 주문 대상은 모두 예약한다.
         """
+        # A previous run's empty snapshot must never authorize another submission.
+        self._clear_reservation_order_cache()
         self._ensure_runtime_schema()
         kis_api = self._load_kis_api()
         if not kis_api:
@@ -3373,7 +3504,9 @@ class Engine:
 
         cycle_db = self._cycle_db()
         watchlist_db = self._watchlist_db()
-        active_items = watchlist_db.rows(is_active=True, orderby="created", order="ASC")
+        active_items = self._logical_watchlist_rows(
+            watchlist_db.rows(is_active=True, orderby="created", order="ASC") or []
+        )
         symbol_filter = str(symbol_filter or "").upper().strip()
         firegate_required = self._firegate_reservation_authority_required()
         firegate_context = (
@@ -3434,7 +3567,7 @@ class Engine:
             order_exchange = self._resolve_order_exchange(symbol, item.get("exchange", "NASD"))
             price_exchange = self._price_exchange(order_exchange)
 
-            cycle = cycle_db.get(symbol=symbol, status=STATUS_ACTIVE)
+            cycle = self._best_cycle(symbol, [STATUS_ACTIVE])
             if not cycle:
                 continue
             local_cycle_id = cycle.get("id", "")
@@ -3645,6 +3778,8 @@ class Engine:
                             price=loc_price,
                             exchange=order_exchange,
                         )
+                    if buying_power_info.get("ok") is False:
+                        raise RuntimeError(buying_power_info.get("message") or "KIS 주문가능금액 조회 실패: 잔액 부족이 아닌 조회 오류")
                     max_qty = int(buying_power_info.get("executable_qty", buying_power_info.get("broker_qty", buying_power_info.get("qty", 0))) or 0)
                     orderable_amount = float(buying_power_info.get("executable_amount", buying_power_info.get("broker_amount", buying_power_info.get("amount", 0))) or 0)
                     estimated_amount = float(buying_power_info.get("estimated_amount", buying_power_info.get("amount", orderable_amount)) or 0)
@@ -3786,6 +3921,8 @@ class Engine:
         한투 미국주식 예약주문 가능시간(10:00 KST부터, 서머타임 22:20/일반 23:20까지)에 실행하여, 장중/종가 목표 도달 시 체결 유도
         이 함수는 예약 매매 전용 경로라서 설정의 일반 매도 방식과 분리해 LOC로 접수한다.
         """
+        # Reconcile broker truth on every scheduling pass, including reused engines.
+        self._clear_reservation_order_cache()
         self._ensure_runtime_schema()
         kis_api = self._load_kis_api()
         if not kis_api:
@@ -3793,7 +3930,9 @@ class Engine:
 
         cycle_db = self._cycle_db()
         watchlist_db = self._watchlist_db()
-        watchlist_rows = watchlist_db.rows(orderby="created", order="ASC") or []
+        watchlist_rows = self._logical_watchlist_rows(
+            watchlist_db.rows(orderby="created", order="ASC") or []
+        )
         watchlist_by_symbol = {str((item or {}).get("symbol", "") or "").upper(): item for item in watchlist_rows}
         symbol_filter = str(symbol_filter or "").upper().strip()
         firegate_required = self._firegate_reservation_authority_required()
@@ -3844,15 +3983,16 @@ class Engine:
             line_key = self._reservation_order_line_key(reserved.get("symbol", ""), reserved.get("exchange", "NASD"), reserved.get("price", 0))
             reserved_line_map.setdefault(line_key, []).append(reserved)
 
-        cycle_candidates = []
-        seen_cycle_ids = set()
+        cycle_by_symbol = {}
         for status in (STATUS_ACTIVE, STATUS_HOLDING, STATUS_PENDING_EXTENSION):
             for cycle_row in cycle_db.rows(status=status, orderby="created", order="ASC", dump=500) or []:
-                cycle_id = str((cycle_row or {}).get("id", "") or "")
-                if not cycle_id or cycle_id in seen_cycle_ids:
+                symbol = str((cycle_row or {}).get("symbol", "") or "").upper().strip()
+                if not symbol:
                     continue
-                seen_cycle_ids.add(cycle_id)
-                cycle_candidates.append(cycle_row)
+                current = cycle_by_symbol.get(symbol)
+                if current is None or self._cycle_holding_score(cycle_row) > self._cycle_holding_score(current):
+                    cycle_by_symbol[symbol] = cycle_row
+        cycle_candidates = list(cycle_by_symbol.values())
 
         for cycle in cycle_candidates:
             symbol = str(cycle.get("symbol", "") or "").upper()

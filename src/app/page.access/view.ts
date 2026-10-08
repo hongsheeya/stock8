@@ -38,8 +38,19 @@ export class Component implements OnInit {
     public async ngOnInit() {
         await this.service.init(this);
         let check = await this.service.auth.check();
-        if (check) return location.href = "/dashboard";
+        if (check) return this.openMainAccount();
         await this.service.render();
+    }
+
+    private async openMainAccount() {
+        const account = await wiz.call('account_context');
+        if (account.code === 200) {
+            location.assign(account.data.live_url);
+        } else {
+            this.errorMsg = '실투자 계정 화면 연결 정보를 확인하지 못했습니다. 다시 시도해주세요.';
+            this.loading = false;
+            await this.service.render();
+        }
     }
 
     public async switchView(v: string) {
@@ -70,7 +81,7 @@ export class Component implements OnInit {
         let { code, data } = await wiz.call("login", this.loginData);
 
         if (code == 200) {
-            location.href = "/dashboard";
+            await this.openMainAccount();
         } else {
             this.errorMsg = data.message || '로그인에 실패했습니다.';
             this.loading = false;
@@ -119,7 +130,7 @@ export class Component implements OnInit {
         });
 
         if (code == 200) {
-            location.href = "/dashboard";
+            await this.openMainAccount();
         } else {
             this.errorMsg = data.message || '회원가입에 실패했습니다.';
             this.loading = false;

@@ -69,6 +69,7 @@ export class Component implements OnInit, OnDestroy {
     public hiddenSeedExceededCount: number = 0;
     public briefingCollapsed: boolean = true;
     public advancedControlsCollapsed: boolean = true;
+    public bootstrapDelayed: boolean = false;
     private activePositionTimer: any = null;
     private activePositionRefreshing: boolean = false;
 
@@ -90,13 +91,15 @@ export class Component implements OnInit, OnDestroy {
         await this.service.init(this);
         await this.service.auth.allow('/access');
         this.initializeDates();
+        this.loading = false;
+        await this.service.render();
         try {
             await this.bootstrap();
         } finally {
-            this.loading = false;
             await this.service.render();
         }
-        void this.refreshRecommendationIfMissing(false);
+        // 전체 종목 백테스트는 명시적으로 실행한다. 초기 화면과 실시간
+        // 상태 표시가 무거운 추천 계산을 기다리지 않도록 한다.
     }
 
     public ngOnDestroy() {
@@ -120,12 +123,35 @@ export class Component implements OnInit, OnDestroy {
 
     private async bootstrap() {
         this.errorMessage = '';
-        const { code, data } = await this.api('bootstrap', { seed: this.seed });
+        // The worker's persisted PAPER seed is authoritative on first load.
+        // Sending the component's placeholder (₩5M) here made the page show a
+        // different budget from the unattended worker until the user saved it.
+        const request = this.api('bootstrap', { seed: 0 });
+        const timeout = new Promise<{ code: number; data: any }>((resolve) => {
+            window.setTimeout(() => resolve({ code: 202, data: { delayed: true } }), 4000);
+        });
+        const { code, data } = await Promise.race([request, timeout]);
+        if (code === 202 && data?.delayed) {
+            this.bootstrapDelayed = true;
+            this.marketMode = 'KS';
+            this.startActivePositionPolling();
+            void request.then(async (late) => {
+                if (late?.code === 200) {
+                    this.applyBootstrapData(late.data || {});
+                    this.bootstrapDelayed = false;
+                    await this.service.render();
+                }
+            }).catch(() => undefined);
+            return;
+        }
         if (code !== 200) {
             this.errorMessage = data?.message || '단타 연구실 초기화 실패';
             return;
         }
+        this.applyBootstrapData(data || {});
+    }
 
+    private applyBootstrapData(data: any) {
         const defaults = data.defaults || {};
         this.marketMode = 'KS';
         this.symbol = defaults.symbol || this.symbol;
@@ -211,7 +237,7 @@ export class Component implements OnInit, OnDestroy {
         try {
             const { code, data } = await this.api('active_positions_snapshot', {
                 market: 'KS',
-                refresh_quotes: 'true',
+                refresh_quotes: 'false',
             });
             if (code === 200) {
                 this.activePositions = data.active_positions || [];
@@ -230,6 +256,8 @@ export class Component implements OnInit, OnDestroy {
     }
 
     private applyBudgetStatus(budgetStatus: any = {}, priceCap: number = 0) {
+        // A cold cache is unknown, not a new zero balance.
+        if (budgetStatus?.source === 'cache_miss' || budgetStatus?.budget_status === 'unavailable') return;
         this.budgetStatus = budgetStatus || {};
         this.totalSeedKrw = Number(this.budgetStatus.total_seed_krw || 0);
         this.usedSeedKrw = Number(this.budgetStatus.used_seed_krw || 0);
@@ -442,6 +470,7 @@ export class Component implements OnInit, OnDestroy {
         const buy1 = Number(this.chartSignal?.buy1_trigger || 0);
         const buy2 = Number(this.chartSignal?.buy2_trigger || 0);
         const target = this.primaryExitTarget();
+        if (action.includes('STOP')) return `${name}: ${reason} 현재가 ₩${this.formatNumber(current)}. 손절 신호이며 체결 완료를 뜻하지 않습니다.`;
         if (action.startsWith('BUY2')) return `현재 ${name}는 ₩${this.formatNumber(current)}이고, 2차 진입 기준은 ₩${this.formatNumber(buy2 || 0)}다. ${reason}`;
         if (action.startsWith('BUY')) return `현재 ${name}는 ₩${this.formatNumber(current)}이고, 1차 진입 기준은 ₩${this.formatNumber(buy1 || 0)}다. ${reason}`;
         if (action.startsWith('SELL')) return `현재 ${name}는 ₩${this.formatNumber(current)}이고, 우선 보는 청산 기준은 ₩${this.formatNumber(target?.target_price || current)}다. ${reason}`;
@@ -450,6 +479,7 @@ export class Component implements OnInit, OnDestroy {
     }
 
     public investorRiskSummary(): string {
+        if (this.signalAction.includes('STOP')) return '손절 조건에 도달했습니다. 엔진의 SAFE 표시는 보유 종목의 안전성이나 손실 회복을 보장하지 않습니다.';
         const risk = String(this.runtimeStatus?.risk_status || 'SAFE').toUpperCase();
         const haltReason = String(this.runtimeStatus?.halt_reason || '').trim();
         if (risk.includes('HALT') || haltReason !== '') {
@@ -459,9 +489,19 @@ export class Component implements OnInit, OnDestroy {
             return '시세 품질이나 장중 변동성이 불안정해 보수적으로 해석하는 구간이다.';
         }
         if (this.hasPosition) {
-            return '현재 포지션은 유지 가능 범위로 보이며, 익절/손절 라인만 계속 확인하면 된다.';
+            return '엔진 제한 여부에 대한 점검입니다. 보유 종목의 안전성이나 수익을 뜻하지 않습니다.';
         }
         return '신규 진입을 막는 큰 위험 신호는 없지만, 트리거가 올 때까지 기다리는 상태다.';
+    }
+
+    public signalPermissionText(policy: any): string {
+        if (!policy) return '자동매매 권한 확인 중 · 실행 가능 여부 미확인';
+        if (policy.mode === 'LIVE') {
+            if ((policy.symbols?.[this.symbol] ?? policy.default_locked) !== false) return '🔒 잠긴 종목 · 자동 매수·매도 차단';
+            if (!policy.daytrade) return '자동매매 OFF · 자동 주문하지 않습니다';
+        } else if (!this.autoEnabled) return '자동매매 OFF · 자동 주문하지 않습니다';
+        if (!this.workerStatus?.started) return '자동매매 허용 · 감시 엔진 상태 확인 필요';
+        return '자동매매 허용 · 시장·잔고·주문 조건을 통과해야 실행됩니다';
     }
 
     public investorNextStep(): string {

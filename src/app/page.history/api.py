@@ -100,6 +100,8 @@ def _safe_int(value, default=0):
 
 def _normalize_trade_action(action=""):
     text = str(action or "").upper().strip()
+    if text.startswith("PRE_SELL"):
+        return "SELL"
     if text.startswith("BUY"):
         return "BUY"
     if text.startswith("SELL"):
@@ -113,7 +115,7 @@ def _is_executable_daytrade_record(record):
         return False
 
     action_detail = str(record.get("action_detail", "") or "").upper().strip()
-    if action_detail.startswith("PRE_") or "RESERVED" in action_detail:
+    if (action_detail.startswith("PRE_") or "RESERVED" in action_detail) and str(record.get("status", "")).upper() != "FILLED":
         return False
 
     qty = _safe_int(record.get("qty", 0), 0)
@@ -124,6 +126,13 @@ def _is_executable_daytrade_record(record):
     if price <= 0 and amount <= 0:
         return False
     return True
+
+def _is_visible_daytrade_record(record):
+    if _is_executable_daytrade_record(record):
+        return True
+    status = str((record or {}).get("status", "") or "").upper()
+    action = str((record or {}).get("action", "") or "").upper()
+    return status in ("REJECTED", "FAILED", "BLOCKED", "EXPIRED", "PENDING", "ACCEPTED", "ACCEPTED_UNVERIFIED") or action in ("ERROR", "SKIP", "PENDING")
 
 def _daytrade_market(event_type="", symbol="", fallback="KS"):
     event = str(event_type or "").upper()
@@ -275,10 +284,15 @@ def _daytrade_record_key(record):
     market = str(record.get("market", "") or "").strip()
     action = _normalize_trade_action(record.get("action", ""))
     if order_no:
-        return f"{market}:{symbol}:{action}:{order_no}"
+        # A local PENDING row and the later authoritative KIS fill share an
+        # order number. Merge them regardless of the provisional action.
+        order_no = order_no.lstrip("0") or "0"
+        return f"{market}:{symbol}:{str(record.get('timestamp', ''))[:10]}:{order_no}"
     return f"{market}:{symbol}:{record.get('action_detail', action)}:{record.get('timestamp', '')}:{record.get('qty', 0)}:{record.get('price', 0)}"
 
 def _daytrade_source_rank(record):
+    if record.get("verification") == "kis":
+        return 4
     source = str((record or {}).get("source", "") or "").lower()
     if "kis" in source or "broker" in source:
         return 3
@@ -298,7 +312,7 @@ def _merge_daytrade_record(existing, incoming):
         for key in (
             "id", "timestamp", "market", "market_label", "symbol", "name", "strategy_id",
             "action", "action_detail", "order_type", "order_no", "price", "qty", "amount",
-            "matched_buy_amount", "fee", "avg_buy_price",
+            "matched_buy_amount", "fee", "avg_buy_price", "status", "verification",
             "post_position_qty", "post_avg_price", "message", "_sort",
         ):
             candidate = incoming.get(key, "")
@@ -349,7 +363,9 @@ def _daytrade_record_from_log(row):
     price = _safe_float(row.get("filled_price", None), 0) or _safe_float(row.get("order_price", 0), 0)
     qty = _safe_int(row.get("filled_qty", 0), 0) or _safe_int(row.get("order_qty", 0), 0)
     created_kst = raw.get("created_kst", "") or runtime.get("created_kst", "")
-    timestamp = _to_kst_string(created_kst, fmt="%Y-%m-%d %H:%M:%S") if created_kst else _to_kst_string(row.get("created"), fmt="%Y-%m-%d %H:%M:%S", assume_naive_utc=True)
+    # 이 로컬 SQLite의 naive created 값은 저장 시점부터 KST다. UTC로 다시
+    # 해석하면 거래 이력이 실제 주문보다 9시간 뒤로 표시된다.
+    timestamp = _to_kst_string(created_kst, fmt="%Y-%m-%d %H:%M:%S") if created_kst else _to_kst_string(row.get("created"), fmt="%Y-%m-%d %H:%M:%S")
     reason = str(runtime.get("reason", "") or raw.get("message", "") or row.get("message", "") or "")
     realized = _realized_from_payload(action, raw=raw, runtime=runtime, order=order, row=row)
     matched_buy_amount = _first_nonzero_float(
@@ -411,6 +427,7 @@ def _daytrade_record_from_log(row):
         "post_position_qty": _safe_int(runtime.get("post_position_qty", 0), 0),
         "post_avg_price": round(_safe_float(runtime.get("post_avg_price", 0), 0), 4),
         "message": _sanitize_user_log_message(reason),
+        "status": str(raw.get("execution_status", "") or ("FILLED" if action in ("BUY", "SELL") else "")),
         "source": "trade_log",
         "_sort": _daytrade_sort_key(timestamp),
     }
@@ -492,7 +509,9 @@ def _collect_broker_daytrade_trades(trading):
             date_from=date_from,
             date_to=date_to,
             sync_broker=True,
-            broker_lookback_days=7,
+            # 최근 주문의 체결 확정이 목적이다. 7일을 직렬 조회하면 PAPER
+            # 서버 지연 시 UI가 1분 이상 멈추므로 오늘+직전 거래일만 확인한다.
+            broker_lookback_days=2,
             include_valuation=False,
         ) or {}
     except Exception:
@@ -643,6 +662,8 @@ def _daytrade_record_from_state(state_key, state, order):
         "post_avg_price": round(_safe_float((state or {}).get("avg_price", 0), 0), 4),
         "message": _sanitize_user_log_message((order or {}).get("reason", "")),
         "source": "live_state",
+        "status": str(order.get("status", "")),
+        "verification": str(order.get("verification", "")),
         "_sort": _daytrade_sort_key(timestamp),
     }
     return record
@@ -713,7 +734,7 @@ def _state_presell_is_filled(state, orders, index, order, available_qty=0):
 def _daytrade_records_from_state_orders(state_key, state):
     records = []
     lots = []
-    orders = list((state or {}).get("orders", []) or [])
+    orders = sorted(list((state or {}).get("orders", []) or []), key=lambda row: str(row.get("timestamp", "")))
     state_market = str((state or {}).get("market", "") or (str(state_key).split(".")[1] if "." in str(state_key) else "KS")).upper()
     state_market = "US" if state_market == "US" else "KS"
 
@@ -722,6 +743,27 @@ def _daytrade_records_from_state_orders(state_key, state):
         normalized = _normalize_trade_action(action_detail)
         price = _safe_float((order or {}).get("price", 0), 0)
         qty = _safe_int((order or {}).get("qty", 0), 0)
+        status = str((order or {}).get("status", (order or {}).get("execution_status", "")) or "").upper()
+        filled_qty = _safe_int((order or {}).get("filled_qty", 0), 0)
+        filled_price = _safe_float((order or {}).get("filled_price", 0), 0)
+        explicitly_filled = status in ("FILLED", "EXECUTED", "DONE", "COMPLETE", "COMPLETED") and filled_qty > 0 and filled_price > 0
+
+        if filled_qty > 0 and filled_price > 0:
+            # FIFO must use executed quantity/price, never the requested limit.
+            order = dict(order, qty=filled_qty, price=filled_price)
+            qty, price = filled_qty, filled_price
+            explicitly_filled = True
+
+        if normalized in ("BUY", "SELL") and not explicitly_filled:
+            record = _daytrade_record_from_state(state_key, state, order)
+            record.update({
+                "action": "PENDING",
+                "action_detail": f"{action_detail}_PENDING",
+                "status": status or "ACCEPTED_UNVERIFIED",
+                "message": _sanitize_user_log_message("주문 접수 · KIS 체결 확인 대기"),
+            })
+            records.append(record)
+            continue
 
         if normalized == "BUY":
             record = _daytrade_record_from_state(state_key, state, order)
@@ -793,14 +835,14 @@ def _collect_daytrade_trades(trading, include_broker=False, max_log_rows=1200):
         rows = []
     for row in rows:
         record = _daytrade_record_from_log(row)
-        if not _is_executable_daytrade_record(record):
+        if not _is_visible_daytrade_record(record):
             continue
         key = _daytrade_record_key(record)
         record_by_key[key] = _merge_daytrade_record(record_by_key.get(key), record)
 
     if include_broker:
         for record in _collect_broker_daytrade_trades(trading):
-            if not _is_executable_daytrade_record(record):
+            if not _is_visible_daytrade_record(record):
                 continue
             key = _daytrade_record_key(record)
             record_by_key[key] = _merge_daytrade_record(record_by_key.get(key), record)
@@ -811,7 +853,7 @@ def _collect_daytrade_trades(trading, include_broker=False, max_log_rows=1200):
             continue
         state_records = _daytrade_records_from_state_orders(str(state_key), state)
         for record in state_records:
-            if not _is_executable_daytrade_record(record):
+            if not _is_visible_daytrade_record(record):
                 continue
             key = _daytrade_record_key(record)
             record_by_key[key] = _merge_daytrade_record(record_by_key.get(key), record)
@@ -887,7 +929,38 @@ def _cycle_trade_record_from_row(row):
         return None
     action = _normalize_trade_action(row.get("action", ""))
     if action not in ("BUY", "SELL"):
-        return None
+        if action not in ("SKIP", "ERROR"):
+            return None
+        created = row.get("created", "")
+        timestamp = _to_kst_string(created, fmt="%Y-%m-%d %H:%M:%S") if created else str(row.get("trade_date", "") or "")
+        return {
+            "id": f"cycle-attempt:{row.get('id', '') or row.get('cycle_id', '')}:{timestamp}",
+            "timestamp": timestamp,
+            "market": "US",
+            "market_label": "미장",
+            "symbol": str(row.get("symbol", "") or "").upper(),
+            "name": str(row.get("symbol", "") or "").upper(),
+            "strategy": "무한매수",
+            "strategy_id": str(row.get("cycle_id", "") or ""),
+            "cycle_id": str(row.get("cycle_id", "") or ""),
+            "action": action,
+            "action_detail": f"INFINITE_{action}",
+            "order_type": str(row.get("order_type", "") or ""),
+            "order_no": str(row.get("broker_order_no", "") or ""),
+            "price": round(_safe_float(row.get("order_price", 0), 0), 4),
+            "qty": _safe_int(row.get("order_qty", 0), 0),
+            "amount": 0.0,
+            "realized": 0.0,
+            "matched_buy_amount": 0.0,
+            "fee": 0.0,
+            "avg_buy_price": 0.0,
+            "post_position_qty": _safe_int(row.get("total_qty_after", 0), 0),
+            "post_avg_price": round(_safe_float(row.get("avg_buy_price", 0), 0), 4),
+            "message": _sanitize_user_log_message(str(row.get("memo", "") or "주문이 체결되지 않았습니다.")),
+            "status": "REJECTED" if action in ("SKIP", "ERROR") else str(row.get("status", "") or ""),
+            "source": "cycle_trade",
+            "_sort": _daytrade_sort_key(timestamp),
+        }
     symbol = str(row.get("symbol", "") or "").upper()
     market = _daytrade_market("", symbol, "US")
     price = _safe_float(row.get("filled_price", 0), 0) or _safe_float(row.get("order_price", 0), 0)
@@ -944,6 +1017,7 @@ def _cycle_trade_record_from_row(row):
         "post_position_qty": _safe_int(row.get("total_qty_after", 0), 0),
         "post_avg_price": round(_safe_float(row.get("avg_buy_price", 0), 0), 4),
         "message": _sanitize_user_log_message(" | ".join([part for part in message_parts if part])),
+        "status": str(row.get("status", "") or "FILLED"),
         "source": "cycle_trade",
         "_sort": _daytrade_sort_key(timestamp),
     }
@@ -996,6 +1070,8 @@ def _history_empty_market_bucket():
         "buy_count": 0,
         "sell_count": 0,
         "trade_count": 0,
+        "attempt_count": 0,
+        "rejected_count": 0,
         "realized": 0.0,
         "unrealized": 0.0,
         "current_profit": 0.0,
@@ -1051,6 +1127,10 @@ def _cached_domestic_history_holdings(trading, force=False):
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
+        # First paint must never wait on the slow VTS balance endpoint. The
+        # dashboard/worker populate authoritative state and an explicit sync
+        # can refresh this cache later.
+        return None
     try:
         holdings = (trading.kis_api.get_domestic_balance() or {}).get("holdings", []) or []
         result = [dict(item or {}) for item in holdings if _safe_int((item or {}).get("qty", 0), 0) > 0]
@@ -1320,8 +1400,10 @@ def daytrade_trades():
     for row in page_rows:
         row.pop("_sort", None)
 
-    buy_rows = [r for r in filtered if r.get("action") == "BUY"]
-    sell_rows = [r for r in filtered if r.get("action") == "SELL"]
+    executed_rows = [r for r in filtered if _is_executable_daytrade_record(r)]
+    attempt_rows = [r for r in filtered if not _is_executable_daytrade_record(r)]
+    buy_rows = [r for r in executed_rows if r.get("action") == "BUY"]
+    sell_rows = [r for r in executed_rows if r.get("action") == "SELL"]
     closed_sells, unmatched_sells = _daytrade_closed_sell_components(sell_rows)
     daytrade_positions = _active_daytrade_positions(trading, market=market, symbol=symbol, search=search, force_broker=sync_broker)
     cycle_positions = _active_cycle_positions(trading, market=market, symbol=symbol, search=search)
@@ -1341,13 +1423,19 @@ def daytrade_trades():
     by_market = {}
     for key in ("KS", "US"):
         by_market[key] = _history_empty_market_bucket()
-    for row in filtered:
+    for row in executed_rows:
         row_market = "US" if str(row.get("market", "") or "").upper() == "US" else "KS"
         bucket = by_market[row_market]
         bucket["trade_count"] += 1
         if row.get("action") == "BUY":
             bucket["buy_count"] += 1
             bucket["total_buy_amount"] += _safe_float(row.get("amount", 0), 0)
+    for row in attempt_rows:
+        row_market = "US" if str(row.get("market", "") or "").upper() == "US" else "KS"
+        bucket = by_market[row_market]
+        bucket["attempt_count"] += 1
+        if str(row.get("status", "") or "").upper() in ("REJECTED", "FAILED", "BLOCKED", "EXPIRED"):
+            bucket["rejected_count"] += 1
     for item in closed_sells:
         row_market = "US" if str((item.get("row") or {}).get("market", "") or "").upper() == "US" else "KS"
         bucket = by_market[row_market]
@@ -1369,6 +1457,8 @@ def daytrade_trades():
         if any(abs(_safe_float(bucket.get(k, 0), 0)) > 1e-9 for k in ("realized", "unrealized", "current_profit", "total_buy_amount", "total_sell_amount", "open_cost_amount")) or int(bucket.get("trade_count", 0) or 0) > 0 or int(bucket.get("open_position_count", 0) or 0) > 0:
             rounded_by_market[key] = _round_history_bucket(bucket)
     summary = {
+        "attempt_count": len(attempt_rows),
+        "rejected_count": len([r for r in attempt_rows if str(r.get("status", "") or "").upper() in ("REJECTED", "FAILED", "BLOCKED", "EXPIRED")]),
         "buy_count": len(buy_rows),
         "sell_count": len(closed_sells),
         "total_sell_count": len(sell_rows),
@@ -1388,9 +1478,10 @@ def daytrade_trades():
         "realized": round(realized_total, 2),
         "unrealized": round(unrealized_total, 2),
         "current_profit": round(realized_total + unrealized_total, 2),
-        "trade_count": len(filtered),
-        "cycle_trade_count": len(cycle_rows),
-        "daytrade_trade_count": len(daytrade_rows),
+        "trade_count": len(executed_rows),
+        "record_count": len(filtered),
+        "cycle_trade_count": len([r for r in cycle_rows if _is_executable_daytrade_record(r)]),
+        "daytrade_trade_count": len([r for r in daytrade_rows if _is_executable_daytrade_record(r)]),
         "open_position_count": len(positions),
         "open_cost_amount": round(sum(_safe_float(p.get("cost_amount", 0), 0) for p in positions), 2),
         "open_eval_amount": round(open_eval_amount, 2),

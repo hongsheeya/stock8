@@ -5,6 +5,8 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
+import os
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -279,6 +281,7 @@ class TossApiTests(unittest.TestCase):
         self.assertIn("error=token_missing", diagnostic_text)
         self.assertIn("분류=앱 구현 문제", diagnostic_text)
 
+    @patch.dict(os.environ, {'TRADING_MODE': 'LIVE'})
     def test_connection_success_continues_to_accounts_and_reports_diagnostics(self):
         struct = _StructStub()
         struct._toss_credential_source = "screen"

@@ -1,11 +1,11 @@
 # Domestic Daytrade Optimization Report
 
-- Generated: 2026-06-11 04:17:26
-- Symbol: IONQ
+- Generated: 2026-10-03 00:35:22
+- Symbol: ARM
 - Market: US
 - Strategy: US 프리마켓 갭업 하따
 - Period/Interval: 10d / 5m
-- Seed: 1,000,000
+- Seed: 8,009,949
 
 ## Selection Criteria
 - Score: summary_score*0.45 + robustness_score*0.35 + graph_stability_score*0.20
@@ -20,22 +20,22 @@
 - Exit: 고점 대비 -20% 또는 진입가 대비 -8% 손절
 
 ## Best Candidate
-- Total Return: 4.2483%
-- Total Profit: 42482.54
+- Total Return: 2.123%
+- Total Profit: 170054.56
 - Win Rate: 10.0%
 - Max Drawdown: 0.0%
-- Avg Trades/Day: 0.6
-- Profit Factor: 4.6931
-- Fee Total: 22498.48
-- Avg Holding Minutes: 7.5
-- Score: 7.0323
+- Avg Trades/Day: 0.2
+- Profit Factor: 170054.56
+- Fee Total: 60332.85
+- Avg Holding Minutes: 2.5
+- Score: 5.4504
 
 ## Validation
 - Train/Test Split: 5:5
-- Robustness Score: 3.7039
-- Overfit Gap: 4.2483
-- Graph Stability Score: -0.5242
-- Graph Holdout Avg Return: 0.0%
+- Robustness Score: 3.6509
+- Overfit Gap: 2.123
+- Graph Stability Score: 2.6223
+- Graph Holdout Avg Return: 1.0615%
 - Graph Negative Fold Ratio: 0.0
 
 ## Best Parameters
@@ -48,7 +48,7 @@
 - entry_drawdown_min_pct: 0.0
 - high_stop_pct: 20.0
 - jackpot2_take_profit_pct: 5.0
-- jackpot_take_profit_pct: 2.5
+- jackpot_take_profit_pct: 4.0
 - ma_fast: 5
 - ma_slow: 20
 - max_live_day_range_pct: 30.0
@@ -57,7 +57,7 @@
 - min_change_pct: 5.0
 - min_prior_surge_pct: 10.0
 - min_volume_usd: 2000000
-- premarket_gap_min_pct: 2.5
+- premarket_gap_min_pct: 4.0
 - rsi_period: 14
 - sec_fee_per_million_usd: 8.0
 - sell_commission_bps: 25.0
@@ -66,8 +66,8 @@
 - stop_loss_pct: 3.0
 
 ## Top Candidates
-1. strategy=us_premarket selection=4.3561, score=7.0323, return=4.2483%, mdd=0.0%, robust=3.7039
-2. strategy=us_premarket selection=4.3561, score=7.0323, return=4.2483%, mdd=0.0%, robust=3.7039
-3. strategy=us_premarket selection=4.3561, score=7.0323, return=4.2483%, mdd=0.0%, robust=3.7039
-4. strategy=us_premarket selection=4.3561, score=7.0323, return=4.2483%, mdd=0.0%, robust=3.7039
-5. strategy=us_premarket selection=4.3561, score=7.0323, return=4.2483%, mdd=0.0%, robust=3.7039
+1. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
+2. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
+3. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
+4. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
+5. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509

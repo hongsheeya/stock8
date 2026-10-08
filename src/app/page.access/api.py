@@ -1,7 +1,10 @@
+import os
 import re
 
 session = wiz.model("portal/season/session").use()
 struct = wiz.model("struct")
+_PAPER_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER"
+_LOCAL_PREVIEW_EMAIL = "paper-preview@stock8.local"
 
 def _normalize_email(email):
     return str(email or "").strip().lower()
@@ -63,7 +66,11 @@ def signup():
     if len(password) < 8:
         wiz.response.status(400, message="비밀번호는 8자 이상이어야 합니다.")
 
-    role = "admin" if struct.user.count() == 0 else "user"
+    user_count = struct.user.count()
+    preview_user = db.get(email=_LOCAL_PREVIEW_EMAIL) if _PAPER_MODE else None
+    # The local smoke-test account must not consume the first real admin slot.
+    real_user_count = max(0, user_count - (1 if preview_user else 0))
+    role = "admin" if real_user_count == 0 else "user"
 
     try:
         user_id = struct.user.create(dict(
@@ -97,7 +104,10 @@ def find_id():
 
     email = struct.user.find_email(name, mobile)
     if not email:
-        wiz.response.status(404, message="일치하는 회원 정보를 찾지 못했습니다.")
+        wiz.response.status(
+            404,
+            message="현재 연결된 사용자 DB에서 계정을 찾지 못했습니다. 이전 서버 DB를 복구하지 않았다면 새로 회원가입해주세요.",
+        )
 
     wiz.response.status(200, email=email, masked_email=_mask_email(email), message="가입된 아이디를 찾았습니다.")
 
@@ -122,3 +132,5 @@ def reset_password():
         wiz.response.status(404, message="일치하는 회원 정보를 찾지 못했습니다.")
 
     wiz.response.status(200, message="비밀번호를 재설정했습니다. 새 비밀번호로 로그인해주세요.")
+def account_context():
+    wiz.response.status(200, wiz.model("portal/trading/account_context").context())

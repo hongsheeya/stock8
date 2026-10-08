@@ -10,6 +10,7 @@ import time
 import threading
 import re
 import base64
+import os
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -440,6 +441,12 @@ class TossApi:
         return lines
 
     def _request(self, method, path, params=None, body=None, account_required=False, retries=1):
+        # Non-KIS brokers must obey the same account boundary and order consent.
+        if os.environ.get('TRADING_MODE', 'PAPER').upper() != 'LIVE':
+            raise RuntimeError('모의투자 계정에서 실투자 브로커를 호출할 수 없습니다.')
+        if method.upper() != 'GET':
+            self.struct.order_policy.assert_order((body or {}).get('symbol', ''))
+            retries = 0
         if requests is None:
             raise Exception("requests 패키지가 설치되어 있지 않습니다.")
         url = f"{BASE_URL}{path}"
@@ -453,6 +460,7 @@ class TossApi:
                     resp = requests.get(url, headers=headers, params=params, timeout=10)
                 else:
                     headers["Content-Type"] = "application/json"
+                    self.struct.order_policy.assert_order((body or {}).get('symbol', ''))
                     resp = requests.post(url, headers=headers, json=body or {}, timeout=10)
                 data, code, message = self._response_error_fields(resp)
                 self._record_api_debug(method, path, resp=resp, code=code, message=message, account_required=account_required)

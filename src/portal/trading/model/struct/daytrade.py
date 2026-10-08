@@ -5,6 +5,7 @@ import datetime
 import itertools
 import json
 import math
+import os
 import subprocess
 import sys
 import time as _time
@@ -23,9 +24,22 @@ def _kst_model():
 
 
 class Daytrade:
+    PAPER_STRATEGIES = {
+        'paper_selective_breakout': {'id': 'paper_selective_breakout', 'name': '모의 검증 · 거래량 돌파',
+            'summary': '확정 5분봉 추세·거래량 필터, 하루 1회, 추가매수 없음', 'market': 'KS',
+            'live_supported': False, 'paper_only': True},
+        'paper_selective_pullback': {'id': 'paper_selective_pullback', 'name': '모의 검증 · 눌림목 재진입',
+            'summary': 'EMA20 재돌파, 하루 1회, 손절·목표·시간 청산', 'market': 'KS',
+            'live_supported': False, 'paper_only': True},
+    }
     # 클래스 레벨 TTL 캐시: (symbol, period, interval) → (ts, data)
     _DATASET_CACHE: dict = {}
     _DATASET_CACHE_TTL: int = 180
+    _DYNAMIC_UNIVERSE_CACHE = {"ts": 0.0, "rows": [], "market_regime": {}}
+    _DYNAMIC_UNIVERSE_TTL = 300
+    _US_DYNAMIC_CACHE = {}
+    US_EXCLUDED_ETFS = {'TQQQ', 'SOXL', 'SPXL', 'UPRO', 'SPY', 'QQQ', 'IWM'}
+    US_MAJOR_SYMBOLS = {'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'AVGO', 'TSLA', 'TSM'}
     STRATEGIES = {
         "vrev": {
             "id": "vrev",
@@ -191,6 +205,20 @@ class Daytrade:
         {"symbol": "005830", "market": "KS", "name": "DB손해보험"},
         {"symbol": "000810", "market": "KS", "name": "삼성화재"},
         {"symbol": "139480", "market": "KS", "name": "이마트"},
+    ]
+
+    # Directional ETFs are kept in the bounded research universe so the
+    # strategy can express a bearish view instead of repeatedly forcing a long
+    # KOSDAQ stock entry. They still have to pass the same backtest/quality and
+    # live-price evidence gates as every other PAPER order.
+    KR_REGIME_ETFS = [
+        {"symbol": "069500", "market": "KS", "name": "KODEX 200", "regime_side": "BROAD"},
+        {"symbol": "229200", "market": "KS", "name": "KODEX 코스닥150", "regime_side": "BROAD"},
+        {"symbol": "114800", "market": "KS", "name": "KODEX 인버스", "regime_side": "BEAR", "leverage": -1},
+        {"symbol": "252670", "market": "KS", "name": "KODEX 200선물인버스2X", "regime_side": "BEAR", "leverage": -2},
+        {"symbol": "251340", "market": "KS", "name": "KODEX 코스닥150선물인버스", "regime_side": "BEAR", "leverage": -1},
+        {"symbol": "122630", "market": "KS", "name": "KODEX 레버리지", "regime_side": "BULL", "leverage": 2},
+        {"symbol": "233740", "market": "KS", "name": "KODEX 코스닥150레버리지", "regime_side": "BULL", "leverage": 2},
     ]
 
     DEFAULT_PROFILE = {
@@ -374,16 +402,21 @@ class Daytrade:
         }
 
     def strategy_options(self):
-        return [dict(item) for item in self.STRATEGIES.values()]
+        options = [dict(item) for item in self.STRATEGIES.values()]
+        if os.environ.get('TRADING_MODE', 'PAPER').upper() == 'PAPER':
+            options.extend(dict(item) for item in self.PAPER_STRATEGIES.values())
+        return options
 
     def _normalize_strategy(self, strategy_id):
         strategy_id = str(strategy_id or "vrev").strip().lower()
-        if strategy_id not in self.STRATEGIES:
+        if strategy_id not in self.STRATEGIES and strategy_id not in self.PAPER_STRATEGIES:
             return "vrev"
         return strategy_id
 
     def strategy_spec(self, strategy_id="vrev"):
         strategy_id = self._normalize_strategy(strategy_id)
+        if strategy_id in self.PAPER_STRATEGIES:
+            return dict(self.PAPER_STRATEGIES[strategy_id])
         return dict(self.STRATEGIES.get(strategy_id, self.STRATEGIES["vrev"]))
 
     def _learned_candidate_universe(self, market="KS"):
@@ -461,30 +494,273 @@ class Daytrade:
     def candidate_universe(self, market="KS"):
         if str(market).upper() == "US":
             return self.us_candidate_universe()
-        rows = [dict(item) for item in self.DEFAULT_CANDIDATES]
-        seen = set(str(item.get("symbol", "") or "").strip().upper() for item in rows)
+        # Keep a compact set of liquid anchors, then fill the range with the
+        # current session's turnover/volume movers. This avoids training all
+        # 50+ static names while still discovering non-mega-cap momentum.
+        anchor_limit = max(8, min(16, self._safe_int(self._config("daytrade_ks_anchor_count", "12"), 12)))
+        # Rotate a diversified fallback when PAPER ranking APIs are unavailable.
+        # Keeping index ETFs first permanently starved individual stocks when
+        # the engine selected only the first five candidates.
+        offset = int(_time.time() // 300) % max(1, len(self.DEFAULT_CANDIDATES))
+        rotated = self.DEFAULT_CANDIDATES[offset:] + self.DEFAULT_CANDIDATES[:offset]
+        dynamic = [dict(item) for item in self._DYNAMIC_UNIVERSE_CACHE.get("rows", []) if not item.get("upper_limit_watch_only")]
+        rows = dynamic[:12]
+        rows.extend(dict(item) for item in rotated[:anchor_limit])
+        rows.extend(dict(item) for item in self.KR_REGIME_ETFS)
+        unique_rows = []
+        seen = set()
+        for item in rows:
+            symbol = str(item.get("symbol", "") or "").strip().upper()
+            if symbol and symbol not in seen:
+                unique_rows.append(item)
+                seen.add(symbol)
+        rows = unique_rows
+        for item in list(self._DYNAMIC_UNIVERSE_CACHE.get("rows", []) or []):
+            symbol = str(item.get("symbol", "") or "").strip().upper()
+            if symbol == "" or symbol in seen or item.get("upper_limit_watch_only"):
+                continue
+            rows.append(dict(item))
+            seen.add(symbol)
         for item in self._learned_candidate_universe(market=market):
             symbol = str(item.get("symbol", "") or "").strip().upper()
             if symbol == "" or symbol in seen:
                 continue
             rows.append(dict(item))
             seen.add(symbol)
-        return rows
+        max_count = max(anchor_limit, min(40, self._safe_int(self._config("daytrade_ks_universe_max", "32"), 32)))
+        return rows[:max_count]
+
+    def _classify_domestic_market_regime(self, source_rows):
+        changes = []
+        for row in list(source_rows or []):
+            value = None
+            for key in ("prdy_ctrt", "prdy_vrss_rt", "change_rate"):
+                if row.get(key) not in (None, ""):
+                    value = self._safe_float(row.get(key), 0)
+                    break
+            if value is not None and -30 <= value <= 30:
+                changes.append(value)
+        if len(changes) < 8:
+            return {
+                "regime": "NEUTRAL",
+                "sample_count": len(changes),
+                "advancing_ratio": 0.0,
+                "avg_change_pct": 0.0,
+                "median_change_pct": 0.0,
+                "reason": "시장 폭 표본 부족 — 방향성 상품 신규 진입 보류",
+            }
+        ordered = sorted(changes)
+        middle = len(ordered) // 2
+        median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+        avg_change = sum(changes) / len(changes)
+        advancing_ratio = len([value for value in changes if value > 0]) / len(changes)
+        regime = "NEUTRAL"
+        if advancing_ratio <= 0.35 and median <= -0.8 and avg_change <= -0.5:
+            regime = "RISK_OFF"
+        elif advancing_ratio >= 0.65 and median >= 0.8 and avg_change >= 0.5:
+            regime = "RISK_ON"
+        reason = (
+            f"거래량 상위 {len(changes)}종목 중 상승 비율 {advancing_ratio * 100:.0f}% · "
+            f"등락률 중앙값 {median:+.2f}% · 평균 {avg_change:+.2f}%"
+        )
+        return {
+            "regime": regime,
+            "sample_count": len(changes),
+            "advancing_ratio": round(advancing_ratio, 4),
+            "avg_change_pct": round(avg_change, 4),
+            "median_change_pct": round(median, 4),
+            "reason": reason,
+        }
+
+    def market_regime_snapshot(self):
+        snapshot = self._DYNAMIC_UNIVERSE_CACHE.get("market_regime", {}) or {}
+        if snapshot:
+            return dict(snapshot)
+        return self._classify_domestic_market_regime([])
+
+    def refresh_dynamic_candidate_universe(self, force=False):
+        """Refresh the KR universe from KIS liquidity and momentum rankings."""
+        cache = self._DYNAMIC_UNIVERSE_CACHE
+        age = _time.monotonic() - self._safe_float(cache.get("ts", 0), 0)
+        if not force and cache.get("rows") and age < self._DYNAMIC_UNIVERSE_TTL:
+            return [dict(item) for item in cache.get("rows", [])]
+
+        min_price = max(500, self._safe_int(self._config("daytrade_ks_universe_min_price", "1000"), 1000))
+        max_price = max(min_price, self._safe_int(self._config("daytrade_ks_universe_max_price", "300000"), 300000))
+        min_volume = max(100000, self._safe_int(self._config("daytrade_ks_universe_min_volume", "300000"), 300000))
+        min_turnover = max(0.0, self._safe_float(self._config("daytrade_ks_universe_min_turnover_krw", "3000000000"), 3000000000))
+        kis = self.struct.kis_api
+        liquidity = kis.get_domestic_volume_rank(min_price=min_price, max_price=max_price, min_volume=min_volume)
+        try:
+            momentum = kis.get_domestic_fluctuation_rank(
+                min_price=min_price,
+                max_price=max_price,
+                min_volume=min_volume,
+                min_change=2.0,
+                max_change=29.4,
+                count=30,
+            )
+        except Exception:
+            momentum = []
+
+        def first(row, keys, default=""):
+            for key in keys:
+                value = row.get(key)
+                if value not in (None, ""):
+                    return value
+            return default
+
+        cache["market_regime"] = self._classify_domestic_market_regime(liquidity)
+
+        excluded_name_tokens = ("스팩", "SPAC", "ETN", " ETF", "우B", "우C")
+        merged = {}
+        for source, source_rows in (("liquidity", liquidity), ("momentum", momentum)):
+            for rank, raw in enumerate(source_rows or [], start=1):
+                symbol = str(first(raw, ("mksc_shrn_iscd", "stck_shrn_iscd", "code"))).strip().upper()
+                name = str(first(raw, ("hts_kor_isnm", "stck_kor_isnm", "name"), symbol)).strip()
+                if len(symbol) != 6 or not symbol.isdigit() or any(token in name for token in excluded_name_tokens):
+                    continue
+                price = self._safe_float(first(raw, ("stck_prpr", "last_price", "price"), 0), 0)
+                volume = self._safe_int(first(raw, ("acml_vol", "volume"), 0), 0)
+                turnover = self._safe_float(first(raw, ("acml_tr_pbmn", "avrg_tr_pbmn", "turnover"), 0), 0)
+                change_pct = self._safe_float(first(raw, ("prdy_ctrt", "prdy_vrss_rt", "change_rate"), 0), 0)
+                if price and not min_price <= price <= max_price:
+                    continue
+                if volume and volume < min_volume:
+                    continue
+                if turnover and turnover < min_turnover:
+                    continue
+                item = merged.setdefault(symbol, {
+                    "symbol": symbol,
+                    "market": "KS",
+                    "name": name or symbol,
+                    "last_price": price,
+                    "volume": volume,
+                    "turnover_krw": turnover,
+                    "change_pct": change_pct,
+                    "liquidity_rank": 999,
+                    "momentum_rank": 999,
+                    "source": "kis_dynamic_universe",
+                })
+                item[f"{source}_rank"] = min(item.get(f"{source}_rank", 999), rank)
+                item["last_price"] = max(item.get("last_price", 0), price)
+                item["volume"] = max(item.get("volume", 0), volume)
+                item["turnover_krw"] = max(item.get("turnover_krw", 0), turnover)
+                if source == "momentum":
+                    item["change_pct"] = change_pct
+
+        for item in merged.values():
+            liq_rank = self._safe_int(item.get("liquidity_rank", 999), 999)
+            mom_rank = self._safe_int(item.get("momentum_rank", 999), 999)
+            change_pct = self._safe_float(item.get("change_pct", 0), 0)
+            liq_score = max(0.0, 36.0 - min(liq_rank, 36)) if liq_rank < 999 else 0.0
+            mom_score = max(0.0, 32.0 - min(mom_rank, 32)) if mom_rank < 999 else 0.0
+            # Surface near-limit movers for observation but avoid chasing the
+            # exact ±30% boundary with a market order.
+            chase_penalty = 25.0 if change_pct >= 28.5 else 0.0
+            item["universe_score"] = round((liq_score * 1.4) + (mom_score * 1.7) + min(max(change_pct, 0), 15) - chase_penalty, 3)
+            item["strategy_id"] = "volume_breakout" if change_pct >= 2.0 else "vrev"
+            item["upper_limit_watch_only"] = change_pct >= 28.5
+
+        rows = sorted(merged.values(), key=lambda item: item.get("universe_score", 0), reverse=True)
+        limit = max(12, min(28, self._safe_int(self._config("daytrade_ks_dynamic_count", "20"), 20)))
+        cache["rows"] = rows[:limit]
+        cache["ts"] = _time.monotonic()
+        return [dict(item) for item in cache["rows"]]
 
     def us_candidate_universe(self):
-        return [dict(item) for item in self.US_DEFAULT_CANDIDATES]
+        # Infinite-buy ETFs must not be seeded as routine daytrade candidates.
+        # This is an entry-universe filter, never a restriction on position exits.
+        cache = self._US_DYNAMIC_CACHE.get(self._us_scope(), {})
+        if cache.get('rows') and _time.monotonic() - cache.get('ts', 0) < 600:
+            return [dict(item) for item in cache['rows']]
+        return [dict(item, source='curated_fallback') for item in self.US_DEFAULT_CANDIDATES if item['symbol'] not in self.US_EXCLUDED_ETFS]
+
+    def _us_scope(self):
+        # Market-data cache only; never share authentication or account holdings.
+        return str(self._config('kis_is_real', 'false')).lower()
+
+    def daytrade_entry_issue(self, symbol):
+        symbol = str(symbol or '').strip().upper()
+        if symbol in self.US_EXCLUDED_ETFS:
+            return '무한매수·지수 ETF는 일반 단타 신규 매수에서 제외합니다.'
+        try:
+            cycles = self.struct.db('trading_cycle')
+            for status in ('ACTIVE', 'HOLDING', 'PAUSED', 'PENDING_EXTENSION'):
+                if cycles.get(symbol=symbol, status=status):
+                    return '무한매수 사이클이 있는 종목입니다. 전략 간 보유 수량 혼합을 방지하기 위해 단타 신규 매수를 차단합니다.'
+        except Exception:
+            return '무한매수 운용 종목을 확인하지 못해 단타 신규 매수를 보류합니다.'
+        return ''
+
+    def _us_momentum_candidate(self, row, exchange):
+        symbol = str(row.get('symb', '')).strip().upper()
+        name = str(row.get('knam') or row.get('name') or row.get('enam') or symbol)
+        price = self._safe_float(row.get('last'), 0)
+        volume = self._safe_float(row.get('tvol'), 0)
+        turnover = self._safe_float(row.get('tamt'), 0)
+        change = self._safe_float(row.get('rate'), 0)
+        momentum = self._safe_float(row.get('n_rate'), 0)
+        bid, ask = self._safe_float(row.get('pbid'), 0), self._safe_float(row.get('pask'), 0)
+        if not symbol or not symbol.replace('.', '').replace('-', '').isalnum():
+            return None
+        if symbol in self.US_EXCLUDED_ETFS or any(word in name.upper() for word in ('ETF', 'DIREXION', 'PROSHARES', 'ISHARES', 'LEVERAG', 'ETN')):
+            return None
+        if str(row.get('e_ordyn', '')).upper() != 'Y':
+            return None
+        if not (2 <= price <= 2000 and volume >= 300000 and turnover >= 2000000 and 5 <= change <= 45 and momentum > 0):
+            return None
+        if bid <= 0 or ask < bid or (ask - bid) / bid * 100 > 0.8:
+            return None
+        if symbol in self.US_MAJOR_SYMBOLS and (change < 8 or momentum < 1):
+            return None
+        return {'symbol': symbol, 'name': name, 'market': 'US', 'exchange': {'NAS': 'NASD', 'NYS': 'NYSE', 'AMS': 'AMEX'}[exchange],
+                'source': 'kis_momentum_rank', 'price': price, 'volume': volume, 'turnover_usd': turnover,
+                'change_pct': change, 'momentum_5m_pct': momentum, 'spread_pct': round((ask-bid)/bid*100, 3),
+                'selection_reason': f'등락 {change:.1f}% · 5분 {momentum:.1f}% · 거래량 {volume:,.0f}주 · 거래대금 ${turnover:,.0f}',
+                'trade_ready': False}
+
+    def refresh_us_dynamic_candidate_universe(self, force=False):
+        scope = self._us_scope()
+        cached = self._US_DYNAMIC_CACHE.get(scope, {})
+        if not force and _time.monotonic() - cached.get('attempt_ts', 0) < 300:
+            return self.us_candidate_universe()
+        cached['attempt_ts'] = _time.monotonic()
+        self._US_DYNAMIC_CACHE[scope] = cached
+        rows, errors = {}, []
+        for exchange in ('NAS', 'NYS', 'AMS'):
+            try:
+                with self.struct.kis_api.request_options(timeout=3, retries=0):
+                    raw = self.struct.kis_api.get_us_momentum_rank(exchange)
+                for row in raw:
+                    item = self._us_momentum_candidate(row, exchange)
+                    if item:
+                        rows[item['symbol']] = item
+            except Exception:
+                errors.append(exchange)
+        cached.update(ts=_time.monotonic(), errors=errors,
+                      rows=sorted(rows.values(), key=lambda x: (x['momentum_5m_pct'], x['turnover_usd']), reverse=True)[:30])
+        return self.us_candidate_universe()
 
     def us_candidate_universe_policy(self):
+        cache = self._US_DYNAMIC_CACHE.get(self._us_scope(), {})
+        age = max(0, _time.monotonic() - cache.get('ts', 0)) if cache.get('ts') else None
+        ready = bool(cache.get('rows')) and age is not None and age < 600
         return {
-            "mode": "curated_whitelist",
-            "summary": "실시간 계산 비용과 오탐을 줄이기 위해 전체 미국시장 스캐너 대신 유동성·변동성 상위의 선별 화이트리스트를 기본 유니버스로 사용합니다.",
+            'dynamic_ready': ready,
+            'scan_age_seconds': round(age) if age is not None else None,
+            'unavailable_exchanges': list(cache.get('errors', [])),
+            'source_label': 'KIS 급등 순위' if ready else '기본 목록 · 실시간 급등 후보 아님',
+            "mode": "kis_momentum_with_fallback",
+            "summary": "추천 갱신 시 NASDAQ·NYSE·AMEX 급등 순위를 조회합니다. 조회 실패·조건 미달 시 기본 개별주 목록을 표시하며, 후보 선정만으로 주문하지 않습니다.",
             "selection_rules": [
-                "KIS 실시간 조회가 안정적인 대형주/레버리지 ETF/반도체·AI 리더 중심으로 우선 선별",
+                "개별주를 탐색하며 무한매수 ETF와 지수 ETF는 기본 단타 후보에서 제외",
                 "검증 수익률·손익비·유동성·과최적화·추세정합 품질 게이트를 통과한 종목만 실전 후보로 채택",
-                "전체 시장 급등주 스캔은 아직 자동화되지 않아 직접 검색으로 보완",
+                "주가 $2 이상, 거래량 30만주·거래대금 $200만 이상, 일중 +5~45%, 양의 5분 상승률, 호가 간격 0.8% 이하",
+                "주요 대형주는 일중 +8%·5분 +1% 이상 추가 확인. 실제 진입은 별도의 전략·잠금·주문 근거 검증 필요",
             ],
             "allow_manual_search": True,
-            "candidate_count": len(self.US_DEFAULT_CANDIDATES),
+            "candidate_count": len(self.us_candidate_universe()),
         }
 
     def us_strategy_options(self):
@@ -630,7 +906,11 @@ class Daytrade:
         return f"{base}/{name}" if name else base
 
     def _data_path(self, name=""):
-        base = "data/daytrade"
+        import os
+        mode = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+        base = "data/paper/daytrade" if mode == "PAPER" else "data/live/daytrade"
+        if mode == 'LIVE':
+            base += '/' + self.struct.live_data_scope
         return f"{base}/{name}" if name else base
 
     def _market_scope(self, market="KS"):
@@ -888,6 +1168,8 @@ class Daytrade:
                     data["peer_comparison"] = [x for x in data.get("peer_comparison", []) if str(x.get("strategy_id", "") or "").strip().lower() in self.STRATEGIES]
                 if max_age_sec > 0:
                     generated_at = str(data.get("generated_at", "") or "").strip()
+                    if not generated_at:
+                        continue
                     if generated_at:
                         try:
                             generated_dt = datetime.datetime.strptime(generated_at, "%Y-%m-%d %H:%M:%S")
@@ -895,7 +1177,7 @@ class Daytrade:
                             if age_sec > max_age_sec:
                                 continue
                         except Exception:
-                            pass
+                            continue
                 gen = data.get("generated_date", "")
                 today = self._now().strftime("%Y-%m-%d")
                 if allow_stale_day is False and gen != today:
@@ -1528,6 +1810,8 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         return summary
 
     def _simulate_vrev_session(self, session, seed, profile=None):
+        # Session-only research model: confirmed-bar signals execute on the
+        # following open. This is NOT a replay of live carry/limit-order logic.
         profile = {**self.DEFAULT_PROFILE, **(profile or {})}
         anchor = self._safe_float(session.get("prev_close", 0))
         bars = session.get("bars", [])
@@ -1539,25 +1823,33 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         equity_curve = []
         buy1_used = False
         buy2_used = False
+        stopped_for_day = False
         holding_minutes = 0
-        for bar in bars:
-            price = self._safe_float(bar.get("close", 0))
-            if price <= 0:
+        for bar_index, execution_bar in enumerate(bars):
+            if bar_index == 0:
+                equity_curve.append(round(seed, 2))
                 continue
-            regime = self._regime(bar, profile)
-            timestamp = bar.get("timestamp", "")
-            exec_buy_price = min(price, self._safe_float(bar.get("vwap", price))) if regime == "SIDEWAYS" else price
+            bar = bars[bar_index - 1]
+            price = self._safe_float(bar.get("close", 0))
+            execution_price = self._safe_float(execution_bar.get("open", 0))
+            if price <= 0 or execution_price <= 0:
+                continue
+            timestamp = execution_bar.get("timestamp", "")
+            exec_buy_price = execution_price
+            entered_this_bar = False
             entry_issues = self.vrev_entry_issues(bar, profile)
-            if buy1_used == False and price <= anchor * (1 + self._safe_float(profile.get("buy_trigger_1_pct", -0.5)) / 100) and len(entry_issues) == 0:
-                qty = self._chunk_qty(buy_budget, exec_buy_price)
+            if not stopped_for_day and bar_index < len(bars) - 1 and buy1_used == False and price <= anchor * (1 + self._safe_float(profile.get("buy_trigger_1_pct", -0.5)) / 100) and len(entry_issues) == 0:
+                unit_cost = exec_buy_price + self._trade_cost(exec_buy_price, profile)
+                qty = self._chunk_qty(min(buy_budget, max(0, seed + realized)), unit_cost)
                 if qty > 0:
                     self._append_buy_lot(lots, qty, exec_buy_price, "BUY1", timestamp, trades, profile, reason="Buy dip entry")
                     buy1_used = True
                     buy2_used = True  # 단일 진입 모드: BUY2 비활성화
+                    entered_this_bar = True
             total_qty = sum(int(x.get("qty", 0)) for x in lots)
             total_cost = sum(int(x.get("qty", 0)) * self._safe_float(x.get("price", 0)) for x in lots)
             avg_price = total_cost / total_qty if total_qty > 0 else 0
-            if total_qty > 0:
+            if total_qty > 0 and not entered_this_bar:
                 holding_minutes += 1
                 jackpot_pct_sim = self._safe_float(profile.get("jackpot_take_profit_pct", 2.0))
                 jackpot = avg_price * (1 + jackpot_pct_sim / 100)
@@ -1567,27 +1859,28 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 bb_upper_val = self._safe_float(bar.get("bb_upper", 0), 0)
                 if stop_loss_pct_sim > 0 and price < avg_price * (1 - stop_loss_pct_sim / 100):
                     # 자동 손절 (최우선)
-                    sold = self._lifo_sell(lots, total_qty, price, timestamp, "Auto stop loss", trades, profile)
+                    sold = self._lifo_sell(lots, total_qty, execution_price, timestamp, "Auto stop loss", trades, profile)
                     realized += sold["pnl"]
+                    stopped_for_day = bool(profile.get("stop_reentry_same_day_block", True))
                     buy1_used = False
                     buy2_used = False
                 elif price >= jackpot:
                     # 목표 수익률 도달 → 전량 익절
-                    sold = self._lifo_sell(lots, total_qty, price, timestamp, "Jackpot sweep", trades, profile)
+                    sold = self._lifo_sell(lots, total_qty, execution_price, timestamp, "Jackpot sweep", trades, profile)
                     realized += sold["pnl"]
                     if sum(int(x.get("qty", 0)) for x in lots) == 0:
                         buy1_used = False
                         buy2_used = False
                 elif bb_upper_val > 0 and price >= bb_upper_val and price >= avg_price:
                     # BB 상단 저항 도달 → 전량 익절
-                    sold = self._lifo_sell(lots, total_qty, price, timestamp, "BB upper exit", trades, profile)
+                    sold = self._lifo_sell(lots, total_qty, execution_price, timestamp, "BB upper exit", trades, profile)
                     realized += sold["pnl"]
                     if sum(int(x.get("qty", 0)) for x in lots) == 0:
                         buy1_used = False
                         buy2_used = False
                 elif rsi_live >= rsi_exit_overbought and price >= avg_price:
                     # RSI 과매수 구간 → 전량 익절
-                    sold = self._lifo_sell(lots, total_qty, price, timestamp, f"RSI {rsi_live:.0f} overbought exit", trades, profile)
+                    sold = self._lifo_sell(lots, total_qty, execution_price, timestamp, f"RSI {rsi_live:.0f} overbought exit", trades, profile)
                     realized += sold["pnl"]
                     if sum(int(x.get("qty", 0)) for x in lots) == 0:
                         buy1_used = False
@@ -1597,26 +1890,31 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                     recent_target = anchor * (1 + self._safe_float(profile.get("recent_lot_take_profit_pct", 0.6)) / 100)
                     rescue_target = avg_price * (1 + self._safe_float(profile.get("rescue_take_profit_pct", 0.5)) / 100)
                     if price >= recent_target:
-                        sold = self._lifo_sell(lots, self._chunk_qty(chunk_budget, price), price, timestamp, "Take profit", trades, profile)
+                        sold = self._lifo_sell(lots, self._chunk_qty(chunk_budget, price), execution_price, timestamp, "Take profit", trades, profile)
                         realized += sold["pnl"]
                         if sum(int(x.get("qty", 0)) for x in lots) == 0:
                             buy1_used = False
                             buy2_used = False
                     elif price >= rescue_target and len(lots) >= 2:
-                        sold = self._lifo_sell(lots, self._chunk_qty(chunk_budget, price), price, timestamp, "Rescue exit", trades, profile)
+                        sold = self._lifo_sell(lots, self._chunk_qty(chunk_budget, price), execution_price, timestamp, "Rescue exit", trades, profile)
                         realized += sold["pnl"]
                         if sum(int(x.get("qty", 0)) for x in lots) == 0:
                             buy1_used = False
                             buy2_used = False
             mtm_qty = sum(int(x.get("qty", 0)) for x in lots)
             mtm_cost = sum(int(x.get("qty", 0)) * self._safe_float(x.get("price", 0), 0) for x in lots)
-            equity_curve.append(round(seed + realized + (mtm_qty * price - mtm_cost), 2))
+            mark = self._safe_float(execution_bar.get("close", execution_price), execution_price)
+            equity_curve.append(round(seed + realized + (mtm_qty * mark - self._trade_cost(mtm_qty * mark, profile, is_sell=True) - mtm_cost), 2))
         if len(bars) > 0 and len(lots) > 0:
             last_price = self._safe_float(bars[-1].get("close", 0))
             sold = self._lifo_sell(lots, sum(int(x.get("qty", 0)) for x in lots), last_price, bars[-1].get("timestamp", ""), "End-of-day flat close", trades, profile)
             realized += sold["pnl"]
             equity_curve.append(round(seed + realized, 2))
-        return self._summarize_session(session, seed, trades, realized, equity_curve, "vrev", self._event_filter_snapshot("", "KS"), holding_minutes=holding_minutes)
+        result = self._summarize_session(session, seed, trades, realized, equity_curve, "vrev", self._event_filter_snapshot("", "KS"), holding_minutes=holding_minutes)
+        result["execution_model"] = "confirmed_close_to_next_open; scheduled_day_close"
+        result["live_parity_verified"] = False
+        result["limitations"] = ["Session-only: live overnight carry, order queues and partial fills are not replayed"]
+        return result
 
     def _simulate_volume_breakout_session(self, session, seed, profile=None):
         profile = {**self.DEFAULT_PROFILE, **(profile or {})}
@@ -2049,6 +2347,8 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
 
     def simulate_session(self, session, seed, profile=None, strategy_id="vrev"):
         strategy_id = self._normalize_strategy(strategy_id)
+        if strategy_id in self.PAPER_STRATEGIES:
+            raise ValueError('모의 검증 전략은 단일 세션 학습 대상이 아닙니다. 전용 전략 검증기를 사용하세요.')
         profile = {**self._default_profile_for_market("US" if strategy_id.startswith("us_") else "KS", strategy_id=strategy_id), **(profile or {})}
         if strategy_id == "vrev":
             return self._simulate_vrev_session(session, seed, profile=profile)
@@ -2429,9 +2729,9 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
             cached_market = str(cached.get("selected", {}).get("market", "KS") if cached else "KS").upper()
             if cached and cached_strategy and cached_market == market and (strategy_id == "" or cached_strategy == self._normalize_strategy(strategy_id)):
                 return cached
-            relaxed_cached = self.latest_recommendation(allow_stale_day=True, market=market)
-            if relaxed_cached:
-                return self._recommendation_price_filter(relaxed_cached, strategy_id=strategy_id, price_cap=price_cap, market=market)
+            # A display-only stale result must not short-circuit retraining.
+            # Otherwise yesterday's failed candidates survive forever even
+            # when the worker explicitly requests an hourly refresh.
         try:
             return self.auto_train(seed=training_seed, requested_seed=requested_seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
         except Exception as e:
@@ -2453,6 +2753,13 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         defaults = self.us_defaults() if is_us_market else self.defaults()
         seed = self._normalized_seed(seed, defaults.get("seed"))
         requested_seed = self._normalized_seed(requested_seed or seed, seed)
+        if not is_us_market:
+            try:
+                self.refresh_dynamic_candidate_universe(force=True)
+            except Exception:
+                pass
+        else:
+            self.refresh_us_dynamic_candidate_universe()
         candidates = self.candidate_universe(market=market)
         training_defaults = self.recommendation_training_defaults()
         period = training_defaults.get("period", "10d")
@@ -2693,6 +3000,10 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                         "liquidity_score": round(self._safe_float(volatility.get("liquidity_score", 0), 0), 4),
                         "tradability_score": round(self._safe_float(volatility.get("tradability_score", 0), 0), 4),
                         "last_price": round(last_price, 4),
+                        "universe_source": candidate.get("source", "static"),
+                        "universe_score": self._safe_float(candidate.get("universe_score", 0), 0),
+                        "session_change_pct": self._safe_float(candidate.get("change_pct", 0), 0),
+                        "upper_limit_watch_only": bool(candidate.get("upper_limit_watch_only", False)),
                         "validation_robustness": round(self._safe_float(validation.get("robustness_score", 0), 0), 4),
                         "validation_return": round(validation_return, 4),
                         "validation_avg_profit": round(validation_avg_profit, 2),

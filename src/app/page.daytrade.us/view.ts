@@ -14,7 +14,10 @@ export class Component implements OnInit, OnDestroy {
     public seedSaving: boolean = false;
     public readonly rankingSymbolTarget: number = 12;
 
-    public symbol: string = 'TQQQ';
+    public symbol: string = '';
+    public scannerBusy = false;
+    public scannerMessage = '';
+    public momentumCandidates: any[] = [];
     public strategy: string = 'us_premarket';
     public seed: number = 5000000;
     public seedDraft: string = '5000000';
@@ -34,13 +37,32 @@ export class Component implements OnInit, OnDestroy {
     public symbolQuery: string = '';
     public symbolResults: any[] = [];
     public searchLoading: boolean = false;
+    public orderProcessing: boolean = false;
+    public executionResult: any = null;
     public briefingCollapsed: boolean = true;
     public advancedControlsCollapsed: boolean = true;
+    public bootstrapDelayed: boolean = false;
 
     public errorMessage: string = '';
     private backgroundRefreshTimer: any = null;
 
     constructor(public service: Service) { }
+
+    public async scanMomentum() {
+        if (this.scannerBusy) return;
+        this.scannerBusy = true;
+        this.scannerMessage = '';
+        await this.service.render();
+        try {
+            const res = await wiz.call('us_momentum_candidates', {}, {timeout: 15000});
+            if (res.code !== 200) throw new Error('급등 후보 조회 실패');
+            this.universePolicy = res.data.policy;
+            this.momentumCandidates = (res.data.candidates || []).filter((x: any) => x.source === 'kis_momentum_rank');
+            this.scannerMessage = this.universePolicy?.dynamic_ready ? '급등 후보입니다. 매수 신호나 수익 보장이 아니며 주문은 전송하지 않았습니다.' : '현재 조건을 충족하는 실시간 후보를 확보하지 못했습니다. 기본 목록을 급등주로 표시하지 않습니다.';
+            if (this.universePolicy?.unavailable_exchanges?.length) this.scannerMessage += ' 조회 실패: ' + this.universePolicy.unavailable_exchanges.join(', ');
+        } catch (e: any) { this.scannerMessage = e?.message || '조회 지연. 자동으로 반복 호출하지 않습니다.'; }
+        finally { this.scannerBusy = false; await this.service.render(); }
+    }
 
     private async confirmAutoEnable(): Promise<boolean> {
         const confirmed = await this.service.modal.show({
@@ -62,11 +84,18 @@ export class Component implements OnInit, OnDestroy {
         this.advancedControlsCollapsed = !this.advancedControlsCollapsed;
     }
 
+    public goDomesticDaytrade() {
+        window.location.href = '/daytrade';
+    }
+
     public async ngOnInit() {
         await this.service.init(this);
         await this.service.auth.allow('/access');
-        await this.bootstrap();
+        // Render the complete control surface before initializing the Python
+        // trading model. Account and quote state hydrates in the background.
         this.loading = false;
+        await this.service.render();
+        await this.bootstrap();
         await this.service.render();
     }
 
@@ -83,11 +112,24 @@ export class Component implements OnInit, OnDestroy {
         await this.service.render();
         try {
             const seedValue = this.currentSeedValue();
-            const { code, data } = await wiz.call('us_bootstrap', {
+            const request = wiz.call('us_bootstrap', {
                 symbol: this.symbol,
                 strategy: this.strategy,
                 seed: seedValue,
             });
+            let response: any = await Promise.race([
+                request,
+                new Promise((resolve) => window.setTimeout(() => resolve({ code: 202, data: { delayed: true } }), 4000)),
+            ]);
+            if (response?.code === 202 && response?.data?.delayed) {
+                this.bootstrapDelayed = true;
+                this.refreshing = false;
+                this.loading = false;
+                await this.service.render();
+                response = await request;
+                this.bootstrapDelayed = false;
+            }
+            const { code, data } = response;
             if (code === 200) {
                 const defaults = data.defaults || {};
                 this.symbol = defaults.symbol || this.symbol;
@@ -103,7 +145,7 @@ export class Component implements OnInit, OnDestroy {
                 this.autoStatus = snapshot.auto_status || null;
                 this.verify = snapshot.verify || null;
                 this.budgetStatus = snapshot.budget_status || this.budgetStatus;
-                this.queueBackgroundRefresh(false);
+                this.queueBackgroundRefresh(true);
             } else {
                 this.errorMessage = data?.message || '미장 초기화 실패';
             }
@@ -124,9 +166,6 @@ export class Component implements OnInit, OnDestroy {
             if (includePrimary) {
                 await this.loadSnapshot();
             }
-            if ((this.ranking || []).length === 0) {
-                await this.loadRanking(false);
-            }
             this.backgroundLoading = false;
             await this.service.render();
         }, 120);
@@ -144,15 +183,18 @@ export class Component implements OnInit, OnDestroy {
                 strategy: this.strategy,
                 seed: this.currentSeedValue(),
                 force_refresh: forceRefresh ? 'true' : 'false',
-            });
+            }, {timeout: 8000});
+            if (code !== 200) throw new Error('운용 상태 조회 실패');
             if (code === 200) {
                 this.status = data.status || null;
                 this.daily = data.daily || null;
                 this.autoStatus = data.auto_status || null;
                 this.verify = data.verify || null;
                 this.budgetStatus = data.budget_status || this.budgetStatus;
+                if (this.errorMessage.startsWith('시세·운용 상태 조회')) this.errorMessage = '';
             }
         } catch (e) {
+            this.errorMessage = '시세·운용 상태 조회가 지연되었습니다. 표시된 값은 최신 상태가 아닐 수 있습니다. 새로고침으로 다시 확인하세요.';
         }
     }
 
@@ -326,6 +368,73 @@ export class Component implements OnInit, OnDestroy {
         await this.service.render();
     }
 
+    public async executeSignal() {
+        const confirmed = await this.service.modal.show({
+            title: '미장 시그널 모의주문',
+            message: `${this.symbol}의 현재 시그널을 다시 확인하고, BUY/SELL 조건이면 KIS PAPER 모의계좌로 주문을 전송합니다.`,
+            action: '점검 후 실행',
+            cancel: '취소',
+            status: 'warning',
+            actionBtn: 'warning',
+        });
+        if (confirmed !== true) return;
+
+        this.orderProcessing = true;
+        this.errorMessage = '';
+        await this.service.render();
+        try {
+            const { code, data } = await wiz.call('us_execute_live', {
+                symbol: this.symbol,
+                strategy: this.strategy,
+                seed: this.currentSeedValue(),
+            });
+            if (code === 200) {
+                this.executionResult = data?.result || data || null;
+                await this.loadSnapshot(true);
+            } else {
+                this.errorMessage = data?.message || '미장 모의주문 실행 실패';
+            }
+        } catch (e: any) {
+            this.errorMessage = e?.message || '미장 모의주문 실행 오류';
+        }
+        this.orderProcessing = false;
+        await this.service.render();
+    }
+
+    public async manualSellSelected() {
+        if (!this.hasSelectedPosition) return;
+        const confirmed = await this.service.modal.show({
+            title: '미장 포지션 모의청산',
+            message: `${this.symbol} 보유 수량을 KIS PAPER 모의계좌에서 즉시 청산합니다.`,
+            action: '모의청산 실행',
+            cancel: '취소',
+            status: 'warning',
+            actionBtn: 'warning',
+        });
+        if (confirmed !== true) return;
+
+        this.orderProcessing = true;
+        this.errorMessage = '';
+        await this.service.render();
+        try {
+            const { code, data } = await wiz.call('us_manual_sell', {
+                symbol: this.symbol,
+                strategy: this.strategy,
+                seed: this.currentSeedValue(),
+            });
+            if (code === 200) {
+                this.executionResult = data?.result || data || null;
+                await this.loadSnapshot(true);
+            } else {
+                this.errorMessage = data?.message || '미장 모의청산 실패';
+            }
+        } catch (e: any) {
+            this.errorMessage = e?.message || '미장 모의청산 오류';
+        }
+        this.orderProcessing = false;
+        await this.service.render();
+    }
+
     public async refreshRanking() {
         await this.loadRanking(true);
     }
@@ -427,11 +536,23 @@ export class Component implements OnInit, OnDestroy {
     }
 
     public get statusRisk(): string {
-        return String(this.status?.runtime?.risk_status || 'SAFE');
+        return String(this.status?.runtime?.risk_status || '확인 중');
     }
 
     public get usActivePositions(): any[] {
         return Array.isArray(this.autoStatus?.active_positions) ? this.autoStatus.active_positions : [];
+    }
+
+    public get selectedPosition(): any {
+        return this.usActivePositions.find((item: any) => String(item?.symbol || '').toUpperCase() === this.symbol.toUpperCase()) || null;
+    }
+
+    public get hasSelectedPosition(): boolean {
+        return Number(this.selectedPosition?.qty || this.selectedPosition?.position_qty || 0) > 0;
+    }
+
+    public get executionResultMessage(): string {
+        return String(this.executionResult?.message || this.executionResult?.reason || '모의주문 결과를 확인해주세요.');
     }
 
     public get budgetUsagePct(): number {

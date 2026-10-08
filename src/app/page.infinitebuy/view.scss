@@ -57,3 +57,9 @@
         height: calc(100vh - 132px);
     }
 }
+.bridge-onboarding { max-width:640px; margin:48px auto; padding:36px; background:#fff; color:#172033; border:1px solid #dbe3ee; border-radius:20px; }
+.bridge-onboarding span { font-size:11px; letter-spacing:.13em; color:#64748b; }
+.bridge-onboarding h2 { font-size:25px; font-weight:700; margin:14px 0; }
+.bridge-onboarding p { line-height:1.8; font-size:14px; color:#475569; margin:16px 0; }
+.bridge-onboarding button { background:#2563eb; color:white; font-weight:650; border-radius:10px; padding:14px 20px; width:100%; }
+.bridge-onboarding button:disabled { background:#64748b; }

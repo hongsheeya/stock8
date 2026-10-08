@@ -1,0 +1,62 @@
+:host { display: block; }
+.investment-risk { color:#b42318; background:#fff4f2; border-radius:8px; padding:10px 12px; }
+.trading-controls, .policy-dialog { background: #fff; color: #172033; border: 1px solid #cbd5e1; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+h2 { font-size: 21px; font-weight: 750; margin-bottom: 12px; }
+h3 { font-size: 16px; font-weight: 700; margin: 24px 0 8px; }
+p, li { font-size: 14px; line-height: 1.7; color: #475569; }
+button, input { padding: 10px 14px; border: 1px solid #94a3b8; border-radius: 8px; color: #172033; background: #fff; }
+button { font-weight: 650; }
+button.enabled { color: #fff; background: #1d4ed8; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.strategy-grid { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.symbol-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 10px 0; }
+.symbol-row strong { min-width: 100px; }
+.policy-overlay { position: fixed; inset: 0; z-index: 10000; background: #0f172a99; display: grid; place-items: center; padding: 20px; }
+.policy-dialog { max-width: 620px; max-height: 90vh; overflow: auto; box-shadow: 0 20px 60px #0004; }
+.policy-dialog ul { list-style: disc; padding-left: 22px; margin: 16px 0; }
+.policy-dialog label { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; }
+.control-heading { display:flex; justify-content:space-between; align-items:center; }
+.eyebrow { color:#64748b; font-size:10px; letter-spacing:.16em; font-weight:700; }
+.account-badge { color:#334155; background:#f1f5f9; padding:6px 10px; border-radius:20px; font-size:12px; }
+.strategy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+.strategy-card { display:flex; align-items:center; gap:12px; padding:20px; border-color:#e2e8f0; text-align:left; background:#f8fafc; }
+.strategy-copy { display:flex; flex:1; flex-direction:column; gap:5px; }
+.strategy-copy strong { font-size:17px; }
+.strategy-copy small { font-size:12px; color:#64748b; font-weight:400; }
+.switch-state { font-size:11px; color:#64748b; }
+.switch-track { width:36px; height:22px; border-radius:12px; background:#94a3b8; padding:3px; flex-shrink:0; }
+.switch-track::after { content:''; display:block; height:16px; width:16px; border-radius:50%; background:white; }
+button.strategy-card.enabled { color:#172033; background:#eff6ff; border-color:#93c5fd; }
+.enabled .switch-track { background:#2563eb; }
+.enabled .switch-track::after { transform:translateX(14px); }
+.enabled .switch-state { color:#1d4ed8; }
+.strategy-card:disabled { opacity:1; color:#475569; background:#f8fafc; }
+.strategy-card:disabled .switch-track { background:#cbd5e1; }
+@media(max-width:600px) { .strategy-grid { grid-template-columns:1fr; } }
+.holding-locks { margin-top: 20px; border-top: 1px solid #dbe3ee; padding-top: 16px; }
+.holding-lock-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }
+.holding-lock-row button { padding: 8px 12px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #172033; }
+.daytrade-compact .strategy-grid { grid-template-columns:1fr; }
+.daytrade-compact { padding:20px; }
+.locks-only .holding-locks { margin-top:0; border-top:0; padding-top:0; }
+.holdings-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.holding-identity { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.holding-identity strong { color:#172033; overflow-wrap:anywhere; }
+.holding-identity small { color:#64748b; font-size:12px; }
+.holding-search { width:100%; box-sizing:border-box; margin:8px 0; }
+
+// Shared semantic tokens follow both account themes, including confirmation dialogs.
+.trading-controls, .policy-dialog { background:var(--bn-card); color:var(--bn-body); border-color:var(--bn-hairline); border-radius:16px; padding:24px; }
+p, li, .strategy-copy small, .switch-state, .eyebrow, .holding-identity small { color:var(--bn-muted-strong); }
+.account-badge, button, input, .holding-lock-row button { background:var(--bn-elevated); color:var(--bn-body); border-color:var(--bn-hairline); }
+.strategy-card, .strategy-card:disabled { background:var(--bn-canvas); color:var(--bn-body); border-color:var(--bn-hairline); border-radius:12px; }
+button.strategy-card.enabled { background:var(--bn-elevated); color:var(--bn-body); border-color:var(--bn-primary); }
+.enabled .switch-track { background:var(--bn-primary); }
+.enabled .switch-state { color:var(--bn-primary); }
+.holding-identity strong { color:var(--bn-body); }
+.holding-locks, .holding-lock-row { border-color:var(--bn-hairline); }
+.control-heading { gap:16px; margin-bottom:12px; }
+.trading-controls > p, .trading-controls > div > p { font-size:12px; }
+.strategy-card:hover:not(:disabled) { border-color:var(--bn-primary); }
+button:focus-visible, input:focus-visible { outline:2px solid var(--bn-primary); outline-offset:3px; }
+.investment-risk { color:var(--bn-down); background:color-mix(in srgb,var(--bn-down) 8%,var(--bn-card)); }

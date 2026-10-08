@@ -1,0 +1,13 @@
+# WIZ version current when the last production recovery point was created.
+season==2.5.2
+
+# Stock8 and the bundled Season portal use these packages directly.
+bcrypt>=4.1,<6
+peewee>=3.17,<4
+PyMySQL>=1.1,<2
+yfinance>=0.2.65,<1
+
+# Optional authentication backends imported by the Season portal.
+oic>=1.7,<2
+python3-saml>=1.16,<2
+

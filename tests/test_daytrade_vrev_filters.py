@@ -66,6 +66,44 @@ daytrade_spec.loader.exec_module(daytrade)
 
 
 class DaytradeVrevFilterTests(unittest.TestCase):
+    def momentum_row(self, **changes):
+        return dict(dict(symb='TEST', knam='Example common stock', last='12', tvol='900000',
+                         tamt='10800000', rate='12', n_rate='2', pbid='11.99', pask='12.01', e_ordyn='Y'), **changes)
+
+    def test_us_momentum_requires_liquidity_spread_and_evidence(self):
+        service = daytrade.Daytrade(_StructStub())
+        candidate = service._us_momentum_candidate(self.momentum_row(), 'NAS')
+        self.assertEqual(candidate['source'], 'kis_momentum_rank')
+        self.assertFalse(candidate['trade_ready'])
+        for changes in ({'tvol':'100'}, {'tamt':'0'}, {'pask':'14'}, {'pbid':'0'},
+                        {'rate':'1'}, {'n_rate':'-2'}, {'e_ordyn':'N'}, {'symb':'SOXL'},
+                        {'knam':'Example ETF'}, {'last':'0.5'}):
+            self.assertIsNone(service._us_momentum_candidate(self.momentum_row(**changes), 'NAS'), changes)
+
+    def test_major_stocks_require_stronger_momentum(self):
+        service = daytrade.Daytrade(_StructStub())
+        self.assertIsNone(service._us_momentum_candidate(self.momentum_row(symb='NVDA', rate='6'), 'NAS'))
+        self.assertIsNone(service._us_momentum_candidate(self.momentum_row(symb='NVDA', n_rate='0.5'), 'NAS'))
+        self.assertIsNotNone(service._us_momentum_candidate(self.momentum_row(symb='NVDA'), 'NAS'))
+
+    def test_entry_ownership_guard_fails_closed(self):
+        service = daytrade.Daytrade(_StructStub())
+        self.assertTrue(service.daytrade_entry_issue('SOXL'))
+        self.assertTrue(service.daytrade_entry_issue('TEST'))
+        class DB:
+            def get(self, symbol, status):
+                return {'symbol':symbol} if symbol == 'OWNED' and status == 'PAUSED' else None
+        service.struct.db = lambda name: DB()
+        self.assertTrue(service.daytrade_entry_issue('OWNED'))
+        self.assertEqual(service.daytrade_entry_issue('NEW'), '')
+
+    def test_us_default_candidates_exclude_infinite_buy_and_index_etfs(self):
+        service = daytrade.Daytrade(_StructStub())
+        symbols = {row['symbol'] for row in service.us_candidate_universe()}
+        self.assertTrue(symbols)
+        self.assertFalse(symbols & {'TQQQ', 'SOXL', 'SPXL', 'UPRO', 'SPY', 'QQQ', 'IWM'})
+        self.assertEqual(service.us_candidate_universe_policy()['candidate_count'], len(symbols))
+
     def test_vrev_entry_issues_blocks_countertrend_knife_catch(self):
         service = daytrade.Daytrade(_StructStub())
         bar = {

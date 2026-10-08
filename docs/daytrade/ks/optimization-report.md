@@ -1,11 +1,11 @@
 # Domestic Daytrade Optimization Report
 
-- Generated: 2026-06-01 15:20:18
-- Symbol: 004020
+- Generated: 2026-10-08 09:21:52
+- Symbol: 252670
 - Market: KS
 - Strategy: V-REV 역추세
 - Period/Interval: 10d / 5m
-- Seed: 3,000,000
+- Seed: 1,000,000
 
 ## Selection Criteria
 - Score: summary_score*0.45 + robustness_score*0.35 + graph_stability_score*0.20
@@ -19,22 +19,22 @@
 - Exit: 기준가 회복 방어 청산 및 구조 복구 청산
 
 ## Best Candidate
-- Total Return: 77.5062%
-- Total Profit: 2325186.63
-- Win Rate: 50.0%
-- Max Drawdown: 3.7067%
-- Avg Trades/Day: 14.4
-- Profit Factor: 5.6752
-- Fee Total: 630966.94
-- Avg Holding Minutes: 20.6
-- Score: 61.8051
+- Total Return: 8.9651%
+- Total Profit: 89651.44
+- Win Rate: 30.0%
+- Max Drawdown: 0.0%
+- Avg Trades/Day: 2.1
+- Profit Factor: 12.3999
+- Fee Total: 26465.57
+- Avg Holding Minutes: 6.2
+- Score: 12.2042
 
 ## Validation
 - Train/Test Split: 5:5
-- Robustness Score: 13.834
-- Overfit Gap: 30.3802
-- Graph Stability Score: 3.2179
-- Graph Holdout Avg Return: 3.6178%
+- Robustness Score: 4.5377
+- Overfit Gap: 6.5619
+- Graph Stability Score: 1.0072
+- Graph Holdout Avg Return: 0.0%
 - Graph Negative Fold Ratio: 0.0
 
 ## Best Parameters
@@ -44,7 +44,7 @@
 - breakout_volume_ratio: 1.2
 - budget_ratio: 1.0
 - buy_split_ratio: 1.0
-- buy_trigger_1_pct: 0.0
+- buy_trigger_1_pct: -0.1
 - buy_trigger_2_pct: -0.35
 - carry_max_loss_pct: 0.8
 - carry_min_close_strength_pct: -1.2
@@ -81,7 +81,7 @@
 - rsi_reversion_min_trend_alignment_score: -0.1
 - sell_tax_bps: 18.0
 - slippage_bps: 2.5
-- stop_loss_pct: 1.2
+- stop_loss_pct: 1.5
 - stop_reentry_same_day_block: True
 - transferred_take_profit_pct: 0.5
 - trend_stop_loss_pct: 0.8
@@ -94,8 +94,8 @@
 - vrev_min_trend_alignment_score: -0.18
 
 ## Top Candidates
-1. strategy=vrev selection=33.2978, score=61.8051, return=77.5062%, mdd=3.7067%, robust=13.834
-2. strategy=vrev selection=33.2866, score=61.9976, return=76.1299%, mdd=3.7067%, robust=13.6316
-3. strategy=vrev selection=32.8971, score=61.4624, return=74.3609%, mdd=3.7067%, robust=12.8193
-4. strategy=vrev selection=31.6531, score=59.6753, return=75.5242%, mdd=3.9132%, robust=11.9768
-5. strategy=vrev selection=31.5908, score=59.8131, return=74.0985%, mdd=3.9132%, robust=11.7128
+1. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
+2. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
+3. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
+4. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
+5. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377

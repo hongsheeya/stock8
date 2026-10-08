@@ -83,6 +83,7 @@ export default class Wiz {
             type: "POST",
             data: data,
             dataType: "text",
+            timeout: 60000,
             ...options
         };
 

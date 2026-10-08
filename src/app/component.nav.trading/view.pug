@@ -8,6 +8,7 @@ nav(class="bn-top-nav mx-4 mt-4 mb-2 px-2 py-2 flex items-center justify-between
             div(class="bn-brand-mark")
                 span ∞
             span(class="bn-brand-word") STOCK
+        span(*ngIf="accountMode !== 'LIVE'", class="bn-paper-badge", role="status") {{accountMode === 'PAPER' ? '모의투자 · TEST' : accountMode === 'ERROR' ? '서버 연결 확인 필요' : '계좌 확인 중'}}
 
         //- Nav Links
         div(class="min-w-0 flex-1 overflow-x-auto flex flex-nowrap items-center gap-1")

@@ -1,0 +1,9 @@
+{$STOCK8_SITE_ADDRESS::80} {
+    encode zstd gzip
+
+    reverse_proxy stock8:3000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+

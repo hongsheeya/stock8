@@ -43,7 +43,7 @@ export default class Auth {
         this.loading = true;
         this.timestamp = new Date().getTime();
         this.session = { verified: 'unknown' };
-        this.status = { authenticated: false };
+        this.status = false;
         return this;
     }
 

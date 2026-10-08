@@ -7,6 +7,7 @@
 
 import datetime
 import json
+import os
 from collections import defaultdict
 
 _TIME = wiz.model("portal/trading/kst")
@@ -81,6 +82,9 @@ def archive_old_trade_logs(days_to_keep=30):
     Returns:
         삭제된 레코드 수
     """
+    if str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER":
+        _log("info", "PAPER retention policy preserved all trade_log rows")
+        return 0
     try:
         trading = wiz.model("portal/trading/trading")
         trade_log_db = trading.db("trade_log")
@@ -163,6 +167,9 @@ def remove_incomplete_trade_entries():
     Returns:
         삭제된 레코드 수
     """
+    if str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER":
+        _log("info", "PAPER retention policy preserved all cycle_trade rows")
+        return 0
     try:
         trading = wiz.model("portal/trading/trading")
         cycle_trade_db = trading.db("cycle_trade")

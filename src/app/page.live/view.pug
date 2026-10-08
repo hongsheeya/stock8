@@ -1,0 +1,16 @@
+main(class="live-console")
+    a(routerLink="/dashboard") ← 모의투자 대시보드
+    p(class="eyebrow") LIVE · 실투자
+    h1 실투자 관리
+    section(class="lock-notice")
+        h2 {{status.orders_enabled ? '실주문 허용 설정 ON' : '실주문 비활성화'}}
+        p 화면 전환은 거래 활성화가 아닙니다. 실주문은 실투자 서버에서 설정을 켠 경우에만 허용됩니다.
+        p 이 화면에는 모의투자 잔고나 수익을 실투자 데이터로 표시하지 않습니다.
+    section(class="details")
+        h2 계좌 및 기록
+        p API 설정: {{status.credentials_configured ? '실투자 전용 설정 보관됨' : '미등록'}}
+        p 실계좌 잔고: 조회되지 않음
+        p 실현손익: 실계좌 체결 원장 미조회
+        p 모의투자 초기화 및 주문 기록은 실투자 영역에 반영되지 않습니다.
+    p(*ngIf="error", role="alert") {{error}}
+    a(routerLink="/settings/live") 실투자 거래 설정 →

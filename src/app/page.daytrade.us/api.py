@@ -1,5 +1,6 @@
 import copy as _copy
 import datetime as _datetime
+import os as _os
 import re as _re
 import sys as _sys
 import threading as _threading
@@ -32,7 +33,9 @@ _US_MIN_TRADABLE_VALIDATION_WIN_RATE = 30.0
 _US_MIN_TRADABLE_RETURN = 0.5
 _US_MAX_TRADABLE_MDD = 18.0
 _US_MIN_TRADABLE_AVG_TRADES = 0.6
-_DAYTRADE_HARD_LOCKED = True
+_TRADING_MODE = str(_os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_DAYTRADE_HARD_LOCKED = str(_os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+_PAPER_DAYTRADE_FULL_ACCESS = _TRADING_MODE == "PAPER" and not _DAYTRADE_HARD_LOCKED
 _DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 
 _TIME = wiz.model("portal/trading/kst")
@@ -270,9 +273,9 @@ def _listed_user(user, id_key, email_key):
 def _daytrade_access_payload():
     user = _session_user()
     is_admin = _is_admin_user(user)
-    feature_enabled = False if _DAYTRADE_HARD_LOCKED else _truthy(_get_config("daytrade_feature_enabled", "false"))
-    authorized = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_authorized_user_ids", "daytrade_authorized_user_emails")
-    confirmed = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_confirmed_user_ids", "daytrade_confirmed_user_emails")
+    feature_enabled = not _DAYTRADE_HARD_LOCKED and (_TRADING_MODE == "LIVE" or _PAPER_DAYTRADE_FULL_ACCESS or _truthy(_get_config("daytrade_feature_enabled", "false")))
+    authorized = is_admin and not _DAYTRADE_HARD_LOCKED
+    confirmed = is_admin and not _DAYTRADE_HARD_LOCKED
     return {
         "is_admin": is_admin,
         "daytrade_feature_enabled": feature_enabled,
@@ -286,6 +289,7 @@ def _daytrade_access_payload():
 
 def _require_daytrade_access():
     payload = _daytrade_access_payload()
+    payload.pop('message', None)
     if payload.get("daytrade_hard_locked"):
         wiz.response.status(403, message=_DAYTRADE_LOCK_MESSAGE, **payload)
     if payload.get("daytrade_feature_enabled") is False:
@@ -350,7 +354,7 @@ def _select_us_ranking_candidates(candidates, max_symbols, focus_symbol=""):
                 _add(item)
                 break
 
-    core_symbols = ["TQQQ", "SOXL", "SPXL", "UPRO", "NVDA", "AVGO", "TSLA", "PLTR", "MSTR", "COIN"]
+    core_symbols = []  # Do not reserve scanner slots for a fixed ETF/mega-cap list.
     for symbol in core_symbols:
         for item in items:
             if str(item.get("symbol", "") or "").strip().upper() == symbol:
@@ -446,14 +450,16 @@ def _build_us_daily_payload(target_date=""):
 
 
 def _build_us_auto_status_payload(engine=None, trading=None):
-    cache_key = "default"
+    engine = engine or _engine()
+    us_auto_enabled = engine.auto_enabled(market="US")
+    cache_key = f"default:{int(bool(us_auto_enabled))}"
     cached_payload, _ = _cache_get(_US_AUTO_STATUS_CACHE, cache_key, _US_AUTO_STATUS_TTL_SEC)
     if isinstance(cached_payload, dict):
         return cached_payload
     engine = engine or _engine()
     trading = trading or _get_struct().trading
     us_auto_enabled = engine.auto_enabled(market="US")
-    active_positions = [p for p in (engine.active_positions() or []) if str(p.get("market", "KS")).upper() in ("US", "NASD", "NYSE")]
+    active_positions = engine.active_positions_from_state(market_filter="US") or []
     worker_status = trading.worker_status() or {}
     kis_status = engine.check_kis_connection()
     market_open = bool(engine._us_market_open())
@@ -612,9 +618,29 @@ def _build_us_verify_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_DE
     return payload
 
 
+def _build_us_off_snapshot(engine, symbol, strategy, seed, auto_payload):
+    """OFF first paint reads local state, not broker history/quotes/analysis."""
+    state = dict(engine._state_for(symbol, market="US", seed=seed, name=symbol, strategy_id=strategy))
+    budget = engine.shared_budget_status(requested_seed=seed, market="US", use_cache_only=True)
+    reason = "자동매매 OFF · 저장된 상태 표시. 실시간 진단은 새로고침으로 요청하세요."
+    return {
+        "status": {"symbol": symbol, "market": "US", "name": state.get("name", symbol),
+                   "state": state, "signal": {"action": "HOLD", "reason": reason,
+                   "current_price": state.get("last_price", 0), "position_qty": state.get("position_qty", 0)},
+                   "runtime": {"risk_status": "STOPPED", "issues": [], "warnings": [reason]}},
+        "daily": {}, "auto_status": auto_payload, "budget_status": budget,
+        "verify": {"ok": False, "deferred": True, "checks": [], "hard_fails": [], "recent_logs": []},
+        "cached": True, "deferred": True,
+    }
+
+
 def _build_us_snapshot_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_DEFAULT_SEED_KRW, force_refresh=False, engine=None, service=None, trading=None, us_candidates=None):
     service = service or _daytrade()
     seed = _normalized_us_seed(seed, service=service)
+    engine = engine or _engine()
+    if not force_refresh and not engine.auto_enabled(market="US"):
+        auto_payload = _build_us_auto_status_payload(engine=engine, trading=trading)
+        return _build_us_off_snapshot(engine, symbol, strategy, seed, auto_payload)
     cache_key = f"{symbol}:{strategy}:{round(seed, 2)}"
     cached_payload, _ = _cache_get(_US_SNAPSHOT_CACHE, cache_key, _US_SNAPSHOT_TTL_SEC)
     if force_refresh is False and isinstance(cached_payload, dict):
@@ -637,7 +663,7 @@ def _build_us_snapshot_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_
             us_candidates=us_candidates,
             force_refresh=force_refresh,
         )
-        budget_status = _enrich_budget_status(resolved_engine, resolved_engine.shared_budget_status(requested_seed=seed, market="US"), market="US")
+        budget_status = verify_payload.get("budget_status", {})
         live_payload, _ = _cache_get(_US_LIVE_STATUS_CACHE, cache_key, _US_LIVE_STATUS_TTL_SEC)
         if isinstance(live_payload, dict):
             status_payload = live_payload
@@ -686,9 +712,9 @@ def us_bootstrap():
             universe_policy = service.us_candidate_universe_policy()
             us_strategy_options = service.us_strategy_options()
             us_profile = service.us_profile()
-            default_symbol = "TQQQ"
+            default_symbol = us_candidates[0]['symbol'] if us_candidates else ''
             default_strategy = "us_premarket"
-            default_name = "ProShares UltraPro QQQ"
+            default_name = us_candidates[0].get('name', default_symbol) if us_candidates else ''
             seed = requested_seed if requested_seed > 0 else _normalized_us_seed(defaults.get("seed", _US_DEFAULT_SEED_KRW), service=service)
             if persist_seed and seed > 0:
                 trading.set_config("daytrade_us_default_seed", round(seed, 2), description="미장 단타 기본 요청 시드")
@@ -705,16 +731,12 @@ def us_bootstrap():
                 default_strategy = first.get("strategy_id", default_strategy)
             kis_status = engine.check_kis_connection()
             budget_status = _enrich_budget_status(engine, engine.shared_budget_status(requested_seed=seed, use_cache_only=(persist_seed is False), market="US"), market="US")
-            snapshot = _build_us_snapshot_payload(
-                symbol=symbol or default_symbol,
-                strategy=strategy or default_strategy,
-                seed=seed,
-                force_refresh=persist_seed,
-                engine=engine,
-                service=service,
-                trading=trading,
-                us_candidates=us_candidates,
-            )
+            # First paint must not wait for quotes, signal evaluation, logs and
+            # verification. The client refreshes this snapshot in the background.
+            snapshot_key = f"{symbol or default_symbol}:{strategy or default_strategy}:{round(seed, 2)}"
+            snapshot, _snapshot_age = _cache_get(_US_SNAPSHOT_CACHE, snapshot_key, _US_SNAPSHOT_TTL_SEC)
+            if not isinstance(snapshot, dict):
+                snapshot = {}
         except Exception as e:
             wiz.response.status(500, message=str(e))
         payload = {
@@ -833,6 +855,12 @@ def us_snapshot():
     except Exception as e:
         wiz.response.status(400, message=str(e))
     wiz.response.status(200, **payload)
+
+
+def us_momentum_candidates():
+    service = _daytrade()
+    candidates = service.refresh_us_dynamic_candidate_universe()
+    wiz.response.status(200, candidates=candidates, policy=service.us_candidate_universe_policy())
 
 
 def us_model_ranking():

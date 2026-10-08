@@ -2,13 +2,14 @@
 //- Access Page — Login / Signup (Glassmorphism Dark Theme)
 //- ============================================================
 
-div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
+div(class="min-h-screen flex items-center justify-center px-4 py-10 auth-bg")
 
-    div(class="w-full max-w-md")
+    div(class="auth-shell w-full max-w-5xl")
 
         //- Brand Header
-        div(class="text-center mb-8")
-            div(class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 mb-4")
+        div(class="auth-brand-panel")
+            span(class="auth-eyebrow") AUTOMATED INVESTING · PAPER FIRST
+            div(class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-cyan-400/10 border border-cyan-300/20 mb-5")
                 svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 48 48", fill="none",
                     class="w-9 h-9")
                     //- Infinity symbol
@@ -19,13 +20,24 @@ div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
                         linearGradient(id="inf-lg", x1="5.5", y1="24", x2="42.5", y2="24", gradientUnits="userSpaceOnUse")
                             stop(offset="0%", stop-color="#818cf8")
                             stop(offset="100%", stop-color="#c084fc")
-            h1(class="text-2xl font-bold text-white")
+            h1(class="text-3xl font-bold text-white")
                 span(class="infinity-text") ∞
-                | stock
-            p(class="text-sm text-slate-400 mt-1") Infinite Buy Strategy Trading
+                | STOCK8
+            h2(class="auth-brand-title") 반복은 시스템에게,<br>판단은 투자자에게.
+            p(class="auth-brand-copy") 무한매수 전략의 계획, 실행, 기록을 한 화면에서 관리하세요. 모의투자로 충분히 검증한 뒤 다음 단계를 결정합니다.
+            div(class="auth-feature-list")
+                div
+                    span 01
+                    p KIS 모의투자 안전 검증
+                div
+                    span 02
+                    p 무한매수 회차 자동 관리
+                div
+                    span 03
+                    p 거래 기록과 리스크 추적
 
         //- Card Container
-        div(class="glass-card p-8")
+        div(class="glass-card auth-card p-8")
 
             //- ========== LOGIN VIEW ==========
             div(*ngIf="view === 'login'")
@@ -74,9 +86,12 @@ div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
                     | &nbsp;
                     button((click)="switchView('signup')",
                         class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 회원가입
-                div(class="mt-3 flex items-center justify-center gap-3 text-[12px]")
-                    button((click)="switchView('find-id')", class="text-slate-400 hover:text-white transition-colors") 아이디 찾기
-                    button((click)="switchView('reset-password')", class="text-slate-400 hover:text-white transition-colors") 비밀번호 재설정
+                div(class="mt-4 grid grid-cols-2 gap-2")
+                    button((click)="switchView('find-id')",
+                        class="rounded-lg border border-slate-700 px-3 py-2 text-[12px] text-slate-300 hover:border-indigo-400/60 hover:text-white transition-colors") 아이디 찾기
+                    button((click)="switchView('reset-password')",
+                        class="rounded-lg border border-slate-700 px-3 py-2 text-[12px] text-slate-300 hover:border-indigo-400/60 hover:text-white transition-colors") 비밀번호 재설정
+                p(class="mt-3 text-center text-[11px] leading-5 text-slate-500") 이전 서버의 사용자 DB는 새 로컬 설치에 자동으로 연결되지 않습니다.
 
             //- ========== SIGNUP VIEW ==========
             div(*ngIf="view === 'signup'")
@@ -156,6 +171,9 @@ div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
                 h2(class="text-lg font-semibold text-white mb-1") 아이디 찾기
                 p(class="text-[13px] text-slate-400 mb-6") 가입 시 입력한 이름과 휴대폰 번호로 아이디를 찾습니다.
 
+                div(class="mb-4 rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2.5 text-[12px] leading-5 text-amber-200")
+                    | 현재 로컬 DB에 저장된 계정만 검색합니다. 이전 서버 DB가 없다면 새 회원가입이 필요합니다.
+
                 div(*ngIf="errorMsg",
                     class="mb-4 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 text-[13px] flex items-center gap-2")
                     span {{errorMsg}}
@@ -179,6 +197,7 @@ div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
                 div(class="mt-6 text-center flex items-center justify-center gap-3")
                     button((click)="switchView('login')", class="text-[13px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors") 로그인으로
                     button((click)="switchView('reset-password')", class="text-[13px] text-slate-400 hover:text-white font-medium transition-colors") 비밀번호 재설정
+                    button((click)="switchView('signup')", class="text-[13px] text-slate-400 hover:text-white font-medium transition-colors") 새 회원가입
 
             div(*ngIf="view === 'reset-password'")
                 h2(class="text-lg font-semibold text-white mb-1") 비밀번호 재설정
@@ -214,4 +233,4 @@ div(class="min-h-screen flex items-center justify-center px-4 py-12 auth-bg")
                     button((click)="switchView('find-id')", class="text-[13px] text-slate-400 hover:text-white font-medium transition-colors") 아이디 찾기
 
         //- Footer
-        p(class="mt-6 text-center text-[11px] text-slate-600") &copy; 2026 ∞stock. All rights reserved.
+        p(class="auth-footer mt-6 text-center text-[11px] text-slate-600") &copy; 2026 STOCK8. Paper first, decisions yours.

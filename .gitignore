@@ -121,6 +121,11 @@ celerybeat.pid
 # Environments
 .env
 .venv
+data/paper/
+data/live/
+data/reconciliation-audits/
+data/runtime-logs/
+docs/screenshots/
 env/
 venv/
 ENV/

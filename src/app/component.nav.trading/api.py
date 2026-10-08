@@ -1,9 +1,12 @@
 import re
+import os
 import time
 
 _STRUCT_CACHE = {"obj": None, "error": None, "error_at": 0.0}
 _STRUCT_ERROR_TTL_SEC = 5.0
-_DAYTRADE_HARD_LOCKED = True
+_TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
+_DAYTRADE_HARD_LOCKED = str(os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+_PAPER_DAYTRADE_FULL_ACCESS = _TRADING_MODE == "PAPER" and not _DAYTRADE_HARD_LOCKED
 _DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 
 
@@ -87,9 +90,9 @@ def daytrade_access_status():
         )
 
     is_admin = _is_admin_user(user)
-    feature_enabled = False if _DAYTRADE_HARD_LOCKED else _truthy(_get_config("daytrade_feature_enabled", "false"))
-    authorized = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_authorized_user_ids", "daytrade_authorized_user_emails")
-    confirmed = False if _DAYTRADE_HARD_LOCKED else is_admin or _listed_user(user, "daytrade_confirmed_user_ids", "daytrade_confirmed_user_emails")
+    feature_enabled = not _DAYTRADE_HARD_LOCKED and (_TRADING_MODE == "LIVE" or _PAPER_DAYTRADE_FULL_ACCESS or _truthy(_get_config("daytrade_feature_enabled", "false")))
+    authorized = is_admin and not _DAYTRADE_HARD_LOCKED
+    confirmed = is_admin and not _DAYTRADE_HARD_LOCKED
 
     wiz.response.status(200,
         logged_in=True,
@@ -101,3 +104,5 @@ def daytrade_access_status():
         daytrade_hard_locked=_DAYTRADE_HARD_LOCKED,
         message=_DAYTRADE_LOCK_MESSAGE if _DAYTRADE_HARD_LOCKED else "",
     )
+def account_context():
+    wiz.response.status(200, wiz.model("portal/trading/account_context").context())

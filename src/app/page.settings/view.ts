@@ -92,7 +92,9 @@ export class Component implements OnInit {
     public loading: boolean = false;
     public testResult: string = '';
     public testOk: boolean = false;
-    public apiDiagnostics: string[] = [];
+    public apiDiagnostics: any[] = [];
+    public paperReady: boolean = false;
+    public readinessVerifiedAt: string = '';
     public showSecret: boolean = false;
     public loadError: string = '';
 
@@ -117,10 +119,35 @@ export class Component implements OnInit {
 
     public async ngOnInit() {
         await this.service.init(this);
-        await this.service.auth.allow("/access");
+        if (!await this.service.auth.allow("/access")) return;
+        const account = await wiz.call('account_context', {}, {timeout: 5000});
+        if (account.code !== 200) {
+            this.loadError = '현재 투자 계정을 확인하지 못했습니다. 계정 확인 전에는 설정을 표시하지 않습니다. 새로고침 후 다시 시도해주세요.';
+            this.loading = false;
+            await this.service.render();
+            return;
+        }
+        this.accountContext = account.data;
+        this.isMock = account.data.is_mock;
         this.refreshAdminPreviewMode();
         this.tab = this.isInfiniteBuyMode() ? 'watchlist' : 'api';
         await this.loadSettings();
+    }
+
+    public accountContext: any = null;
+    public async subscribePaper() {
+        this.loading = true;
+        const result = await wiz.call('subscribe_paper', {}, {timeout: 5000});
+        if (result.code === 200) this.accountContext = result.data;
+        else this.loadError = result.data?.message || '모의투자 신청을 저장하지 못했습니다.';
+        this.loading = false;
+        await this.service.render();
+    }
+
+    public switchAccount(mode: string) {
+        if (!this.accountContext || mode === this.accountContext.mode) return;
+        const url = mode === 'LIVE' ? this.accountContext.live_settings_url : this.accountContext.paper_settings_url;
+        window.location.assign(url);
     }
 
     public isInfiniteBuyMode(): boolean {
@@ -134,7 +161,7 @@ export class Component implements OnInit {
 
     public showDaytradeSettingsTab(): boolean {
         if (this.daytradeHardLocked) return false;
-        return this.effectiveAdminMode() || (this.daytradeFeatureEnabled && this.daytradeUserAuthorized);
+        return this.effectiveAdminMode();
     }
 
     public effectiveAdminMode(): boolean {
@@ -194,6 +221,16 @@ export class Component implements OnInit {
                 this.tossClientSecret = data.toss_client_secret || '';
                 this.tossAccountSeq = data.toss_account_seq || '';
                 this.isMock = data.is_mock !== false;
+                this.paperReady = data.paper_ready === true;
+                this.readinessVerifiedAt = data.readiness_verified_at || '';
+                this.testOk = this.paperReady;
+                if (this.paperReady) {
+                    this.testResult = '계좌 연결과 읽기 전용 안전 점검을 모두 통과했습니다.';
+                } else if (!data.app_key || !data.app_secret || !data.account_no) {
+                    this.testResult = this.brokerProvider === 'kis'
+                        ? '현재 계정에 저장된 KIS 인증 정보가 부족합니다. 앱 키·시크릿·계좌번호를 입력하세요. 모의투자 설정은 실투자로 자동 복사하지 않습니다.'
+                        : '';
+                }
                 this.accountUserId = data.account_user_id || '';
                 this.accountLoginId = data.account_login_id || '';
                 this.accountEmail = data.account_email || '';
@@ -309,8 +346,9 @@ export class Component implements OnInit {
     }
 
     private apiSettingsPayload() {
+        this.isMock = this.accountContext?.is_mock !== false;
         return {
-            broker_provider: this.brokerProvider,
+            broker_provider: 'kis',
             app_key: this.appKey,
             app_secret: this.appSecret,
             account_no: this.accountNo,
@@ -351,6 +389,7 @@ export class Component implements OnInit {
         this.testOk = false;
         this.testResult = message;
         this.apiDiagnostics = [];
+        await this.service.render();
         await this.service.modal.show({
             title: '입력 확인',
             message,
@@ -368,9 +407,34 @@ export class Component implements OnInit {
         }
         this.tossAccountSeq = data?.toss_account_seq || this.tossAccountSeq;
         this.apiDiagnostics = Array.isArray(data?.diagnostics) ? data.diagnostics : [];
+        if (typeof data?.paper_ready === 'boolean') {
+            this.paperReady = data.paper_ready;
+        }
+        this.readinessVerifiedAt = data?.readiness_verified_at || this.readinessVerifiedAt;
         if (typeof data?.is_mock === 'boolean') {
             this.isMock = data.is_mock;
         }
+    }
+
+    public credentialsComplete(): boolean {
+        if (this.brokerProvider === 'kis') {
+            return Boolean(String(this.appKey || '').trim() && String(this.appSecret || '').trim() && /^\d{8}-\d{2}$/.test(String(this.accountNo || '').trim()));
+        }
+        return Boolean(String(this.tossClientId || '').trim() && String(this.tossClientSecret || '').trim());
+    }
+
+    public setupStepClass(step: number): string {
+        const current = this.paperReady ? 3 : (this.credentialsComplete() ? 2 : 1);
+        if (step < current || (step === 3 && this.paperReady)) return 'setup-step is-complete';
+        if (step === current) return 'setup-step is-current';
+        return 'setup-step';
+    }
+
+    public readinessTimeLabel(): string {
+        if (!this.readinessVerifiedAt) return '';
+        const parsed = new Date(this.readinessVerifiedAt);
+        if (Number.isNaN(parsed.getTime())) return this.readinessVerifiedAt;
+        return parsed.toLocaleString('ko-KR');
     }
 
     // ─── Save API Settings ───
@@ -518,9 +582,21 @@ export class Component implements OnInit {
             this.testResult = this.testOk
                 ? (data?.message || this.t('set.conn_ok'))
                 : `${this.t('set.conn_fail')}${data?.message ? ` ${data.message}` : ''}`;
+            await this.service.modal.show({
+                title: this.testOk ? '계좌 연결 완료' : '연결 확인 필요',
+                message: this.testOk
+                    ? 'KIS 인증, 잔고, 시세, 주문가능금액 조회를 모두 확인했습니다. 실제 주문은 계속 차단됩니다.'
+                    : this.testResult,
+                action: '확인',
+            });
         } catch (e: any) {
             this.testOk = false;
             this.testResult = e?.responseJSON?.message || e?.statusText || 'API 연결 테스트 중 오류가 발생했습니다.';
+            await this.service.modal.show({
+                title: '연결 확인 필요',
+                message: this.testResult,
+                action: '확인',
+            });
         }
 
         this.loading = false;
