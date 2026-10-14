@@ -888,7 +888,8 @@ class Daytrade:
         for market in candidates:
             try:
                 self._prepare_dataset(symbol, market=market, period="5d", interval="5m")
-                return market
+                # The loader falls back across KS/KQ; report the suffix that answered.
+                return Daytrade._DOMESTIC_YF_SUFFIX.get(str(symbol or "").strip().upper(), market)
             except Exception:
                 pass
         return preferred
@@ -1450,6 +1451,19 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
     # Data
     # =========================================================================
 
+    # Live domestic state keeps every code under "KS", but Yahoo lists KOSDAQ
+    # codes only as ".KQ" (079650.KS has no data; 079650.KQ does). Remember
+    # which suffix answered so later reads go straight to it.
+    _DOMESTIC_YF_SUFFIX = {}
+
+    def _domestic_yf_candidates(self, symbol, market, yf_symbol):
+        code = str(symbol or "").strip().upper()
+        if not (code.isdigit() and len(code) == 6 and str(market or "").upper() in ("KS", "KQ")):
+            return [yf_symbol]
+        known = Daytrade._DOMESTIC_YF_SUFFIX.get(code)
+        ordered = ([f"{code}.{known}"] if known else []) + [yf_symbol, f"{code}.KQ", f"{code}.KS"]
+        return list(dict.fromkeys(ordered))
+
     def _prepare_dataset(self, symbol, market="KS", period="5d", interval="1m"):
         cache_key = f"{symbol}:{market}:{period}:{interval}"
         now_ts = _time.time()
@@ -1466,8 +1480,20 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         # US도 prepost=False 유지: 정규장(09:30~16:00) 개장가= 갭 기준, aftermarket 오염 방지
         use_prepost = False
         yf_symbol = self._normalize_symbol(symbol, market)
+        hist = None
         try:
-            hist = yf.Ticker(yf_symbol).history(period=period, interval=interval, auto_adjust=True, prepost=use_prepost)
+            for candidate in self._domestic_yf_candidates(symbol, market, yf_symbol):
+                try:
+                    hist = yf.Ticker(candidate).history(period=period, interval=interval, auto_adjust=True, prepost=use_prepost)
+                except ModuleNotFoundError:
+                    raise
+                except Exception:
+                    hist = None
+                if hist is not None and not hist.empty:
+                    yf_symbol = candidate
+                    if candidate[-3:] in (".KS", ".KQ"):
+                        Daytrade._DOMESTIC_YF_SUFFIX[candidate[:-3]] = candidate[-2:]
+                    break
             if hist is None or hist.empty:
                 raise Exception(f"{yf_symbol}의 분봉 데이터를 찾을 수 없습니다.")
             for idx, row in hist.iterrows():
