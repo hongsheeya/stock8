@@ -3,12 +3,12 @@
 ## 최신 작업 기준
 
 `codex/claude-handoff-20261015` 브랜치는 main의 PR #2~#4와 원본 작업 폴더에 남아 있던 70개 파일 변경을 통합한다.
-이 브랜치를 기준으로 새 작업 브랜치를 만들 것. main만 받으면 아직 병합되지 않은 작업이 누락될 수 있다.
+통합본은 main에 반영한다. 이후 작업은 최신 origin/main에서 새 브랜치를 만들 것.
 원본 보존 커밋은 `9331ea5`, 원격 보존 브랜치는 `codex/pending-work-handoff-20261015`이다.
 
 ```sh
 git fetch origin
-git switch -c claude/next-task origin/codex/claude-handoff-20261015
+git switch -c claude/next-task origin/main
 ```
 
 ## 포함 범위
