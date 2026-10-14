@@ -13,6 +13,7 @@ export class Component implements OnInit, OnDestroy {
     }
     public busy = false;
     public get locWorkerSummary(): string {
+        if (this.state?.mode === 'PAPER') return this.state?.infinite_buy ? '모의 무한매수 설정 ON · 체결·주문 상태는 모의계좌 조회 기준입니다.' : '모의 무한매수 OFF';
         if (!this.state?.infinite_buy) return '자동 예약 OFF';
         if (this.state?.dispatcher_failed) return '예약 워커 시작 실패 — 서버 점검 필요';
         const worker = this.state?.workers?.loc;
@@ -57,7 +58,7 @@ export class Component implements OnInit, OnDestroy {
     public async ngOnInit() {
         await this.service.init(this);
         await this.refresh();
-        if (this.showLocks && this.state?.mode === 'LIVE') void this.loadHoldings();
+        if (this.showLocks && this.state) void this.loadHoldings();
         this.timer = setInterval(() => { if (!this.busy && !this.pending) void this.refresh(); }, 30000);
     }
     public ngOnDestroy() { if (this.timer) clearInterval(this.timer); }

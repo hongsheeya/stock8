@@ -56,6 +56,9 @@ daytrade_spec.loader.exec_module(daytrade)
 class DaytradeRecommendationCacheTests(unittest.TestCase):
     def test_expired_recommendation_retrains_instead_of_reusing_stale_rejection(self):
         service = self._service(None)
+        service.refresh_dynamic_candidate_universe = Mock()
+        service.candidate_universe = Mock(return_value=[{'symbol':'TEST'}])
+        service._save_recommendation = Mock()
         stale = {'selected':{'strategy_id':'vrev','market':'KS'}, 'leaderboard':[], 'generated_date':'2026-05-25'}
         service.latest_recommendation = Mock(side_effect=lambda **kw: stale if kw.get('allow_stale_day') else None)
         service.auto_train = Mock(return_value={'generated_date':'2026-05-26','leaderboard':[{'symbol':'TEST'}]})
@@ -66,7 +69,9 @@ class DaytradeRecommendationCacheTests(unittest.TestCase):
 
     def test_fresh_recommendation_does_not_repeat_training(self):
         service = self._service(None)
-        fresh = {'selected':{'strategy_id':'vrev','market':'KS'},'leaderboard':[]}
+        service.refresh_dynamic_candidate_universe = Mock()
+        service.candidate_universe = Mock(return_value=[{'symbol':'TEST'}])
+        fresh = {'selected':{'strategy_id':'vrev','market':'KS'},'leaderboard':[], 'discovery_symbols':['TEST']}
         service.latest_recommendation = Mock(return_value=fresh)
         service.auto_train = Mock()
         self.assertEqual(service.recommend(seed=1000000,max_age_sec=3600),fresh)
@@ -145,7 +150,7 @@ class DaytradeRecommendationCacheTests(unittest.TestCase):
         }
         service._resolve_symbol_name = lambda symbol: "삼성SDS" if symbol == "018260" else symbol
 
-        universe = service.candidate_universe(market="KS")
+        universe = service.research_candidate_universe(market="KS")
 
         learned = [row for row in universe if row.get("symbol") == "018260"]
         self.assertEqual(len(learned), 1)
@@ -155,7 +160,7 @@ class DaytradeRecommendationCacheTests(unittest.TestCase):
     def test_candidate_universe_always_includes_directional_etfs(self):
         service = self._service(None)
 
-        symbols = {row.get("symbol") for row in service.candidate_universe(market="KS")}
+        symbols = {row.get("symbol") for row in service.research_candidate_universe(market="KS")}
 
         self.assertTrue({"114800", "252670", "251340", "122630", "233740"}.issubset(symbols))
 

@@ -4,6 +4,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -235,6 +236,9 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertEqual(orders[0]["status"], "FILLED")
 
     def test_overseas_order_history_falls_back_to_filled_reservations(self):
+        mode = patch.object(kis_api, 'PAPER_MODE', False)
+        mode.start()
+        self.addCleanup(mode.stop)
         api = kis_api.KisApi(_StructStub())
         api._request = lambda *args, **kwargs: {"rt_cd": "0", "output1": [], "output2": {}}
         api.get_overseas_reservation_orders = lambda **_kwargs: [{
@@ -421,6 +425,9 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertTrue(all(value == "N" for value in seen_tr_cont[1:]))
 
     def test_overseas_order_history_merges_missing_filled_reservations_without_duplicates(self):
+        mode = patch.object(kis_api, 'PAPER_MODE', False)
+        mode.start()
+        self.addCleanup(mode.stop)
         api = kis_api.KisApi(_StructStub())
         api._request = lambda *args, **kwargs: {
             "rt_cd": "0",

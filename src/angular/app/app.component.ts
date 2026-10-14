@@ -42,8 +42,10 @@ export class AppComponent implements OnInit {
     }
 
     private latestAssetVersion(html: string): string {
-        const match = String(html || '').match(/data-version="([^"]+)"/);
-        return match ? String(match[1] || '').trim() : '';
+        const document = new DOMParser().parseFromString(String(html || ''), 'text/html');
+        const scripts = Array.from(document.querySelectorAll('script[data-version]'));
+        const mainScript = scripts.find(script => String(script.getAttribute('src') || '').includes('main.js')) || scripts[0];
+        return String(mainScript?.getAttribute('data-version') || '').trim();
     }
 
     private installAssetVersionGuard() {

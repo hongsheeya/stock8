@@ -896,9 +896,17 @@ export class Component implements OnInit, OnDestroy {
             if (code !== 200) {
                 this.errorMessage = data?.message || '학습 실패';
             } else {
-                this.successMessage = data?.result?.message || `${this.symbol} 학습을 완료했습니다.`;
-                await this.refreshRecommendationIfMissing(true);
-                await this.loadLiveStatus(true);
+                const result = data?.result || {};
+                const summary = result.best?.summary;
+                const validation = result.best?.validation?.validation;
+                if (result.skipped || !summary) {
+                    this.errorMessage = result.message || '백테스트 결과를 만들지 못했습니다.';
+                } else {
+                    this.successMessage = `${this.selectedName || this.symbol} · ${result.period || ""} 백테스트 완료: 수수료 반영 수익률 ${Number(summary.total_return || 0).toFixed(3)}% · 손익 ${Math.round(Number(summary.total_profit || 0)).toLocaleString()}원 · 최대낙폭 ${Number(summary.max_drawdown || 0).toFixed(3)}%`
+                        + (validation ? ` · 검증 구간 ${Number(validation.total_return || 0).toFixed(3)}%` : '');
+                }
+                // A single-symbol test must not launch full-universe training
+                // or keep its button busy while waiting on broker polling.
             }
         } catch (e: any) {
             this.errorMessage = e?.message || '학습 중 오류가 발생했습니다.';

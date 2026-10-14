@@ -75,7 +75,7 @@ if args.firegate:
         keys = ('id','nickname','holdingQty','avgPrice','startDate','totalBuy','totalSell','tValue','sourceCycleId','isRunning')
         print(json.dumps({'portfolio':{k:p.get(k) for k in keys}, 'transactions':client.list_transactions(p['id'])}, ensure_ascii=False), flush=True)
     raise SystemExit(0)
-with api.request_options(timeout=8, retries=0):
+with api.request_options(timeout=45, retries=0):
     balance = api.get_balance()
     print(json.dumps({'holdings': [h for h in balance.get('holdings', []) if h.get('symbol') == 'SOXL']}, ensure_ascii=False), flush=True)
     start = datetime.datetime.strptime(args.start, '%Y%m%d').date()

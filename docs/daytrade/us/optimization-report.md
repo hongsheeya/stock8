@@ -1,11 +1,11 @@
 # Domestic Daytrade Optimization Report
 
-- Generated: 2026-10-03 00:35:22
-- Symbol: ARM
+- Generated: 2026-10-15 01:31:40
+- Symbol: MELI
 - Market: US
 - Strategy: US 프리마켓 갭업 하따
 - Period/Interval: 10d / 5m
-- Seed: 8,009,949
+- Seed: 50,000,000
 
 ## Selection Criteria
 - Score: summary_score*0.45 + robustness_score*0.35 + graph_stability_score*0.20
@@ -20,22 +20,22 @@
 - Exit: 고점 대비 -20% 또는 진입가 대비 -8% 손절
 
 ## Best Candidate
-- Total Return: 2.123%
-- Total Profit: 170054.56
-- Win Rate: 10.0%
-- Max Drawdown: 0.0%
-- Avg Trades/Day: 0.2
-- Profit Factor: 170054.56
-- Fee Total: 60332.85
-- Avg Holding Minutes: 2.5
-- Score: 5.4504
+- Total Return: 1.9248%
+- Total Profit: 962397.38
+- Win Rate: 12.5%
+- Max Drawdown: 2.0153%
+- Avg Trades/Day: 0.5
+- Profit Factor: 8.292
+- Fee Total: 747854.73
+- Avg Holding Minutes: 23.22
+- Score: 3.6345
 
 ## Validation
-- Train/Test Split: 5:5
-- Robustness Score: 3.6509
-- Overfit Gap: 2.123
-- Graph Stability Score: 2.6223
-- Graph Holdout Avg Return: 1.0615%
+- Train/Test Split: 4:4
+- Robustness Score: 0.6217
+- Overfit Gap: 1.9248
+- Graph Stability Score: 0.0
+- Graph Holdout Avg Return: 0.0%
 - Graph Negative Fold Ratio: 0.0
 
 ## Best Parameters
@@ -45,10 +45,10 @@
 - buy_split_ratio: 0.5
 - commission_bps: 25.0
 - entry_drawdown_max_pct: 3.0
-- entry_drawdown_min_pct: 0.0
+- entry_drawdown_min_pct: 0.3
 - high_stop_pct: 20.0
 - jackpot2_take_profit_pct: 5.0
-- jackpot_take_profit_pct: 4.0
+- jackpot_take_profit_pct: 2.5
 - ma_fast: 5
 - ma_slow: 20
 - max_live_day_range_pct: 30.0
@@ -57,7 +57,7 @@
 - min_change_pct: 5.0
 - min_prior_surge_pct: 10.0
 - min_volume_usd: 2000000
-- premarket_gap_min_pct: 4.0
+- premarket_gap_min_pct: 1.5
 - rsi_period: 14
 - sec_fee_per_million_usd: 8.0
 - sell_commission_bps: 25.0
@@ -66,8 +66,8 @@
 - stop_loss_pct: 3.0
 
 ## Top Candidates
-1. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
-2. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
-3. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
-4. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
-5. strategy=us_premarket selection=4.255, score=5.4504, return=2.123%, mdd=0.0%, robust=3.6509
+1. strategy=us_premarket selection=1.8531, score=3.6345, return=1.9248%, mdd=2.0153%, robust=0.6217
+2. strategy=us_premarket selection=1.8531, score=3.6345, return=1.9248%, mdd=2.0153%, robust=0.6217
+3. strategy=us_premarket selection=1.8531, score=3.6345, return=1.9248%, mdd=2.0153%, robust=0.6217
+4. strategy=us_premarket selection=1.8531, score=3.6345, return=1.9248%, mdd=2.0153%, robust=0.6217
+5. strategy=us_premarket selection=1.8531, score=3.6345, return=1.9248%, mdd=2.0153%, robust=0.6217

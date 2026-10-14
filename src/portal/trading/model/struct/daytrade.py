@@ -492,6 +492,17 @@ class Daytrade:
         return result
 
     def candidate_universe(self, market="KS"):
+        """Trading candidates must come from a successful, fresh discovery scan."""
+        if str(market).upper() == "US":
+            return self.us_candidate_universe()
+        cache = self._DYNAMIC_UNIVERSE_CACHE
+        if cache.get('status') != 'ready' or _time.monotonic() - cache.get('ts', 0) >= self._DYNAMIC_UNIVERSE_TTL:
+            return []
+        limit = max(1, min(40, self._safe_int(self._config('daytrade_ks_universe_max', '32'), 32)))
+        return [dict(row) for row in cache.get('rows', []) if not row.get('upper_limit_watch_only')][:limit]
+
+    def research_candidate_universe(self, market="KS"):
+        """Explicit static research list, never an automatic discovery fallback."""
         if str(market).upper() == "US":
             return self.us_candidate_universe()
         # Keep a compact set of liquid anchors, then fill the range with the
@@ -579,6 +590,20 @@ class Daytrade:
         return self._classify_domestic_market_regime([])
 
     def refresh_dynamic_candidate_universe(self, force=False):
+        cache = self._DYNAMIC_UNIVERSE_CACHE
+        now = _time.monotonic()
+        if not force and now - cache.get('attempt_ts', -1e12) < self._DYNAMIC_UNIVERSE_TTL:
+            return self.candidate_universe('KS')
+        cache['attempt_ts'] = now
+        try:
+            rows = self._scan_dynamic_candidate_universe(force=True)
+            cache['status'] = 'ready' if rows else 'empty'
+            cache['error'] = ''
+        except Exception:
+            cache.update(rows=[], ts=now, status='unavailable', error='국장 순위 조회 실패')
+        return self.candidate_universe('KS')
+
+    def _scan_dynamic_candidate_universe(self, force=False):
         """Refresh the KR universe from KIS liquidity and momentum rankings."""
         cache = self._DYNAMIC_UNIVERSE_CACHE
         age = _time.monotonic() - self._safe_float(cache.get("ts", 0), 0)
@@ -624,11 +649,11 @@ class Daytrade:
                 volume = self._safe_int(first(raw, ("acml_vol", "volume"), 0), 0)
                 turnover = self._safe_float(first(raw, ("acml_tr_pbmn", "avrg_tr_pbmn", "turnover"), 0), 0)
                 change_pct = self._safe_float(first(raw, ("prdy_ctrt", "prdy_vrss_rt", "change_rate"), 0), 0)
-                if price and not min_price <= price <= max_price:
+                if not min_price <= price <= max_price:
                     continue
-                if volume and volume < min_volume:
+                if volume < min_volume:
                     continue
-                if turnover and turnover < min_turnover:
+                if turnover < min_turnover:
                     continue
                 item = merged.setdefault(symbol, {
                     "symbol": symbol,
@@ -1792,6 +1817,26 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         gross_loss = sum(x for x in sell_pnls if x < 0)
         wins = len([x for x in sell_pnls if x > 0])
         losses = len([x for x in sell_pnls if x < 0])
+        # Reconstruct share-weighted holding minutes from timestamped fills.
+        open_lots = []
+        duration_quantity = 0.0
+        closed_quantity = 0
+        for trade in trades:
+            qty = int(trade.get("qty", 0))
+            stamp = datetime.datetime.fromisoformat(str(trade["timestamp"]).replace("Z", "+00:00"))
+            if trade.get("side") == "BUY":
+                open_lots.append([qty, stamp])
+            elif trade.get("side") == "SELL":
+                while qty > 0 and open_lots:
+                    lot = open_lots[-1]
+                    taken = min(qty, lot[0])
+                    duration_quantity += taken * max(0, (stamp-lot[1]).total_seconds()/60)
+                    closed_quantity += taken
+                    qty -= taken
+                    lot[0] -= taken
+                    if lot[0] == 0:
+                        open_lots.pop()
+        holding_minutes = duration_quantity / closed_quantity if closed_quantity else 0
         summary = {
             "date": session.get("date"),
             "seed": round(seed, 2),
@@ -1959,11 +2004,16 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
             or self._safe_float(bar.get("close", 0), 0) < self._safe_float(bar.get("vwap", 0), 0)
         )
 
-        for bar in bars:
-            price = self._safe_float(bar.get("close", 0), 0)
-            if price <= 0:
+        for index, execution_bar in enumerate(bars):
+            if index == 0:
+                equity_curve.append(round(seed, 2))
                 continue
-            timestamp = bar.get("timestamp", "")
+            bar = bars[index - 1]
+            price = self._safe_float(bar.get("close", 0), 0)
+            execution_price = self._safe_float(execution_bar.get("open", 0), 0)
+            if min(price, execution_price) <= 0:
+                continue
+            timestamp = execution_bar.get("timestamp", "")
             position_qty = sum(int(x.get("qty", 0)) for x in lots)
             avg_cost = (sum(int(x.get("qty", 0)) * self._safe_float(x.get("price", 0), 0) for x in lots) / position_qty) if position_qty > 0 else 0
 
@@ -1973,24 +2023,27 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 if price >= breakout_entry_bar['breakout_high_20']:
                     sustain_ticks += 1
 
-            if (position_qty == 0 and self._safe_int(bar.get("indicator_bar_count", 0), 0) >= 20
+            if (position_qty == 0 and index < len(bars)-1
+                    and self._safe_int(bar.get("indicator_bar_count", 0), 0) >= 20
                     and bar.get("prev_close_confirmed") is not False and entry_rule(bar, session, profile)):
-                qty = self._chunk_qty(budget_total, price)
+                unit_cost = execution_price + self._trade_cost(execution_price, profile)
+                qty = self._chunk_qty(min(budget_total, max(0, seed + realized)), unit_cost)
                 if qty > 0:
-                    self._append_buy_lot(lots, qty, price, "VOLUME_BREAKOUT", timestamp, trades, profile, reason="volume_breakout entry")
+                    self._append_buy_lot(lots, qty, execution_price, "VOLUME_BREAKOUT", timestamp, trades, profile, reason="volume_breakout entry")
                     position_qty = sum(int(x.get("qty", 0)) for x in lots)
                     avg_cost = (sum(int(x.get("qty", 0)) * self._safe_float(x.get("price", 0), 0) for x in lots) / position_qty) if position_qty > 0 else 0
                     breakout_entry_bar = bar
             elif position_qty > 0:
                 holding_minutes += 1
                 if exit_rule(bar, session, profile, avg_cost):
-                    sold = self._lifo_sell(lots, position_qty, price, timestamp, "volume_breakout exit", trades, profile)
+                    sold = self._lifo_sell(lots, position_qty, execution_price, timestamp, "volume_breakout exit", trades, profile)
                     realized += sold.get("pnl", 0)
                     breakout_entry_bar = None # Reset on exit
             
             mtm_qty = sum(int(x.get("qty", 0)) for x in lots)
             mtm_cost = sum(int(x.get("qty", 0)) * self._safe_float(x.get("price", 0), 0) for x in lots)
-            equity_curve.append(round(seed + realized + (mtm_qty * price - mtm_cost), 2))
+            mark = self._safe_float(execution_bar.get("close", execution_price), execution_price)
+            equity_curve.append(round(seed + realized + (mtm_qty * mark - self._trade_cost(mtm_qty * mark, profile, is_sell=True) - mtm_cost), 2))
 
         if len(bars) > 0 and len(lots) > 0:
             last_price = self._safe_float(bars[-1].get("close", 0), 0)
@@ -2396,6 +2449,16 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         }
 
         for result in session_results:
+            # Stitch the actual intraday marked curve into account equity.
+            # Session capital can differ because only a fraction is compounded.
+            session_seed = self._safe_float(result.get("seed", seed), seed)
+            account_start = seed + total_profit
+            for mark in result.get("equity_curve", []):
+                marked_equity = account_start + self._safe_float(mark, session_seed) - session_seed
+                peak = max(peak, marked_equity)
+                if peak > 0:
+                    max_drawdown = max(max_drawdown, (peak - marked_equity) / peak * 100)
+                equity_curve.append(round(marked_equity, 2))
             total_profit += self._safe_float(result.get("net_profit", result.get("profit", 0)), 0)
             total_trades += self._safe_int(result.get("trade_count", 0), 0)
             total_turnover += self._safe_float(result.get("turnover", 0), 0)
@@ -2425,8 +2488,11 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         turnover_ratio = (total_turnover / seed) if seed > 0 else 0
         avg_holding = total_holding / day_count if day_count > 0 else 0
         sell_events = sum(len([t for t in result.get("trades", []) if t.get("side") == "SELL"]) for result in session_results)
-        profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else (gross_profit if gross_profit > 0 else 0)
-        avg_win = (gross_profit / sell_events) if sell_events > 0 and gross_profit > 0 else 0
+        # Undefined PF is not a currency amount. Keep a numeric compatibility
+        # value for existing score consumers and expose its validity explicitly.
+        profit_factor = (gross_profit / abs(gross_loss)) if gross_loss < 0 else 0
+        win_count = len([1 for result in session_results for t in result.get("trades", []) if t.get("side") == "SELL" and self._safe_float(t.get("pnl", 0), 0) > 0])
+        avg_win = (gross_profit / win_count) if win_count > 0 else 0
         loss_count = len([1 for result in session_results for t in result.get("trades", []) if t.get("side") == "SELL" and self._safe_float(t.get("pnl", 0), 0) < 0])
         avg_loss = (gross_loss / loss_count) if loss_count > 0 else 0
         
@@ -2444,6 +2510,11 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
             "total_return": round(total_return, 4),
             "avg_profit": round(avg_profit, 2),
             "win_rate": round(win_rate, 2),
+            "win_rate_basis": "profitable_sessions",
+            "trade_win_rate": round(win_count / sell_events * 100, 2) if sell_events else None,
+            "profit_factor_defined": gross_loss < 0,
+            "sell_event_count": sell_events,
+            "trade_count_basis": "order_events",
             "max_drawdown": round(max_drawdown, 4),
             "avg_trades": round(avg_trades, 2),
             "turnover_ratio": round(turnover_ratio, 4),
@@ -2686,6 +2757,13 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         results = []
         sessions = self._prepare_dataset(symbol, market=market, period=period, interval=interval)
         base_profile = self._default_profile_for_market(market=market, strategy_id=strategy_id)
+        # Final chronological block is never passed to parameter selection.
+        # With fewer than ten sessions no final-test claim is made.
+        final_sessions = []
+        if len(sessions) >= 10:
+            final_start = max(6, int(len(sessions) * 0.8))
+            final_sessions = sessions[final_start:]
+            sessions = sessions[:final_start]
         baseline = self._backtest_sessions(sessions, symbol, market=market, period=period, interval=interval, seed=seed, profile=base_profile, strategy_id=strategy_id)
         for values in itertools.product(*[grid[k] for k in keys]):
             profile = {**base_profile, **dict(zip(keys, values))}
@@ -2708,12 +2786,24 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         baseline_validation_score = self._safe_float(baseline_validation.get("robustness_score", baseline_summary.get("score", 0)), baseline_summary.get("score", 0))
         baseline_graph_score = self._safe_float((baseline_validation.get("graph_validation", {}) or {}).get("stability_score", 0), 0)
         best = results[0] if len(results) > 0 else {"strategy_id": strategy_id, "profile": base_profile, "summary": baseline_summary, "validation": baseline_validation, "selection_score": self._selection_score(baseline_summary.get("score", 0), baseline_validation_score, baseline_graph_score)}
+        final_test = None
+        if final_sessions:
+            final_test = self._backtest_sessions(final_sessions, symbol, market=market, period=period, interval=interval, seed=seed, profile=best["profile"], strategy_id=strategy_id, include_validation=False)
         payload = {
             "generated_at": self._now().strftime("%Y-%m-%d %H:%M:%S"),
             "symbol": symbol, "market": market, "period": period, "interval": interval, "strategy_id": strategy_id,
             "seed": seed,
             "criteria": {"score_formula": "summary_score*0.45 + robustness_score*0.35 + graph_stability_score*0.20", "focus": ["순수익률", "MDD", "승률", "회전율", "보유시간", "수수료 차감 순이익", "그래프 홀드아웃 안정성"]},
             "baseline": baseline, "best": best, "top_candidates": results[:5],
+            "final_test": final_test,
+            "validation_protocol": {
+                "parameter_selection": "development block including inner validation only",
+                "final_test_used_for_selection": False,
+                "development_sessions": len(sessions),
+                "final_sessions": len(final_sessions),
+                "live_parity_verified": False,
+                "warning": "Repeated inspection or cross-symbol selection is not an untouched prospective trial",
+            },
             "strategy_spec": self.strategy_spec(strategy_id),
         }
         return payload
@@ -2733,18 +2823,35 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         training_seed = self._normalized_seed(requested_seed, requested_seed)
         price_cap = self._safe_float(price_cap, self._recommendation_price_cap(requested_seed))
         market = str(market or "KS").upper()
+        if market == 'KS':
+            self.refresh_dynamic_candidate_universe(force=False)
+            discovery = self._DYNAMIC_UNIVERSE_CACHE
+            universe = self.candidate_universe('KS')
+            fingerprint = tuple(sorted(row['symbol'] for row in universe))
+            if not universe:
+                result = self._empty_recommendation(market=market)
+                result['discovery'] = {'status': discovery.get('status', 'unavailable'), 'candidate_count': 0}
+                return result
         if not force:
             cached = self.latest_recommendation(seed=requested_seed, strategy_id=strategy_id, price_cap=price_cap, max_age_sec=max_age_sec, market=market)
             cached_strategy = cached.get("selected", {}).get("strategy_id") if cached else None
             cached_market = str(cached.get("selected", {}).get("market", "KS") if cached else "KS").upper()
+            if market == 'KS' and cached and tuple(cached.get('discovery_symbols', [])) != fingerprint:
+                cached = None
             if cached and cached_strategy and cached_market == market and (strategy_id == "" or cached_strategy == self._normalize_strategy(strategy_id)):
                 return cached
             # A display-only stale result must not short-circuit retraining.
             # Otherwise yesterday's failed candidates survive forever even
             # when the worker explicitly requests an hourly refresh.
         try:
-            return self.auto_train(seed=training_seed, requested_seed=requested_seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
+            result = self.auto_train(seed=training_seed, requested_seed=requested_seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
+            if market == 'KS':
+                result['discovery_symbols'] = list(fingerprint)
+                self._save_recommendation(result, market=market)
+            return result
         except Exception as e:
+            if market == 'KS':
+                return self._empty_recommendation(market=market, reason='새 후보 검증 실패: 신규 진입 보류')
             result = self._fallback_recommendation(seed=requested_seed, strategy_id=strategy_id, market=market, reason=f"학습 실패로 기본 종목을 유지합니다: {str(e)}")
             result["cache_key"] = self._recommendation_cache_key(seed=requested_seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
             result["requested_seed"] = round(requested_seed, 2)
@@ -2765,7 +2872,7 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         requested_seed = self._normalized_seed(requested_seed or seed, seed)
         if not is_us_market:
             try:
-                self.refresh_dynamic_candidate_universe(force=True)
+                self.refresh_dynamic_candidate_universe(force=False)
             except Exception:
                 pass
         else:

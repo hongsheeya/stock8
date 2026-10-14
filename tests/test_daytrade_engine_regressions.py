@@ -237,7 +237,7 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
 
     def test_domestic_budget_never_spends_locked_equity_or_double_counts_settlement(self):
         engine, _ = _engine_with_state({}, [])
-        engine.infinite_buy_daily_reserve = lambda: {'reserve_usd': 0}
+        engine.infinite_buy_daily_reserve = lambda **kw: {'reserve_usd': 0}
         engine._fetch_kis_balance_raw = lambda: {
             'withdrawable_krw': 100000, 'd1_deposit_krw': 100000,
             'krw_balance': 100000, 'usd_krw': 1350, 'source': 'test',
@@ -261,7 +261,7 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
 
     def test_reserved_cash_is_subtracted_once_before_dynamic_allocation(self):
         engine, _ = _engine_with_state({}, [])
-        engine.infinite_buy_daily_reserve = lambda: {'reserve_usd': 1000}
+        engine.infinite_buy_daily_reserve = lambda **kw: {'reserve_usd': 1000}
         engine._fetch_kis_balance_raw = lambda: {'withdrawable_krw': 1500000, 'krw_balance':1500000, 'usd_krw':1000, 'source':'test', 'total_asset_krw':10000000}
         engine.portfolio_usage = lambda **kwargs: {'active_entry_seed_krw':0, 'position_count':0}
         def allocate(**kwargs):
@@ -983,7 +983,7 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
 
     def test_shared_budget_status_uses_combined_us_orderable_amount(self):
         engine, _state = _engine_with_state({}, [])
-        engine.infinite_buy_daily_reserve = lambda: {"reserve_usd": 0, "cycles": [], "cycle_count": 0}
+        engine.infinite_buy_daily_reserve = lambda **kw: {"reserve_usd": 0, "cycles": [], "cycle_count": 0}
         engine._fetch_kis_balance_raw = lambda use_cache_only=False: {
             "withdrawable_krw": 1500000,
             "krw_balance": 1500000,
@@ -1027,7 +1027,7 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         import time
         from unittest.mock import Mock
         engine, _state = _engine_with_state({}, [])
-        engine.infinite_buy_daily_reserve = lambda: {"reserve_usd": 0, "cycles": [], "cycle_count": 0}
+        engine.infinite_buy_daily_reserve = lambda **kw: {"reserve_usd": 0, "cycles": [], "cycle_count": 0}
         engine.portfolio_usage = Mock(return_value={"active_entry_seed_krw": 0, "active_cost_krw": 0, "position_count": 0})
         engine._fetch_kis_balance_raw = lambda: self.fail("cache-only UI path made a network balance request")
         cached = {

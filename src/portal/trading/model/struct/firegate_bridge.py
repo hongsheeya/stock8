@@ -1213,6 +1213,15 @@ def transaction_document_id(tx):
     return None
 
 
+def matching_manual_transactions(transactions, tx):
+    """Possible duplicate, not proof: never silently delete identical fills."""
+    return [row for row in transactions if not row.get('source')
+            and str(row.get('type', '')).lower() == str(tx.get('type', '')).lower()
+            and format_firegate_date(row.get('date')) == format_firegate_date(tx.get('date'))
+            and _safe_int(row.get('size'), 0) == _safe_int(tx.get('size'), -1)
+            and abs(_safe_float(row.get('price'), 0)-_safe_float(tx.get('price'), -1)) < 0.000001]
+
+
 def calculate_v4_t_delta(portfolio, tx):
     if str((tx or {}).get("type", "")).lower() != "buy":
         return None
@@ -1383,7 +1392,9 @@ class FireGateBridge:
 
     def create_transaction(self, tx, doc_id=None):
         doc_id = doc_id or _millis()
-        tx = {**(tx or {}), "id": _safe_int(doc_id, doc_id)}
+        # Alphabetic local IDs are valid Firestore identities, not integer 0.
+        identity = int(str(doc_id)) if str(doc_id).isdigit() else str(doc_id)
+        tx = {**(tx or {}), "id": identity}
         data = self._request(
             "POST",
             self._path("transactions"),
@@ -1543,6 +1554,8 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
         tx = transaction_from_cycle_trade(trade, portfolio.get("id"), portfolio=portfolio)
         if not tx:
             return {"synced": False, "reason": "invalid_trade"}
+        if matching_manual_transactions(bridge.list_transactions(portfolio.get('id')), tx):
+            raise FireGateBridgeError('동일 날짜·수량·가격의 수동 입력이 있습니다. 중복 반영 방지를 위해 FireGate 자동 추가를 보류합니다. 체결 대조가 필요합니다.')
         saved_tx, updated = bridge.add_transaction_and_update_portfolio(portfolio, tx)
         return {
             "synced": True,

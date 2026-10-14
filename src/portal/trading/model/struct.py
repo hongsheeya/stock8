@@ -797,7 +797,9 @@ class Struct:
 
     def _worker_state(self):
         key = "_trading_daytrade_worker_state"
-        if not PAPER_MODE:
+        if PAPER_MODE:
+            key += ':paper:' + self._current_user_id()
+        else:
             key += ':' + self.live_data_scope
         state = getattr(_sys, key, None)
         if isinstance(state, dict) is False:
@@ -877,11 +879,29 @@ class Struct:
             firegate_result = self.run_due_firegate_sync()
         return external_result, firegate_result
 
+    def _account_worker_target(self, callback):
+        """Carry PAPER ownership into child threads; never use global credentials."""
+        if not PAPER_MODE:
+            return callback
+        owner = self._current_user_id()
+        def run(*args, **kwargs):
+            import flask
+            if not owner:
+                raise RuntimeError('PAPER worker requires an authenticated owner')
+            with wiz.server.app.flask.test_request_context('/'):
+                flask.session['id'] = owner
+                if not self.orm.use('user').get(id=owner):
+                    raise RuntimeError('PAPER worker owner no longer exists')
+                return callback(*args, **kwargs)
+        return run
+
     def _ensure_background_worker(self):
         if _os.environ.get("STOCK8_BUILD_ONLY") == "1" or "build" in _sys.argv:
             return
         if not PAPER_MODE:
             self._ensure_live_policy_workers()
+            return
+        if not self._current_user_id():
             return
         state = self._worker_state()
         with Struct._worker_lock:
@@ -905,7 +925,7 @@ class Struct:
             state["engine_id"] = current_engine_id
             state["daytrade_model_id"] = current_daytrade_id
             state["force_run"] = True
-            thread = threading.Thread(target=self._background_worker_loop, args=(generation,), daemon=True, name="trading-daytrade-worker")
+            thread = threading.Thread(target=self._account_worker_target(self._background_worker_loop), args=(generation,), daemon=True, name="trading-daytrade-worker")
             thread.start()
             state["thread"] = thread
             Struct._worker_thread = thread
@@ -1050,6 +1070,18 @@ class Struct:
         A single daemon job is allowed at a time. If FireGate is slow, the job
         remains visible as timed out, but KR/US entry and exit checks continue.
         """
+        if PAPER_MODE:
+            # The broker has no PAPER reservation/LOC service. Keep this
+            # capability distinct from OFF and do not retry/log every heartbeat.
+            enabled = str(self.get_config('auto_trade_enabled', 'false')).lower() == 'true'
+            enabled = enabled and str(self.get_config('loc_auto_schedule_enabled', 'true')).lower() == 'true'
+            return {
+                'enabled': enabled, 'executed': False, 'submitted': False,
+                'blocked': enabled, 'status': 'unsupported' if enabled else 'off',
+                'verified': False,
+                'message': ('KIS 모의 해외 예약·LOC 미지원 — 지정가 검증과 별도이며 자동 재시도하지 않습니다.'
+                            if enabled else '무한매수 매매 OFF'),
+            }
         thread = state.get("loc_async_thread")
         if thread is not None and thread.is_alive():
             elapsed = max(0, int(time.time() - float(state.get("loc_async_started_ts", 0.0) or 0.0)))
@@ -1094,7 +1126,7 @@ class Struct:
         state["loc_async_started_ts"] = time.time()
         state["loc_async_result"] = None
         thread = threading.Thread(
-            target=run_loc_job,
+            target=self._account_worker_target(run_loc_job),
             daemon=True,
             name="trading-loc-worker",
         )
@@ -1149,7 +1181,7 @@ class Struct:
         state["external_sync_async_started_ts"] = time.time()
         state["external_sync_async_result"] = None
         thread = threading.Thread(
-            target=run_sync_job,
+            target=self._account_worker_target(run_sync_job),
             daemon=True,
             name="trading-external-sync-worker",
         )
@@ -1199,7 +1231,7 @@ class Struct:
         state[started_key] = time.time()
         state[result_key] = None
         thread = threading.Thread(
-            target=run_auto_job,
+            target=self._account_worker_target(run_auto_job),
             daemon=True,
             name=f"trading-{market_key}-auto-worker",
         )
@@ -1622,6 +1654,10 @@ class Struct:
         }
 
     def run_due_loc_automation(self, force=False, reason="worker", verify=False, symbols=None):
+        if PAPER_MODE:
+            # Scheduler/API entry points must share the worker's capability
+            # gate, including force/verify calls. Never log these as attempts.
+            return self._poll_or_start_loc_automation({}, verify=verify, reason=reason)
         with self._loc_reservation_lock(timeout_sec=1) as acquired:
             if acquired is False:
                 return self._loc_reservation_locked_result(reason=reason)
@@ -1951,6 +1987,20 @@ class Struct:
                         "force_rebuild": False,
                         "broker_query_empty": True,
                     }
+                elif incomplete and problem_symbols and not (force and verify_only is False):
+                    # A partial plan is not evidence that accepted orders are
+                    # wrong. In particular insufficient buying power must not
+                    # cancel valid sell reservations every heartbeat. Rebuild
+                    # is an explicit user action handled by the force path.
+                    rebuild_result = {
+                        "executed": False,
+                        "status": "partial_plan_preserved",
+                        "message": "일부 예약 미완료: 기존 접수 주문은 유지합니다. 예산·조회 오류를 확인하며 자동 전체 취소·재예약하지 않습니다.",
+                        "attempt_count": 0,
+                        "threshold": threshold,
+                        "symbols": problem_symbols,
+                        "force_rebuild": False,
+                    }
                 elif incomplete and problem_symbols:
                     cooldown_remaining = self._loc_reservation_rebuild_cooldown_remaining()
                     if cooldown_remaining > 0 and force_rebuild is False and bool(force and verify_only is False) is False:
@@ -2202,7 +2252,7 @@ class Struct:
                             self.daytrade_engine.reconcile_order_history(max_dates=2)
                         except Exception:
                             pass
-                    state["reconcile_thread"] = threading.Thread(target=reconcile_history, daemon=True, name="stock8-fill-reconcile")
+                    state["reconcile_thread"] = threading.Thread(target=self._account_worker_target(reconcile_history), daemon=True, name="stock8-fill-reconcile")
                     state["reconcile_thread"].start()
                 maintenance_enabled = self._background_maintenance_enabled()
                 maintenance_interval_sec = self._background_maintenance_interval_sec()
@@ -2329,7 +2379,7 @@ class Struct:
                                 verify=loc_reservation_retry_due,
                                 reason=loc_reason,
                             ),
-                            "verified": bool(loc_reservation_retry_due),
+                            "verified": bool(loc_reservation_retry_due) and not PAPER_MODE,
                             "schedule_window": _loc_reservation_window_label(now_kst),
                             "schedule_key": _loc_schedule_key(now_kst),
                             "verification_version": _LOC_RESERVATION_VERIFY_VERSION,

@@ -449,6 +449,14 @@ def _build_us_daily_payload(target_date=""):
     return payload
 
 
+def _us_managed_positions(engine):
+    # Legacy engine state may still contain infinite-buy holdings. Do not
+    # promote those records to daytrade positions or the default analysis.
+    return [p for p in (engine.active_positions_from_state(market_filter="US") or [])
+            if str(p.get("symbol", "")).strip().upper() != "SOXL"
+            and str(p.get("market", "US")).upper() == "US"]
+
+
 def _build_us_auto_status_payload(engine=None, trading=None):
     engine = engine or _engine()
     us_auto_enabled = engine.auto_enabled(market="US")
@@ -459,9 +467,10 @@ def _build_us_auto_status_payload(engine=None, trading=None):
     engine = engine or _engine()
     trading = trading or _get_struct().trading
     us_auto_enabled = engine.auto_enabled(market="US")
-    active_positions = engine.active_positions_from_state(market_filter="US") or []
+    active_positions = _us_managed_positions(engine)
     worker_status = trading.worker_status() or {}
-    kis_status = engine.check_kis_connection()
+    kis_status = (engine.check_kis_connection() if us_auto_enabled else
+                  {"connected": None, "deferred": True, "message": "자동매매 OFF · 연결 검증 미실행"})
     market_open = bool(engine._us_market_open())
     premarket_open = bool(engine._us_premarket_open())
     auto_buy_window = engine._us_auto_buy_window()
@@ -721,7 +730,7 @@ def us_bootstrap():
                 defaults = service.us_defaults()
                 seed = _normalized_us_seed(defaults.get("seed", seed), service=service)
             try:
-                active_positions = engine.active_positions_from_state(market_filter="US")
+                active_positions = _us_managed_positions(engine)
             except Exception:
                 active_positions = []
             if active_positions:
@@ -729,7 +738,8 @@ def us_bootstrap():
                 default_symbol = first.get("symbol", default_symbol)
                 default_name = first.get("name", default_name)
                 default_strategy = first.get("strategy_id", default_strategy)
-            kis_status = engine.check_kis_connection()
+            kis_status = (engine.check_kis_connection() if engine.auto_enabled(market="US") else
+                          {"connected": None, "deferred": True, "message": "자동매매 OFF · 연결 검증 미실행"})
             budget_status = _enrich_budget_status(engine, engine.shared_budget_status(requested_seed=seed, use_cache_only=(persist_seed is False), market="US"), market="US")
             # First paint must not wait for quotes, signal evaluation, logs and
             # verification. The client refreshes this snapshot in the background.
@@ -737,6 +747,10 @@ def us_bootstrap():
             snapshot, _snapshot_age = _cache_get(_US_SNAPSHOT_CACHE, snapshot_key, _US_SNAPSHOT_TTL_SEC)
             if not isinstance(snapshot, dict):
                 snapshot = {}
+            # Control state must not depend on the slow quote/P&L snapshot.
+            # Otherwise an enabled worker is rendered as OFF until it finishes.
+            snapshot = dict(snapshot)
+            snapshot["auto_status"] = _build_us_auto_status_payload(engine=engine, trading=trading)
         except Exception as e:
             wiz.response.status(500, message=str(e))
         payload = {

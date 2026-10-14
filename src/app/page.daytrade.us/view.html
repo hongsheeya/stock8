@@ -39,7 +39,7 @@
                     <div>
                         <div class="mb-2 inline-flex items-center rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold text-blue-300">US 자동 단타</div>
                         <h1 class="text-lg font-semibold text-white">미장 자동 단타</h1>
-                        <p class="mt-1 text-[12px] leading-5 text-slate-400">자동으로 후보를 고르고 예약매수와 청산 감시를 이어갑니다.</p>
+                        <p class="mt-1 text-[12px] leading-5 text-slate-400">급등·거래량 후보를 검토하고 진입 조건과 주문가능액을 확인합니다. SOXL은 무한매수에서만 관리합니다.</p>
                     </div>
 
                     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -89,7 +89,7 @@
 	                            <div class="font-semibold text-white">자동매매 거래 시간</div>
 	                            <div class="mt-1">{{autoBuyScheduleLabel}}</div>
 	                            <div class="mt-1 text-slate-400">기준 시간 {{autoBuyScheduleAt}}<span *ngIf="autoBuyCurrentTime"> · 현재 {{autoBuyCurrentTime}}</span></div>
-	                            <div class="mt-1" [class]="autoBuyReady ? 'text-emerald-300' : 'text-amber-300'">{{autoBuyReady ? '예약매수 가능 시간입니다.' : '예약매수 시작 전 대기 중입니다.'}}</div>
+	                            <div class="mt-1" [class]="autoBuyReady ? 'text-emerald-300' : 'text-amber-300'">{{autoBuyReady ? '단타 주문 시간 · 잔고와 진입 조건 확인 필요' : '미국 프리마켓·정규장 시작 대기'}}</div>
 	                        </div>
 	                        <div *ngIf="!briefingCollapsed && briefReasonList.length > 0" class="mt-3 space-y-1 text-[11px] text-slate-300">
 	                            <div *ngFor="let item of briefReasonList">- {{item}}</div>
@@ -312,7 +312,7 @@
                         <h2 class="text-sm font-semibold text-white">진행 포지션</h2>
                         <span class="text-[11px] text-slate-500">{{autoStatus ? usActivePositions.length + '건' : '조회 대기'}}</span>
                     </div>
-                    <wiz-component-trading-controls [positions]="usActivePositions" [locksOnly]="true" [showLocks]="true"></wiz-component-trading-controls>
+                    <wiz-component-trading-controls [positions]="usActivePositions" [market]="'US'" [locksOnly]="true" [showLocks]="true"></wiz-component-trading-controls>
                     <div *ngIf="usActivePositions.length === 0" class="rounded-lg bg-white/5 px-3 py-4 text-center text-[12px] text-slate-500">{{autoStatus ? '현재 진행 중인 미장 포지션이 없습니다.' : '포지션 조회 결과를 기다리고 있습니다. 보유 없음으로 판단하지 않습니다.'}}</div>
                     <div *ngIf="usActivePositions.length > 0" class="space-y-2">
                         <div *ngFor="let item of usActivePositions" class="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-[12px]">
