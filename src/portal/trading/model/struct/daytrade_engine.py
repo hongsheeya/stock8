@@ -482,6 +482,25 @@ class DomesticDaytradeEngine:
             return str(value or "")
         return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
 
+    def _volume_breakout_exit(self, current_price, avg_price, profile, bar):
+        """Exit rule of volume_breakout: target reached, or the breakout failed
+        (price back under VWAP or the 20-bar low). A failed breakout is a risk
+        exit, so the fee guard must not convert it into HOLD."""
+        current_price = self._safe_float(current_price, 0)
+        avg_price = self._safe_float(avg_price, 0)
+        if current_price <= 0 or avg_price <= 0:
+            return None
+        profile = profile or {}
+        take_profit_pct = self._safe_float(profile.get("breakout_take_profit_pct", 1.4), 1.4)
+        if current_price >= avg_price * (1 + take_profit_pct / 100):
+            return {"action": "SELL_FULL", "reason": f"거래량 돌파 목표 +{take_profit_pct:g}% 달성 청산", "risk_exit": False}
+        bar = bar or {}
+        low_20 = self._safe_float(bar.get("breakout_low_20", 0), 0)
+        vwap = self._safe_float(bar.get("vwap", 0), 0)
+        if (low_20 > 0 and current_price < low_20) or (vwap > 0 and current_price < vwap):
+            return {"action": "SELL_FULL", "reason": "거래량 돌파 실패 — VWAP/20봉 저점 이탈 청산", "risk_exit": True}
+        return None
+
     def _overnight_carry_policy(self, state, profile, bar, current_price=0, avg_price=0, market="KS"):
         profile = profile or {}
         if self._is_us_market(market):
@@ -548,7 +567,7 @@ class DomesticDaytradeEngine:
         return str(market or "").upper() in ("US", "NYSE", "NASD", "NASDAQ", "AMEX", "NYS")
 
     def _is_market_close_approaching(self, market="KS"):
-        """장 마감 임박 여부 (강제청산 트리거): 국장 KST 15:20+, 미장 ET 15:40+"""
+        """장 마감 임박 여부 (강제청산 트리거): 국장 KST 15:10~15:20, 미장 ET 15:40+"""
         now = self._now()
         if self._is_us_market(market):
             # ET = KST - 13h (EDT 여름) or -14h (EST 겨울) — 간단히 -13h 기준
@@ -561,8 +580,13 @@ class DomesticDaytradeEngine:
                 return True
             return False
         else:
-            # 국장: KST 15:20 ~ 15:35
-            return now.hour == 15 and 20 <= now.minute <= 35
+            # 국장: 15:20부터는 종가 단일가라 domestic_market.route가 주문을 거부하고
+            # 자동 루프(_daytrade_market_open)도 15:20에 멈춘다. 마감 판단은 그 전에
+            # 끝나야 실제로 실행된다. 기본 15:10~15:20.
+            start = self._safe_int(self._config("daytrade_ks_close_window_start", "1510"), 1510)
+            start = min(max(start, 1400), 1519)
+            hhmm = now.hour * 100 + now.minute
+            return start <= hhmm < 1520
 
     def _round_usd_price(self, value):
         """USD 가격: $1 이상은 소수점 2자리, $1 미만은 4자리"""
@@ -892,25 +916,35 @@ class DomesticDaytradeEngine:
                     state["avg_price"]   = 0.0
                     state["buy1_used"]   = False
                     state["buy2_used"]   = False
-                state["last_exit_action"]   = "PRE_SELL_JACKPOT"
-                state["last_exit_reason"]   = f"사전 예약 지정가 매도 체결 ₩{round(filled_price):,}"
-                state["last_exit_order_no"] = str(order_no)
+                # Record the real exit kind. Labelling every confirmed fill as
+                # PRE_SELL_JACKPOT hid it from _reentry_cooldown_status (which
+                # only looks at SELL_*) and from the profit re-entry guard, so a
+                # confirmed stop-loss or jackpot fill allowed immediate re-entry.
+                exit_action = self._pending_sell_exit_action(state)
+                is_reservation = self._pending_sell_is_reservation(state)
+                exit_reason = (
+                    f"사전 예약 지정가 매도 체결 ₩{round(filled_price):,}"
+                    if is_reservation
+                    else f"{exit_action} 시장가 매도 체결 확인 ₩{round(filled_price):,}"
+                )
+                state["last_exit_price"] = round(self._safe_float(filled_price, 0), 4)
+                self._mark_exit_watch(state, reason=exit_reason, action=exit_action, order_no=str(order_no))
                 self._log_execution(
                     symbol,
-                    "SELL_FULL",
+                    exit_action,
                     filled_qty,
                     filled_price,
                     {
                         "order_no": str(order_no),
-                        "order_type": "LIMIT",
+                        "order_type": "LIMIT" if is_reservation else "MARKET",
                         "price": filled_price,
                         "qty": filled_qty,
                     },
-                    f"{symbol} SELL_FULL 실행 | {filled_qty}주 · 체결가 ₩{round(filled_price):,} | 사전 예약 지정가 매도 체결",
+                    f"{symbol} {exit_action} 실행 | {filled_qty}주 · 체결가 ₩{round(filled_price):,} | {exit_reason}",
                     strategy_id=state.get("strategy_id", "vrev"),
                     runtime={
-                        "action": "SELL_FULL",
-                        "reason": "사전 예약 지정가 매도 체결",
+                        "action": exit_action,
+                        "reason": exit_reason,
                         "risk_status": "SAFE",
                     },
                     name=state.get("name", ""),
@@ -920,10 +954,17 @@ class DomesticDaytradeEngine:
                 self._clear_pending_sell(state)
                 return "filled"
             elif status == "CANCELLED":
+                if self._pending_sell_is_reservation(state):
+                    state["reservation_cancelled_at"] = self._now().isoformat()
                 self._clear_pending_sell(state)
                 return "cancelled"
             elif status == "PARTIAL":
                 return "open"  # 부분 체결 중 → 대기
+
+        # A pending market exit (stop-loss, close rule, ...) is never cancelled
+        # for price drift: cancelling it would re-open the risk it was closing.
+        if not self._pending_sell_is_reservation(state):
+            return "open"
 
         # OPEN 또는 조회 미매칭 → 가격 이탈 체크
         pending_price   = self._safe_float(state.get("pending_sell_price", 0), 0)
@@ -935,6 +976,29 @@ class DomesticDaytradeEngine:
             return "open"
 
         return "open"
+
+    @staticmethod
+    def _pending_sell_is_reservation(state):
+        """True for the resting jackpot limit reservation (legacy rows had no type).
+        Market exits that are only awaiting fill confirmation carry their action
+        (SELL_STOP_LOSS, SELL_FULL, ...) as pending_sell_type."""
+        return str((state or {}).get("pending_sell_type", "") or "").upper() in ("", "JACKPOT")
+
+    def _reservation_rearm_ready(self, state):
+        """Back off resting limits after cancellation; never delay risk exits."""
+        value = state.get("reservation_cancelled_at")
+        if not value:
+            return True
+        try:
+            elapsed = (self._now() - datetime.datetime.fromisoformat(value)).total_seconds()
+            return elapsed >= 300
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    def _pending_sell_exit_action(state):
+        pending_type = str((state or {}).get("pending_sell_type", "") or "").upper()
+        return pending_type if pending_type.startswith("SELL") else "SELL_FULL"
 
     def _request_pending_sell_cancel(self, state, symbol):
         """Request once; only a later broker observation can release the order."""
@@ -3057,23 +3121,92 @@ class DomesticDaytradeEngine:
                 action = "HOLD"
                 reason = "현재 빠른 청산 조건에 해당하지 않습니다."
                 order_qty = 0
+                risk_exit = False
                 pending_order_no = str(state.get("pending_sell_order_no", "") or "")
+                if pending_order_no:
+                    # Held auto slots never reach _signal_from_state, so this
+                    # watch must reconcile the resting order itself (fill,
+                    # confirmed cancel, price-drift cancel). Without it a stale
+                    # reservation suspended the stop-loss for the whole session.
+                    pending_status = self._sync_pending_sell(state, symbol, market, current_price=current_price)
+                    # A date change is not broker evidence of an unfilled
+                    # expiry. A timeout or missing row may hide a fill; keep
+                    # tracking until the historical query confirms its result.
+                    state["updated_at"] = self._timestamp()
+                    self._store_state(state)
+                    pending_order_no = str(state.get("pending_sell_order_no", "") or "")
+                    position_qty = max(0, self._safe_int(state.get("position_qty", 0), 0))
+                    avg_price = max(0.0, self._safe_float(state.get("avg_price", 0), 0))
+                    if position_qty <= 0 or avg_price <= 0:
+                        results.append({
+                            "symbol": symbol,
+                            "market": market,
+                            "name": item.get("name", ""),
+                            "strategy_id": strategy_id,
+                            "executed": False,
+                            "message": "기존 매도 주문 체결이 확인되어 감시를 종료합니다." if pending_status == "filled" else "보유 수량이 없어 감시를 종료합니다.",
+                            "signal": "HOLD",
+                            "current_price": current_price,
+                            "watch_active": False,
+                        })
+                        continue
                 stop_loss_pct = abs(self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5))
                 jackpot_pct = max(0.0, self._safe_float(profile.get("jackpot_take_profit_pct", 2.0), 2.0))
                 jackpot_price = avg_price * (1 + jackpot_pct / 100) if avg_price > 0 else 0
                 jackpot_guard = jackpot_price * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
+                user_stop_price = self._safe_float(state.get("stop_loss_price", 0), 0)
+                user_stop_hit = bool(state.get("stop_loss_enabled", False)) and user_stop_price > 0 and current_price <= user_stop_price
+                auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
+                close_window = self._is_market_close_approaching(market)
+                live_bar = {}
+                if strategy_id == "volume_breakout" or (close_window and strategy_id == "vrev"):
+                    try:
+                        _session, live_bar = self._latest_snapshot(symbol, market=market)
+                    except Exception:
+                        live_bar = {}
+                    live_bar = live_bar or {}
+                breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
                 if pending_order_no:
-                    reason = f"기존 매도 주문 {pending_order_no} 체결 확인 대기 중"
-                elif bool(state.get("stop_loss_enabled", False)) and self._safe_float(state.get("stop_loss_price", 0), 0) > 0 and current_price <= self._safe_float(state.get("stop_loss_price", 0), 0):
+                    if (user_stop_hit or auto_stop_hit) and self._pending_sell_is_reservation(state):
+                        # The resting limit locks the shares: request the cancel
+                        # now and send the stop once the broker confirms it.
+                        self._request_pending_sell_cancel(state, symbol)
+                        state["updated_at"] = self._timestamp()
+                        self._store_state(state)
+                        reason = "손절가 도달 — 기존 예약 매도 취소 확인 후 손절 (중복 매도 방지)"
+                    else:
+                        reason = f"기존 매도 주문 {pending_order_no} 체결 확인 대기 중"
+                elif user_stop_hit:
                     action, order_qty, reason = "SELL_STOP_LOSS", position_qty, "사용자 지정 손절가 확인"
-                elif avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100):
+                elif auto_stop_hit:
                     action, order_qty, reason = "SELL_STOP_LOSS", position_qty, f"자동 손절가 확인 (평단가 -{stop_loss_pct}%)"
                 elif bool(state.get("manual_sell_enabled", False)) and self._safe_float(state.get("manual_sell_target_price", 0), 0) > 0 and current_price >= self._safe_float(state.get("manual_sell_target_price", 0), 0):
                     action, order_qty, reason = "SELL_MANUAL", position_qty, "사용자 지정 판매가 도달"
                 elif strategy_id == "vrev" and jackpot_price > 0 and current_price >= jackpot_price:
                     action, order_qty, reason = "SELL_FULL", position_qty, f"목표 수익 {jackpot_pct}% 달성 전량 청산"
-                elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard:
+                elif close_window and strategy_id == "vrev":
+                    # Close rule (previously unreachable): lock the small profit,
+                    # carry only strong closes, clean up the rest before 15:20.
+                    close_tp_pct = max(0.0, self._safe_float(profile.get("close_liquidity_take_profit_pct", 0.4), 0.4))
+                    carry_policy = self._overnight_carry_policy(state, profile, live_bar, current_price=current_price, avg_price=avg_price, market=market)
+                    if close_tp_pct > 0 and current_price >= avg_price * (1 + close_tp_pct / 100):
+                        action, order_qty, reason = "SELL_FULL", position_qty, f"장마감 시드 확보 익절 (+{close_tp_pct:.2f}% 기준)"
+                    elif carry_policy.get("eligible"):
+                        reason = carry_policy.get("reason", "종가 강도 유지로 오버나잇 보유")
+                    else:
+                        action, order_qty = "SELL_FULL", position_qty
+                        reason = f"장마감 약세 정리: {carry_policy.get('reason', '오버나잇 조건 미충족')}"
+                        risk_exit = True
+                elif close_window and strategy_id == "volume_breakout":
+                    action, order_qty, reason = "SELL_FULL", position_qty, "거래량 돌파 장마감 평탄화 (오버나잇 미보유)"
+                    risk_exit = True
+                elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard and self._reservation_rearm_ready(state):
                     action, order_qty, reason = "PRE_SELL_JACKPOT", position_qty, f"잭팟가 ₩{round(jackpot_price):,} 근접 — 사전 지정가 예약 우선"
+                elif breakout_exit:
+                    # The fast path only knew vrev targets, so breakout slots
+                    # could exit solely through the stop-loss.
+                    action, order_qty, reason = breakout_exit["action"], position_qty, breakout_exit["reason"]
+                    risk_exit = bool(breakout_exit.get("risk_exit"))
                 elif str(state.get("last_signal", "") or "").startswith("SELL"):
                     action, order_qty, reason = str(state.get("last_signal")), position_qty, "직전 유효 매도 신호를 빠른 청산 경로에서 재확인"
                 signal = {
@@ -3086,6 +3219,8 @@ class DomesticDaytradeEngine:
                     "pre_sell_price": round(jackpot_price) if action == "PRE_SELL_JACKPOT" else 0,
                     "price_source": "kis_broker_balance",
                     "strategy_id": strategy_id,
+                    "risk_exit": risk_exit,
+                    "close_window": close_window,
                 }
                 fast_status = {
                     "symbol": symbol,
@@ -6072,7 +6207,16 @@ class DomesticDaytradeEngine:
                 or (strategy_id == "vrev" and state.get("buy2_used") and current_price >= _rescue_target)
             )
 
-        if allow_buy and strategy_id == "vrev" and position_qty == 0 and state.get("buy1_used") == False and current_price <= buy1_trigger and reentry_cooldown.get("active") is False and profit_reentry_guard_buy1.get("active") is False:
+        ks_close_window = not self._is_us_market(market) and self._is_market_close_approaching(market)
+        if allow_buy and ks_close_window and position_qty == 0 and strategy_id in ("vrev", "volume_breakout"):
+            # A fill here would be judged by the close rule minutes later
+            # (sold for fees or carried unplanned), so no new KS entries.
+            signal.update({
+                "action": "HOLD",
+                "reason": "장마감 정리 구간이라 신규 진입하지 않습니다.",
+                "order_qty": 0,
+            })
+        elif allow_buy and strategy_id == "vrev" and position_qty == 0 and state.get("buy1_used") == False and current_price <= buy1_trigger and reentry_cooldown.get("active") is False and profit_reentry_guard_buy1.get("active") is False:
             vrev_preflight_issues = self._vrev_preflight_check(symbol, market, bar, profile)
             if len(vrev_preflight_issues) > 0:
                 signal.update({
@@ -6087,7 +6231,7 @@ class DomesticDaytradeEngine:
                     "reason": "1차 눌림 구간 진입 신호",
                     "order_qty": self._buy_qty(buy_budget, current_price),
                 })
-        elif allow_buy and strategy_id == "vrev" and position_qty > 0 and carried_overnight is False and state.get("buy1_used") == True and state.get("buy2_used") == False and current_price <= buy2_trigger and sell_priority_hit is False and reentry_cooldown.get("active") is False and profit_reentry_guard_buy2.get("active") is False:
+        elif allow_buy and strategy_id == "vrev" and position_qty > 0 and carried_overnight is False and ks_close_window is False and state.get("buy1_used") == True and state.get("buy2_used") == False and current_price <= buy2_trigger and sell_priority_hit is False and reentry_cooldown.get("active") is False and profit_reentry_guard_buy2.get("active") is False:
             vrev_preflight_issues = self._vrev_preflight_check(symbol, market, bar, profile)
             if len(vrev_preflight_issues) > 0:
                 signal.update({
@@ -6325,7 +6469,7 @@ class DomesticDaytradeEngine:
                     (stop_loss_enabled and stop_loss_price > 0 and current_price <= stop_loss_price)
                     or auto_stop_hit
                 )
-                if pending_stop_hit:
+                if pending_stop_hit and self._pending_sell_is_reservation(state):
                     self._request_pending_sell_cancel(state, symbol)
                     signal.update({
                         "action": "HOLD",
@@ -6334,10 +6478,18 @@ class DomesticDaytradeEngine:
                     })
                     _has_pending = True
                     self._append_runtime_log("warning", f"{symbol} 기존 매도 취소 확인 대기 중입니다. 확인 전 추가 매도를 보류합니다.", symbol=symbol, strategy_id=strategy_id, dedup_sec=60)
-                else:
+                elif self._pending_sell_is_reservation(state):
                     signal.update({
                         "action": "HOLD",
                         "reason": f"지정가 매도 예약 대기 중 ₩{round(state.get('pending_sell_price', 0)):,} — 체결 감시 중",
+                        "order_qty": 0,
+                    })
+                    _has_pending = True
+                else:
+                    # A market exit is already working; never cancel or resend it.
+                    signal.update({
+                        "action": "HOLD",
+                        "reason": f"{self._pending_sell_exit_action(state)} 주문 체결 확인 대기 중 · 중복 매도 방지",
                         "order_qty": 0,
                     })
                     _has_pending = True
@@ -6354,6 +6506,7 @@ class DomesticDaytradeEngine:
                     and minutes_since_open < overnight_open_grace_minutes
                     and pnl_pct > (-1.0 * overnight_panic_stop_loss_pct)
                 )
+                breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, bar) if strategy_id == "volume_breakout" else None
                 if self._is_market_close_approaching(market) and strategy_id == "vrev":
                     if close_liquidity_take_profit_price > 0 and current_price >= close_liquidity_take_profit_price:
                         signal.update({
@@ -6369,11 +6522,22 @@ class DomesticDaytradeEngine:
                             "order_qty": 0,
                         })
                     else:
+                        # Risk exit: the jackpot soft guard and the fee guard used
+                        # to turn this into HOLD, so weak positions were carried.
                         signal.update({
                             "action": "SELL_FULL",
                             "reason": f"장마감 약세 정리: {overnight_policy.get('reason', '오버나잇 조건 미충족')}",
                             "order_qty": position_qty,
+                            "ignore_jackpot_soft_guard": True,
+                            "risk_exit": True,
                         })
+                elif self._is_market_close_approaching(market) and strategy_id == "volume_breakout":
+                    signal.update({
+                        "action": "SELL_FULL",
+                        "reason": "거래량 돌파 장마감 평탄화 (오버나잇 미보유)",
+                        "order_qty": position_qty,
+                        "risk_exit": True,
+                    })
                 elif stop_loss_enabled and stop_loss_price > 0 and current_price <= stop_loss_price:
                     signal.update({
                         "action": "SELL_STOP_LOSS",
@@ -6406,7 +6570,7 @@ class DomesticDaytradeEngine:
                         "reason": f"목표 수익 {jackpot_pct_val}% 달성 전량 청산",
                         "order_qty": position_qty,
                     })
-                elif strategy_id == "vrev" and current_price >= jackpot_soft_exit_guard:
+                elif strategy_id == "vrev" and current_price >= jackpot_soft_exit_guard and self._reservation_rearm_ready(state):
                     # 잭팟가 근처에서는 soft exit보다 잭팟 예약을 우선한다.
                     signal.update({
                         "action": "PRE_SELL_JACKPOT",
@@ -6445,16 +6609,13 @@ class DomesticDaytradeEngine:
                         "order_qty": position_qty,
                         "ignore_jackpot_soft_guard": True,
                     })
-                elif strategy_id == "volume_breakout" and (
-                    current_price >= avg_price * (1 + self._safe_float(profile.get("breakout_take_profit_pct", 1.4), 1.4) / 100)
-                    or current_price < self._safe_float(bar.get("breakout_low_20", 0), 0)
-                    or current_price < self._safe_float(bar.get("vwap", 0), 0)
-                ):
+                elif strategy_id == "volume_breakout" and breakout_exit:
                     signal.update({
-                        "action": "SELL_FULL",
-                        "reason": "거래량 돌파 후 이탈/목표 달성 청산",
+                        "action": breakout_exit["action"],
+                        "reason": breakout_exit["reason"],
                         "order_qty": position_qty,
-                })
+                        "risk_exit": breakout_exit["risk_exit"],
+                    })
                 elif strategy_id in ("us_premarket", "us_breakout", "us_pullback", "us_vwap"):
                     # ── US 전략 공통 청산 로직 ──────────────────────────────
                     us_high_stop_pct = self._safe_float(profile.get("high_stop_pct", 20.0), 20.0)
@@ -6491,7 +6652,9 @@ class DomesticDaytradeEngine:
         # 매수 수수료 0.015% + 매도 수수료 0.015% + 증권거래세 0.18% = 총 ~0.21%
         _FEE_BUY = 0.00015
         _FEE_SELL = 0.00195  # 0.015% + 0.18% 거래세
-        if signal["action"].startswith("SELL") and "STOP" not in signal["action"] and signal["action"] != "SELL_MANUAL" and avg_price > 0 and current_price > 0:
+        # Risk exits (close-rule clean-up, failed breakout) cut a loss on purpose;
+        # the profit floor must not turn them back into HOLD.
+        if signal["action"].startswith("SELL") and "STOP" not in signal["action"] and signal["action"] != "SELL_MANUAL" and not signal.get("risk_exit") and avg_price > 0 and current_price > 0:
             break_even = avg_price * (1 + _FEE_BUY) / (1 - _FEE_SELL)  # ≈ avg_price * 1.0021
             sell_qty_for_check = min(position_qty, max(1, self._safe_int(signal.get("order_qty", position_qty), position_qty)))
             min_exit_net_profit = max(0, round(self._safe_float(profile.get("min_exit_net_profit_krw", 500), 500)))
