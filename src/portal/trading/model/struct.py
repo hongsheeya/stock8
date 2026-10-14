@@ -111,6 +111,7 @@ _LOC_RESERVATION_END_STANDARD_HHMM = 2320
 _LOC_RESERVATION_END_SUMMER_HHMM = 2220
 _LOC_RESERVATION_VERIFY_VERSION = "firegate-authoritative-v3"
 _LOC_RESERVATION_PROCESS_LOCK = _sys.__dict__.setdefault('_stock8_loc_reservation_process_lock', threading.Lock())
+_PAPER_WORKER_OWNER_KEY = "paper_worker_owner_user_id"
 
 
 class _UserScopedDb:
@@ -879,11 +880,11 @@ class Struct:
             firegate_result = self.run_due_firegate_sync()
         return external_result, firegate_result
 
-    def _account_worker_target(self, callback):
+    def _account_worker_target(self, callback, owner=None):
         """Carry PAPER ownership into child threads; never use global credentials."""
         if not PAPER_MODE:
             return callback
-        owner = self._current_user_id()
+        owner = str(owner or self._current_user_id() or "").strip()
         def run(*args, **kwargs):
             import flask
             if not owner:
@@ -895,14 +896,16 @@ class Struct:
                 return callback(*args, **kwargs)
         return run
 
-    def _ensure_background_worker(self):
+    def _ensure_background_worker(self, owner=None):
         if _os.environ.get("STOCK8_BUILD_ONLY") == "1" or "build" in _sys.argv:
             return
         if not PAPER_MODE:
             self._ensure_live_policy_workers()
             return
-        if not self._current_user_id():
+        owner = str(owner or self._current_user_id() or "").strip()
+        if not owner:
             return
+        started = False
         state = self._worker_state()
         with Struct._worker_lock:
             worker = state.get("thread")
@@ -925,14 +928,55 @@ class Struct:
             state["engine_id"] = current_engine_id
             state["daytrade_model_id"] = current_daytrade_id
             state["force_run"] = True
-            thread = threading.Thread(target=self._account_worker_target(self._background_worker_loop), args=(generation,), daemon=True, name="trading-daytrade-worker")
+            thread = threading.Thread(target=self._account_worker_target(self._background_worker_loop, owner), args=(generation,), daemon=True, name="trading-daytrade-worker")
             thread.start()
+            started = True
             state["thread"] = thread
             Struct._worker_thread = thread
             Struct._worker_started = True
             Struct._worker_engine_id = current_engine_id
             Struct._worker_daytrade_id = current_daytrade_id
             Struct._worker_force_run = True
+        if started:
+            self._remember_paper_worker_owner(owner)
+
+    def resume_paper_worker(self):
+        """Resume the PAPER worker after a server restart, before anyone logs in.
+
+        Only the server bootstrap calls this. Scripts that load Struct without
+        a session never start a second worker against the same account.
+        """
+        if not PAPER_MODE or self._current_user_id():
+            return ""
+        owner = self._remembered_paper_worker_owner()
+        if owner:
+            self._ensure_background_worker(owner=owner)
+        return owner
+
+    def _remembered_paper_worker_owner(self):
+        # The owner must still exist and keep PAPER access; otherwise wait for a login.
+        try:
+            owner = str(self._lookup_config_value(_PAPER_WORKER_OWNER_KEY, "") or "").strip()
+            if not owner or not self.orm.use("user").get(id=owner):
+                return ""
+            if not wiz.model("portal/trading/paper_subscription")(wiz.server.path.root).enabled(owner):
+                return ""
+            return owner
+        except Exception:
+            return ""
+
+    def _remember_paper_worker_owner(self, owner):
+        # Another PAPER user who happens to start the worker first must not
+        # replace a remembered owner who still exists, unless they are an admin.
+        try:
+            remembered = str(self._lookup_config_value(_PAPER_WORKER_OWNER_KEY, "") or "").strip()
+            if remembered == owner:
+                return
+            if remembered and self.orm.use("user").get(id=remembered) and not self._current_user_is_admin(owner):
+                return
+            self._write_config_value(_PAPER_WORKER_OWNER_KEY, owner, "PAPER worker owner resumed after a restart")
+        except Exception:
+            pass
 
     @property
     def live_data_scope(self):

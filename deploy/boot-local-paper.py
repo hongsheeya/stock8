@@ -20,17 +20,18 @@ def bootstrap(app, config):
         try:
             with app.flask.test_request_context("/stock8-paper-bootstrap"):
                 trading = server.wiz().model("struct").trading
+                # No browser session exists yet: resume the remembered PAPER owner.
+                resume = getattr(trading, "resume_paper_worker", None)
+                resumed = bool(resume and resume())
                 status = trading.worker_status()
-                print(
-                    "Stock8 PAPER worker initialized: "
-                    f"started={status.get('started', False)} "
-                    f"interval={status.get('interval_sec', 0)}s"
-                )
-                write_bootstrap_log(
+                message = (
                     "PAPER worker initialized: "
                     f"started={status.get('started', False)} "
+                    f"resumed={resumed} "
                     f"interval={status.get('interval_sec', 0)}s"
                 )
+                print("Stock8 " + message)
+                write_bootstrap_log(message)
         except Exception as exc:
             print(f"Stock8 PAPER worker bootstrap failed: {exc}")
             write_bootstrap_log(f"PAPER worker bootstrap failed: {type(exc).__name__}: {exc}")
