@@ -796,10 +796,12 @@ class Struct:
         finally:
             self._write_config_value(marker, "true", description="PAPER watchlist auto targets activated")
 
-    def _worker_state(self):
+    def _worker_state(self, owner=None):
         key = "_trading_daytrade_worker_state"
         if PAPER_MODE:
-            key += ':paper:' + self._current_user_id()
+            # The loop reads its state under its owner's session; a restart
+            # resume has no session and must store the thread under that key.
+            key += ':paper:' + str(owner or self._current_user_id() or "")
         else:
             key += ':' + self.live_data_scope
         state = getattr(_sys, key, None)
@@ -906,7 +908,7 @@ class Struct:
         if not owner:
             return
         started = False
-        state = self._worker_state()
+        state = self._worker_state(owner)
         with Struct._worker_lock:
             worker = state.get("thread")
             cached_engine_id = int(state.get("engine_id", 0) or 0)
