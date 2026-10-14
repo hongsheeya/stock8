@@ -9,6 +9,7 @@ import math
 import time
 import os
 import json
+import hashlib
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -1491,7 +1492,7 @@ class Engine:
         try:
             rows = trade_db.rows(cycle_id=cycle_id, trade_date=trade_date, dump=500) or []
         except Exception:
-            return False
+            raise RuntimeError("매수 거래일 확인 실패: 회차 변경을 중단합니다")
         return any(self._counts_toward_round(row) and not self._is_synthetic_external_trade(row) for row in rows)
 
     def execute_buy(self, cycle_id, filled_price, filled_qty, order_type="LOC", order_price=0, trade_date="", broker_order_no="", source="", memo=""):
@@ -1970,6 +1971,25 @@ class Engine:
     # =========================================================================
 
     DAILY_ORDER_EVENT = "IB_DAILY_ORDER_SUBMITTED"
+    DAILY_ORDER_INTENT = "IB_DAILY_ORDER_INTENT"
+
+    def _claim_daily_order(self, symbol, cycle_id, action):
+        """Persist a unique intent BEFORE contacting the broker; never replay ambiguity."""
+        if self._daily_order_already_submitted(cycle_id, action):
+            return False
+        key = f"ib-daily:{cycle_id}:{action}:{self._us_order_day()}"
+        try:
+            self._log_db().insert({
+                "id": hashlib.sha256(key.encode()).hexdigest()[:32],
+                "cycle_id": cycle_id, "symbol": symbol,
+                "event_type": self.DAILY_ORDER_INTENT, "action": action,
+                "created": self._now(),
+                "message": "주문 전 의도 저장: 응답 불명확 시 자동 재접수 금지",
+            })
+            return True
+        except Exception:
+            # Includes concurrent attempts rejected by the log primary key.
+            return False
 
     def _daily_orders_blocked_reason(self):
         """run_daily must not place orders when the reservation path owns them.
@@ -2012,8 +2032,10 @@ class Engine:
         Fails closed: if the log cannot be read, assume an order exists."""
         today = self._us_order_day()
         try:
-            rows = self._log_db().rows(cycle_id=cycle_id, event_type=self.DAILY_ORDER_EVENT, action=action,
-                                       orderby="created", order="DESC", dump=20) or []
+            rows = []
+            for event in (self.DAILY_ORDER_INTENT, self.DAILY_ORDER_EVENT):
+                rows.extend(self._log_db().rows(cycle_id=cycle_id, event_type=event, action=action,
+                                               orderby="created", order="DESC") or [])
         except Exception:
             return True
         return any(self._us_order_day((row or {}).get("created")) == today for row in rows)
@@ -2034,6 +2056,8 @@ class Engine:
         4. 매수 판단 (회차에 따라 시장가/LOC)
         반환: dict {action, detail}
         """
+        if str(self._get_config_value("auto_trade_enabled", "false")).lower() != "true":
+            return {"action": "OFF", "detail": "자동매매 OFF — 조회 및 주문하지 않습니다."}
         kis_api = self._load_kis_api()
 
         # 활성 사이클 조회 (PENDING_EXTENSION도 매도 체크 대상)
@@ -2092,6 +2116,8 @@ class Engine:
                 configured_sell_method = str(self._get_config_value("sell_method", "firegate") or "firegate").lower()
                 sell_method = "LOC" if configured_sell_method == "loc" else "MARKET"
                 sell_price = current_price if sell_method == "LOC" else 0
+                if not self._claim_daily_order(symbol, cycle["id"], ACTION_SELL):
+                    return {"action": "ALREADY_SUBMITTED", "detail": "주문 의도 확인 필요: 재접수 차단"}
                 order_result = kis_api.sell_order(symbol, sell_qty, price=sell_price, order_type=sell_method, exchange=order_exchange)
                 # Acceptance is not a fill: LOC fills at the close (or not at all)
                 # and a market fill price is unknown here. The ledger is updated
@@ -2128,7 +2154,7 @@ class Engine:
             if crash_decision["should_buy"] and not self._daily_order_already_submitted(cycle["id"], "CRASH"):
                 try:
                     crash_qty = int(crash_decision["buy_amount"] / crash_decision["loc_price"]) if crash_decision["loc_price"] > 0 else 0
-                    if crash_qty > 0:
+                    if crash_qty > 0 and self._claim_daily_order(symbol, cycle["id"], "CRASH"):
                         order_result = kis_api.buy_order(symbol, crash_qty, price=crash_decision["loc_price"], order_type="LOC", exchange=order_exchange)
                         # Booked only when the broker reports the fill (see sell branch).
                         self._record_daily_order(symbol, cycle["id"], "CRASH", order_result, crash_qty,
@@ -2189,6 +2215,8 @@ class Engine:
                 self.record_skip(cycle["id"], detail_msg)
                 return {"action": "BUY_ERROR", "detail": detail_msg}
 
+            if not self._claim_daily_order(symbol, cycle["id"], ACTION_BUY):
+                return {"action": "ALREADY_SUBMITTED", "detail": "주문 의도 확인 필요: 재접수 차단"}
             order_result = kis_api.buy_order(
                 symbol,
                 buy_decision["order_qty"],
@@ -4492,6 +4520,8 @@ class Engine:
 
     def run_all(self):
         """모든 활성 종목에 대해 일일 매매 판단 실행 (cycle_mode 반영)"""
+        if str(self._get_config_value("auto_trade_enabled", "false")).lower() != "true":
+            return []
         watchlist = self._watchlist_db()
         active_etfs = watchlist.rows(is_active=True)
         results = []

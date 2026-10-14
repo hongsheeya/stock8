@@ -1,6 +1,7 @@
 """Infinite-buy ledger/order regressions (broker double, no network orders)."""
 import copy
 import unittest
+from unittest.mock import Mock
 
 from test_infinitebuy_loc_schedule_regressions import _FakeDB, _KisApiStub, _StructStub, engine_module
 
@@ -28,7 +29,7 @@ def _cycle(**overrides):
 
 def _engine(configs=None, cycle=None, trades=None):
     struct = _StructStub([{"id": "w1", "symbol": "TQQQ", "exchange": "NASD", "is_active": True}],
-                         [cycle or _cycle()], configs=configs or {})
+                         [cycle or _cycle()], configs=configs if configs is not None else {"auto_trade_enabled":"true", "loc_auto_schedule_enabled":"false"})
     struct._db["cycle_trade"] = _FakeDB(trades or [])
     struct.kis_api = _OrderingKis({"ok": True, "executable_qty": 1000, "executable_amount": 100000.0,
                                    "amount": 100000.0, "qty": 1000})
@@ -43,6 +44,61 @@ def _daily_orders(struct):
 
 
 class DailyRunOrderTests(unittest.TestCase):
+    def test_off_run_all_does_not_create_or_query_cycles(self):
+        engine, _ = _engine(configs={"auto_trade_enabled": "false"})
+        engine._watchlist_db = Mock(side_effect=AssertionError("OFF must not load watchlist"))
+        self.assertEqual(engine.run_all(), [])
+        engine._watchlist_db.assert_not_called()
+
+    def test_unique_intent_blocks_racing_claim_even_with_stale_read(self):
+        engine, struct = _engine()
+        log = struct.db("trade_log")
+        insert = log.insert
+        def unique_insert(row):
+            if log.get(id=row["id"]):
+                raise RuntimeError("duplicate primary key")
+            return insert(row)
+        log.insert = unique_insert
+        engine._daily_order_already_submitted = lambda *args: False
+        self.assertTrue(engine._claim_daily_order("TQQQ", "c1", "BUY"))
+        self.assertFalse(engine._claim_daily_order("TQQQ", "c1", "BUY"))
+
+    def test_submission_log_failure_does_not_replay(self):
+        engine, struct = _engine()
+        insert = struct.db("trade_log").insert
+        def fail_submission(row):
+            if row["event_type"] == engine.DAILY_ORDER_EVENT:
+                raise RuntimeError("submission log failed")
+            return insert(row)
+        struct.db("trade_log").insert = fail_submission
+        engine.run_daily("TQQQ")
+        engine.run_daily("TQQQ")
+        self.assertEqual(len(struct.kis_api.buy_calls), 1)
+
+    def test_off_does_not_quote_or_submit(self):
+        engine, struct = _engine(configs={'auto_trade_enabled':'false'})
+        struct.kis_api.get_current_price = Mock(side_effect=AssertionError('OFF must not query'))
+        self.assertEqual(engine.run_daily('TQQQ')['action'], 'OFF')
+        self.assertEqual(struct.kis_api.buy_calls, [])
+        struct.kis_api.get_current_price.assert_not_called()
+
+    def test_lost_acceptance_response_never_replays_order(self):
+        engine, struct = _engine()
+        struct.kis_api.buy_order = Mock(side_effect=TimeoutError('accepted, response lost'))
+        engine.run_daily('TQQQ')
+        engine.run_daily('TQQQ')
+        struct.kis_api.buy_order.assert_called_once()
+
+    def test_intent_write_failure_prevents_network_order(self):
+        engine, struct = _engine()
+        real_insert = struct.db('trade_log').insert
+        def insert(row):
+            if row['event_type'] == 'IB_DAILY_ORDER_INTENT':
+                raise RuntimeError('disk unavailable')
+            return real_insert(row)
+        struct.db('trade_log').insert = insert
+        engine.run_daily('TQQQ')
+        self.assertEqual(struct.kis_api.buy_calls, [])
     def test_reservation_mode_daily_run_places_no_orders(self):
         engine, struct = _engine(configs={"auto_trade_enabled": "true"})
 
@@ -57,7 +113,7 @@ class DailyRunOrderTests(unittest.TestCase):
         engine, struct = _engine(configs={"auto_trade_enabled": "false",
                                           "firegate_authoritative_reservations_only": "true"})
 
-        self.assertEqual(engine.run_daily("TQQQ")["action"], "RESERVATION_MODE")
+        self.assertEqual(engine.run_daily("TQQQ")["action"], "OFF")
         self.assertEqual(struct.kis_api.buy_calls, [])
 
     def test_manual_buy_is_submitted_once_and_never_booked_as_a_fill(self):
@@ -103,6 +159,14 @@ class DailyRunOrderTests(unittest.TestCase):
 
 
 class LedgerMathTests(unittest.TestCase):
+    def test_round_history_failure_does_not_mutate_ledger(self):
+        engine, struct = _engine()
+        before = copy.deepcopy(struct.db("trading_cycle").get(id="c1"))
+        struct.db("cycle_trade").rows = Mock(side_effect=RuntimeError("unavailable"))
+        with self.assertRaises(RuntimeError):
+            engine.execute_buy("c1", 150.0, 2, trade_date="2026-05-28")
+        self.assertEqual(struct.db("trading_cycle").get(id="c1"), before)
+
     def test_profit_rate_counts_buy_commission_once(self):
         engine, struct = _engine(cycle=_cycle(total_qty=10, total_spent=1000.0, avg_price=100.0,
                                               total_commission=2.5))
