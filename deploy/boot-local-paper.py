@@ -22,7 +22,12 @@ def bootstrap(app, config):
                 trading = server.wiz().model("struct").trading
                 # No browser session exists yet: resume the remembered PAPER owner.
                 resume = getattr(trading, "resume_paper_worker", None)
-                resumed = bool(resume and resume())
+                owner = resume() if resume else ""
+                resumed = bool(owner)
+                if owner:
+                    # Report the resumed owner's worker (state is keyed by owner).
+                    import flask
+                    flask.session["id"] = owner
                 status = trading.worker_status()
                 message = (
                     "PAPER worker initialized: "
