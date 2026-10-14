@@ -917,6 +917,18 @@ class DomesticDaytradeEngine:
             status = str(matched.get("status", "OPEN")).upper()
             if status in ("FILLED", "CANCELLED"):
                 if side == "SELL":
+                    filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
+                    if filled_qty > 0:
+                        # Leaving the sold shares on the books until the balance
+                        # caught up made the exit watch re-send sells for shares
+                        # already gone (TQQQ: 1,128 rejected SELL_FULL retries).
+                        state["position_qty"] = max(0, self._safe_int(state.get("position_qty", 0), 0) - filled_qty)
+                        if state["position_qty"] == 0:
+                            state["avg_price"] = 0.0
+                        filled_price = self._safe_float(matched.get("filled_price", 0), 0)
+                        state["last_exit_price"] = round(filled_price, 4)
+                        self._mark_exit_watch(state, reason=f"미장 매도 체결 확인 ${filled_price:,.2f}",
+                                              action=self._pending_sell_exit_action(state), order_no=order_no)
                     self._clear_pending_sell(state)
                 else:
                     for suffix in ("order_no", "action", "placed_at"):
