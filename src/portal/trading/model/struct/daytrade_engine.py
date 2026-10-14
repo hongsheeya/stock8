@@ -7,6 +7,7 @@ import math
 import os
 import sys
 import threading
+import time as _clock
 
 try:
     from zoneinfo import ZoneInfo
@@ -217,6 +218,35 @@ class DomesticDaytradeEngine:
 
     def _broker(self):
         return getattr(self.struct, 'daytrade_broker', None) or self.struct.kis_api
+
+    def _infinite_buy_symbols(self):
+        """US symbols owned by infinite buy: SOXL plus any symbol with an open cycle.
+
+        The broker fill sync books every fill of these symbols into the cycle,
+        so a day-trade order on them would corrupt the infinite-buy ledger.
+        """
+        cached = getattr(self, '_infinite_buy_symbols_cache', None)
+        if cached and _clock.time() - cached[0] < 30:
+            return set(cached[1])
+        reserved = {'SOXL'}
+        try:
+            cycles = self.struct.db('trading_cycle')
+            for status in ('ACTIVE', 'HOLDING', 'PAUSED', 'PENDING_EXTENSION'):
+                for row in cycles.rows(status=status, dump=200) or []:
+                    symbol = str((row or {}).get('symbol', '') or '').strip().upper()
+                    if symbol:
+                        reserved.add(symbol)
+        except Exception:
+            # Keep the last known set rather than releasing reserved symbols.
+            return reserved | set((cached or (0, set()))[1])
+        self._infinite_buy_symbols_cache = (_clock.time(), frozenset(reserved))
+        return reserved
+
+    def _is_infinite_buy_symbol(self, symbol, market='US'):
+        symbol = str(symbol or '').strip().upper()
+        if symbol == 'SOXL':
+            return True
+        return str(market or '').upper() == 'US' and symbol in self._infinite_buy_symbols()
 
     def _hard_lock_message(self):
         return str(getattr(self.struct, "daytrade_lock_message", "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."))
@@ -1183,6 +1213,7 @@ class DomesticDaytradeEngine:
         state_map = self._load_state_map()
         changed = False
         default_strategy = self.strategy.defaults().get("strategy", "vrev")
+        reserved_symbols = self._infinite_buy_symbols() if "US" in fetched_markets else set()
 
         # 브로커에 있는 종목 키셋 (qty > 0)
         broker_keys = set()
@@ -1192,6 +1223,10 @@ class DomesticDaytradeEngine:
             if symbol == "" or qty <= 0:
                 continue
             market = str(item.get("market", "KS") or "KS").upper()
+            if market == "US" and symbol.upper() in reserved_symbols:
+                # Infinite-buy shares: leaving them out of broker_keys also
+                # clears any day-trade state that adopted them earlier.
+                continue
             key = self._state_key(symbol, market)
             broker_keys.add(key)
 
@@ -2174,7 +2209,7 @@ class DomesticDaytradeEngine:
             symbol = position.get("symbol", "")
             market = position.get("market", "KS")
             if budget_only:
-                if str(symbol).strip().upper() == 'SOXL':
+                if self._is_infinite_buy_symbol(symbol, market):
                     continue
                 if permissions is not None and permissions.get('symbols', {}).get(str(symbol).strip().upper(), not _PAPER_MODE) is not False:
                     continue
@@ -2534,9 +2569,9 @@ class DomesticDaytradeEngine:
         return live_supported and spec_market != "US"
 
     def execute_live(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True, sync_broker=True, forced_sell_qty=None, force_reason="", current_price_override=0, precomputed_status=None):
-        if str(symbol).strip().upper() == 'SOXL':
+        if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
             return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
-                    'order_value': 0, 'message': 'SOXL은 무한매수 전용으로 단타 주문이 잠겨 있습니다.'}
+                    'order_value': 0, 'message': f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 주문이 잠겨 있습니다.'}
         if str(strategy_id).startswith('paper_selective_'):
             if not _PAPER_MODE or market != 'KS' or getattr(self.struct.kis_api, 'is_real', None) is not False:
                 return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
@@ -3503,8 +3538,8 @@ class DomesticDaytradeEngine:
             return {"executed": executed_count > 0, "submitted": submitted_count > 0, "executed_count": executed_count, "submitted_count": submitted_count, "watched_count": watched_count, "message": message, "gross_exposure": round(gross_exposure, 2), "exposure_limit": round(exposure_limit, 2), "results": results}
 
     def manual_sell(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", qty=None):
-        if str(symbol).strip().upper() == 'SOXL':
-            raise RuntimeError('SOXL은 무한매수 전용으로 단타 매도가 잠겨 있습니다.')
+        if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
+            raise RuntimeError(f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 매도가 잠겨 있습니다.')
         if self._hard_locked():
             raise Exception(self._hard_lock_message())
         if self._feature_enabled() is False:
@@ -6919,7 +6954,7 @@ class DomesticDaytradeEngine:
                         ('timestamp','ema20','ema50','rsi14','vwap','volume_surge_ratio','common','breakout','pullback')})
 
     def analysis_allowed(self, symbol):
-        if str(symbol).strip().upper() == 'SOXL':
+        if self._is_infinite_buy_symbol(symbol, 'US'):
             return False
         policy = getattr(self.struct, 'order_policy', None)
         if policy is None:

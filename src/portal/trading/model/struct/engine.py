@@ -10,8 +10,12 @@ import time
 import os
 import json
 import hashlib
+import sys
+import threading
 
 _TIME = wiz.model("portal/trading/kst")
+# One PAPER close-time run at a time, across worker and scheduler threads.
+_PAPER_LOC_LOCK = sys.__dict__.setdefault('_stock8_paper_loc_lock', threading.Lock())
 
 # 사이클 상태 상수
 STATUS_IDLE = "IDLE"
@@ -2046,6 +2050,240 @@ class Engine:
                         message=f"{label} 주문 접수 {qty}주 @ ${float(price or 0):.2f} (주문번호 {order_no or '-'}) — 체결은 브로커 체결 동기화로 반영",
                         order_no=order_no, order_price=price, order_qty=qty)
         return order_no
+
+    # =========================================================================
+    # PAPER: KIS 모의 해외주문은 지정가만 지원 → LOC를 장 마감 직전 판정으로 대체
+    # =========================================================================
+
+    PAPER_LOC_INTENT = "IB_PAPER_LOC_INTENT"
+    PAPER_LOC_EVENT = "IB_PAPER_LOC_SUBMITTED"
+
+    @staticmethod
+    def _paper_trading_mode():
+        return str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER"
+
+    def _us_eastern_now(self, now=None):
+        from zoneinfo import ZoneInfo
+        moment = now or self._now()
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        return moment.astimezone(ZoneInfo("America/New_York"))
+
+    def _config_minutes(self, key, default):
+        for text in (str(self._get_config_value(key, default) or default), default):
+            try:
+                hour, minute = text.strip().split(":")
+                return int(hour) * 60 + int(minute)
+            except Exception:
+                continue
+        return 0
+
+    def paper_loc_window(self, now=None):
+        """The once-a-day decision window shortly before the 16:00 ET close."""
+        et = self._us_eastern_now(now)
+        start = self._config_minutes("paper_loc_decision_time_et", "15:55")
+        end = self._config_minutes("paper_loc_decision_end_et", "15:59")
+        minute = et.hour * 60 + et.minute
+        if et.weekday() >= 5:
+            state = "closed"
+        elif minute < start:
+            state = "before"
+        elif minute >= end:
+            state = "after"
+        else:
+            state = "open"
+        return {"state": state, "et_date": et.strftime("%Y-%m-%d"), "et_time": et.strftime("%H:%M"),
+                "window": f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d} ET"}
+
+    def _ledger_t_value(self, cycle):
+        """PAPER has no FireGate T. invested / (seed / splits) keeps one turn
+        at seed / splits, and a quarter sell lowers T by a quarter, as in v4."""
+        total = float((cycle or {}).get("total_investment", 0) or 0)
+        splits = max(int(float((cycle or {}).get("division_count", 20) or 20)), 1)
+        if total <= 0:
+            return 0.0
+        return round(max(self._firegate_v4_invested_value(cycle), 0.0) * splits / total, 4)
+
+    def _claim_paper_loc(self, symbol, cycle_id, us_day, line_key):
+        """Persist the intent before the broker call; a duplicate key means already handled."""
+        key = f"ib-paper-loc:{cycle_id}:{us_day}:{line_key}"
+        try:
+            self._log_db().insert({
+                "id": hashlib.sha256(key.encode()).hexdigest()[:32],
+                "cycle_id": cycle_id, "symbol": symbol,
+                "event_type": self.PAPER_LOC_INTENT, "action": str(line_key)[:8],
+                "created": self._now(),
+                "message": f"모의 LOC 대체 의도 저장 {us_day} {line_key}: 응답 불명확 시 재접수 금지",
+            })
+            return True
+        except Exception:
+            return False
+
+    def _paper_repair_round_count(self, cycle):
+        """Fill-count rounds left PAPER cycles stuck in PENDING_EXTENSION with
+        seed unused. Recount buy days (as execute_buy does now); keep the
+        broker-aligned quantity and cost untouched."""
+        if str((cycle or {}).get("status", "") or "") != STATUS_PENDING_EXTENSION:
+            return cycle
+        splits = max(int(float(cycle.get("division_count", 20) or 20)), 1)
+        rows = self._trade_db().rows(cycle_id=cycle["id"], dump=5000) or []
+        days, undated = set(), 0
+        for row in rows:
+            if not self._counts_toward_round(row) or self._is_synthetic_external_trade(row):
+                continue
+            day = str((row or {}).get("trade_date", "") or "")[:10]
+            if day:
+                days.add(day)
+            else:
+                undated += 1
+        rounds = len(days) + undated
+        if rounds >= splits or self._ledger_t_value(cycle) >= splits:
+            return cycle
+        self._cycle_db().update({"current_round": rounds, "status": STATUS_ACTIVE, "updated": self._now()}, id=cycle["id"])
+        self._log_event(cycle.get("symbol", ""), cycle["id"], "PAPER_ROUND_REPAIRED",
+                        message=(f"모의 사이클 회차 재계산: {cycle.get('current_round')}회(체결 건수) → {rounds}회(매수일), "
+                                 f"T {self._ledger_t_value(cycle):.2f} / {splits} — 추가 매수 대기 해제"))
+        return self._cycle_db().get(id=cycle["id"]) or cycle
+
+    def _paper_loc_lines(self, cycle, price, prev_close):
+        """Today's v4 plan, judged once at the decision price instead of the close.
+
+        A LOC buy fills when close <= limit and a LOC/limit sell when close >=
+        limit, so only lines satisfied at `price` are sent, as marketable limits.
+        """
+        cycle = {**cycle, "t_value": self._ledger_t_value(cycle)}
+        lines = []
+        for index, order in enumerate(self._firegate_v4_sell_orders(cycle)):
+            qty = int(order.get("order_qty", 0) or 0)
+            limit = float(order.get("price", 0) or 0)
+            if qty > 0 and limit > 0 and price >= limit:
+                lines.append({"key": f"S{index}", "side": ACTION_SELL, "qty": qty, "price": limit,
+                              "label": order.get("label", "")})
+        splits = max(int(float(cycle.get("division_count", 20) or 20)), 1)
+        if (cycle.get("status") == STATUS_ACTIVE and cycle["t_value"] < splits
+                and self._firegate_v4_remaining_seed(cycle) > 0 and prev_close > 0):
+            decision = self._firegate_v4_buy_decision(cycle, prev_close, 0)
+            orders = decision.get("buy_orders") or []
+            if not orders and decision.get("order_type") == "MARKET" and decision.get("order_qty"):
+                # Market first buy: a limit 1% through the decision price.
+                orders = [{"label": "시장가 1회차", "order_qty": decision["order_qty"],
+                           "loc_price": self._round_nearest_cent(price * 1.01)}]
+            for index, order in enumerate(orders):
+                qty = int(order.get("order_qty", 0) or 0)
+                limit = float(order.get("loc_price", 0) or 0)
+                if qty > 0 and limit > 0 and price <= limit:
+                    lines.append({"key": f"B{index}", "side": ACTION_BUY, "qty": qty, "price": limit,
+                                  "label": order.get("label", "")})
+        return lines
+
+    def run_paper_loc_emulation(self, now=None):
+        """PAPER only: decide today's LOC lines once before the close.
+
+        Orders are plain limit orders (the only kind KIS paper accepts) sent
+        at their LOC price; a satisfied line is marketable and fills near the
+        decision price. Fills reach the ledger through the broker fill sync,
+        never here.
+        """
+        if not self._paper_trading_mode():
+            return {"status": "unsupported", "executed": False, "message": "실계좌는 FireGate LOC 예약 경로를 사용합니다."}
+        if not self._config_bool("auto_trade_enabled", False) or not self._config_bool("loc_auto_schedule_enabled", True):
+            return {"status": "off", "executed": False, "message": "무한매수 매매 OFF"}
+        window = self.paper_loc_window(now)
+        base = {"window": window["window"], "et_date": window["et_date"], "executed": False}
+        if window["state"] != "open":
+            return {**base, "status": "waiting", "message": f"모의 LOC 대체 판정 대기 ({window['window']})"}
+        if not _PAPER_LOC_LOCK.acquire(blocking=False):
+            return {**base, "status": "running", "message": "모의 LOC 대체 판정 진행 중"}
+        try:
+            kis_api = self._load_kis_api()
+            if not kis_api:
+                return {**base, "status": "error", "message": "브로커 API 미설정"}
+            label = getattr(kis_api, "us_market_holiday_label", None)
+            holiday = str(label(now or self._now()) or "") if callable(label) else ""
+            if holiday:
+                return {**base, "status": "holiday", "message": f"미국 휴장일({holiday})"}
+            rows = self._watchlist_db().rows(is_active=True, orderby="created", order="ASC") or []
+            results = []
+            for item in self._logical_watchlist_rows(rows):
+                symbol = str((item or {}).get("symbol", "") or "").upper().strip()
+                try:
+                    results.append(self._paper_loc_symbol(kis_api, item, symbol, window["et_date"]))
+                except Exception as exc:
+                    self._log_event(symbol, "", "PAPER_LOC_ERROR", message=f"모의 LOC 대체 실패: {exc}"[:500])
+                    results.append({"symbol": symbol, "status": "error", "message": str(exc)[:200]})
+            submitted = sum(len(item.get("orders", [])) for item in results)
+            retry = any(item.get("status") in ("error", "no_quote", "ledger_mismatch") for item in results)
+            return {**base, "status": "retry" if retry else "completed", "executed": submitted > 0,
+                    "submitted": submitted > 0, "results": results,
+                    "message": f"모의 LOC 대체 판정 완료: 주문 {submitted}건" + (" (일부 재시도 대기)" if retry else "")}
+        finally:
+            _PAPER_LOC_LOCK.release()
+
+    def _paper_loc_symbol(self, kis_api, item, symbol, us_day):
+        cycle = self._best_cycle(symbol, [STATUS_ACTIVE, STATUS_PENDING_EXTENSION, STATUS_HOLDING])
+        if cycle is None and self._best_cycle(symbol, [STATUS_PAUSED]) is not None:
+            return {"symbol": symbol, "status": "paused"}
+        if cycle is None and not self._config_bool("auto_start_next_cycle_enabled", True):
+            return {"symbol": symbol, "status": "no_cycle"}
+        try:
+            holdings = (kis_api.get_balance() or {}).get("holdings", []) or []
+        except Exception as exc:
+            return {"symbol": symbol, "status": "error", "message": f"잔고 조회 실패로 판정 보류: {exc}"[:200]}
+        held = sum(int(float((row or {}).get("qty", 0) or 0)) for row in holdings
+                   if str((row or {}).get("symbol", "") or "").upper().strip() == symbol)
+        if cycle is None:
+            if held > 0:
+                # The fill sync would book shares bought elsewhere into the new cycle.
+                if self._claim_paper_loc(symbol, symbol, us_day, "HELD"):
+                    self._log_event(symbol, "", "PAPER_LOC_ERROR", message=f"새 사이클 미시작: 브로커에 {held}주 보유 중 — 출처 확인 필요")
+                return {"symbol": symbol, "status": "held_outside_cycle", "qty": held}
+            # Same logical watchlist row the run iterates, not whichever scoped duplicate get() finds.
+            params = {key: (item or {}).get(key) for key in ("total_investment", "division_count", "target_profit")}
+            cycle = self.start_cycle(symbol, **{key: value for key, value in params.items() if value not in (None, "")})
+            self._log_event(symbol, cycle.get("id", ""), "CYCLE_AUTO_RESTART",
+                            message=(f"모의 무한매수: 진행 중 사이클이 없어 새 사이클을 시작했습니다 "
+                                     f"(${cycle.get('total_investment')}, {cycle.get('division_count')}분할)."))
+        ledger_qty = int(float(cycle.get("total_qty", 0) or 0))
+        if held != ledger_qty:
+            # Unbooked fills mean a stale plan (e.g. the morning fill sync
+            # failed): deciding on it would buy the same turn twice.
+            if self._claim_paper_loc(symbol, cycle["id"], us_day, "MISMATCH"):
+                self._log_event(symbol, cycle["id"], "PAPER_LOC_ERROR",
+                                message=f"모의 LOC 판정 보류: 브로커 {held}주 ≠ 사이클 {ledger_qty}주 — 체결 동기화 확인 필요")
+            return {"symbol": symbol, "status": "ledger_mismatch", "broker_qty": held, "cycle_qty": ledger_qty}
+        order_exchange = self._resolve_order_exchange(symbol, (item or {}).get("exchange", ""))
+        quote = kis_api.get_current_price(symbol, exchange=self._price_exchange(order_exchange)) or {}
+        price = float(quote.get("price", 0) or 0)
+        prev_close = float(quote.get("prev_close", 0) or 0)
+        order_exchange = str(quote.get("order_exchange", "") or order_exchange)
+        if price <= 0:
+            return {"symbol": symbol, "status": "no_quote"}
+        if not self._claim_paper_loc(symbol, cycle["id"], us_day, "DECIDE"):
+            return {"symbol": symbol, "status": "already_decided"}
+        cycle = self._paper_repair_round_count(cycle)
+        self.update_cycle_price(cycle["id"], price)
+        lines = self._paper_loc_lines(cycle, price, prev_close)
+        orders = []
+        for line in lines:
+            if not self._claim_paper_loc(symbol, cycle["id"], us_day, line["key"]):
+                continue
+            try:
+                place = kis_api.buy_order if line["side"] == ACTION_BUY else kis_api.sell_order
+                result = place(symbol, line["qty"], price=line["price"], order_type="LIMIT", exchange=order_exchange)
+                order_no = str((result or {}).get("order_no", "") or "")
+                self._log_event(symbol, cycle["id"], self.PAPER_LOC_EVENT, action=line["side"],
+                                message=(f"모의 LOC 대체 {line['label']} {line['side']} {line['qty']}주 @ ${line['price']:.2f} "
+                                         f"(판정가 ${price:.2f}, 주문번호 {order_no or '-'}) — 체결은 브로커 체결 동기화로 반영"),
+                                order_no=order_no, order_price=line["price"], order_qty=line["qty"])
+                orders.append({**line, "order_no": order_no})
+            except Exception as exc:
+                self._log_event(symbol, cycle["id"], "PAPER_LOC_ORDER_ERROR", action=line["side"],
+                                message=f"모의 LOC 대체 주문 실패 {line['label']} {line['qty']}주 @ ${line['price']:.2f}: {exc}"[:500])
+        if not lines:
+            self._log_event(symbol, cycle["id"], "PAPER_LOC_DECIDED",
+                            message=f"모의 LOC 대체 판정: 판정가 ${price:.2f}에서 조건 충족 라인 없음")
+        return {"symbol": symbol, "status": "decided", "price": price, "t_value": self._ledger_t_value(cycle),
+                "lines": len(lines), "orders": orders}
 
     def run_daily(self, symbol):
         """

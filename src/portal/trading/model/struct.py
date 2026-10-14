@@ -1108,6 +1108,41 @@ class Struct:
         except Exception:
             pass
 
+    def _poll_or_start_paper_loc_emulation(self, state):
+        """Run the PAPER close-time decision off the trading loop.
+
+        Outside the decision window this only reads the clock, so the
+        heartbeat can poll it every tick.
+        """
+        base = {'enabled': True, 'verified': False, 'blocked': False, 'submitted': False}
+        thread = state.get('paper_loc_thread')
+        if thread is not None and thread.is_alive():
+            return {**base, 'executed': False, 'running': True, 'status': 'running', 'message': '모의 LOC 대체 판정 진행 중'}
+        completed = state.pop('paper_loc_result', None)
+        if isinstance(completed, dict):
+            state['paper_loc_thread'] = None
+            state['paper_loc_last'] = completed
+            return {**base, **completed}
+        window = self.engine.paper_loc_window()
+        last = state.get('paper_loc_last') or {}
+        done_today = last.get('et_date') == window['et_date'] and last.get('status') == 'completed'
+        if window['state'] != 'open' or done_today:
+            message = f"모의 LOC 대체: 미국 장 마감 전 {window['window']}에 조건 충족 라인만 지정가 주문"
+            if done_today:
+                message += f" · 오늘 판정 완료 ({last.get('message', '')})"
+            return {**base, 'executed': False, 'status': 'waiting', 'window': window['window'], 'message': message}
+
+        def run_paper_loc():
+            try:
+                state['paper_loc_result'] = self.engine.run_paper_loc_emulation() or {}
+            except Exception as exc:
+                state['paper_loc_result'] = {'status': 'error', 'executed': False, 'message': str(exc)[:200]}
+
+        thread = threading.Thread(target=self._account_worker_target(run_paper_loc), daemon=True, name='trading-paper-loc')
+        state['paper_loc_thread'] = thread
+        thread.start()
+        return {**base, 'executed': False, 'running': True, 'status': 'running', 'message': '모의 LOC 대체 판정 시작'}
+
     def _poll_or_start_loc_automation(self, state, verify=False, reason="worker"):
         """Run slow FireGate/LOC work off the main day-trading loop.
 
@@ -1115,17 +1150,14 @@ class Struct:
         remains visible as timed out, but KR/US entry and exit checks continue.
         """
         if PAPER_MODE:
-            # The broker has no PAPER reservation/LOC service. Keep this
-            # capability distinct from OFF and do not retry/log every heartbeat.
+            # The broker has no PAPER reservation/LOC service. The engine
+            # decides the LOC lines once before the close and sends limits.
             enabled = str(self.get_config('auto_trade_enabled', 'false')).lower() == 'true'
             enabled = enabled and str(self.get_config('loc_auto_schedule_enabled', 'true')).lower() == 'true'
-            return {
-                'enabled': enabled, 'executed': False, 'submitted': False,
-                'blocked': enabled, 'status': 'unsupported' if enabled else 'off',
-                'verified': False,
-                'message': ('KIS 모의 해외 예약·LOC 미지원 — 지정가 검증과 별도이며 자동 재시도하지 않습니다.'
-                            if enabled else '무한매수 매매 OFF'),
-            }
+            if not enabled:
+                return {'enabled': False, 'executed': False, 'submitted': False, 'blocked': False,
+                        'status': 'off', 'verified': False, 'message': '무한매수 매매 OFF'}
+            return self._poll_or_start_paper_loc_emulation(state)
         thread = state.get("loc_async_thread")
         if thread is not None and thread.is_alive():
             elapsed = max(0, int(time.time() - float(state.get("loc_async_started_ts", 0.0) or 0.0)))

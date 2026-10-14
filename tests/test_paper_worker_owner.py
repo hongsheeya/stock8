@@ -51,23 +51,53 @@ class PaperWorkerOwnerTests(unittest.TestCase):
         fn = lambda: None
         self.assertIs(self.wrap(fn), fn)
 
-    def test_paper_loc_does_not_start_unsupported_reservation_jobs(self):
+    def _paper_loc_methods(self):
         path = Path(__file__).resolve().parents[1] / 'src/portal/trading/model/struct.py'
         cls = next(n for n in ast.parse(path.read_text(encoding='utf-8-sig')).body
                    if isinstance(n, ast.ClassDef) and n.name == 'Struct')
-        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_poll_or_start_loc_automation')
-        env = {'PAPER_MODE': True}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), 'exec'), env)
-        obj = SimpleNamespace(get_config=lambda key, default: 'true')
+        names = ('_poll_or_start_loc_automation', '_poll_or_start_paper_loc_emulation')
+        methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
+        env = {'PAPER_MODE': True, 'threading': threading}
+        exec(compile(ast.Module(body=methods, type_ignores=[]), str(path), 'exec'), env)
+        return env
+
+    def _paper_loc_obj(self, env, window_state, config='true'):
+        runs = []
+        engine = SimpleNamespace(
+            paper_loc_window=lambda: {'state': window_state, 'et_date': '2026-10-14', 'window': '15:55-15:59 ET'},
+            run_paper_loc_emulation=lambda: runs.append(1) or {'status': 'completed', 'et_date': '2026-10-14',
+                                                               'message': '주문 3건', 'executed': True})
+        obj = SimpleNamespace(get_config=lambda key, default: config, engine=engine,
+                              _account_worker_target=lambda fn: fn)
+        obj._poll_or_start_paper_loc_emulation = lambda state: env['_poll_or_start_paper_loc_emulation'](obj, state)
+        return obj, runs
+
+    def test_paper_loc_waits_outside_the_window_and_off_is_a_noop(self):
+        env = self._paper_loc_methods()
+        poll = env['_poll_or_start_loc_automation']
+        obj, runs = self._paper_loc_obj(env, 'before')
         state = {}
         for _ in range(3):
-            result = env[method.name](obj, state, verify=True)
-            self.assertEqual(result['status'], 'unsupported')
-            self.assertFalse(result['verified'])
+            result = poll(obj, state, verify=True)
+            self.assertEqual(result['status'], 'waiting')
             self.assertFalse(result['submitted'])
-            self.assertEqual(state, {})
-        obj.get_config = lambda key, default: 'false'
-        self.assertEqual(env[method.name](obj, state)['status'], 'off')
+        self.assertEqual((state, runs), ({}, []))
+        obj, runs = self._paper_loc_obj(env, 'open', config='false')
+        self.assertEqual(poll(obj, state)['status'], 'off')
+        self.assertEqual((state, runs), ({}, []))
+
+    def test_paper_loc_decides_off_the_loop_once_a_day(self):
+        env = self._paper_loc_methods()
+        poll = env['_poll_or_start_loc_automation']
+        obj, runs = self._paper_loc_obj(env, 'open')
+        state = {}
+        self.assertEqual(poll(obj, state)['status'], 'running')
+        state['paper_loc_thread'].join(5)
+        self.assertEqual(poll(obj, state)['status'], 'completed')
+        later = poll(obj, state)
+        self.assertEqual(later['status'], 'waiting')
+        self.assertIn('오늘 판정 완료', later['message'])
+        self.assertEqual(runs, [1])
 
     def test_paper_forced_scheduler_uses_same_capability_gate(self):
         path = Path(__file__).resolve().parents[1] / 'src/portal/trading/model/struct.py'
