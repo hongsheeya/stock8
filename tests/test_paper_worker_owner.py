@@ -119,7 +119,7 @@ class PaperWorkerResumeTests(unittest.TestCase):
     """Restart resume: the server bootstrap has no browser session."""
 
     METHODS = ('_account_worker_target', '_ensure_background_worker', 'resume_paper_worker',
-               '_remembered_paper_worker_owner', '_remember_paper_worker_owner')
+               '_remembered_paper_worker_owner', '_remember_paper_worker_owner', '_worker_state')
 
     def setUp(self):
         source = Path(__file__).resolve().parents[1] / 'src/portal/trading/model/struct.py'
@@ -134,7 +134,10 @@ class PaperWorkerResumeTests(unittest.TestCase):
         self.subscribed = {'admin', 'member', 'admin2'}
         self.config = {}
         self.ran_as = []
+        self.exited_as = []
         self.done = threading.Event()
+        self.hold = threading.Event()
+        self.hold.set()
         test = self
 
         class Subscription:
@@ -147,17 +150,23 @@ class PaperWorkerResumeTests(unittest.TestCase):
         wiz = SimpleNamespace(server=SimpleNamespace(app=SimpleNamespace(flask=self.app),
                                                      path=SimpleNamespace(root='.')),
                               model=lambda name: Subscription)
-        import os, sys
-        self.env = dict(PAPER_MODE=True, wiz=wiz, threading=threading, _os=os, _sys=SimpleNamespace(argv=[]),
+        import os
+        # The real _worker_state keeps process-wide state on this namespace.
+        self.sys_ns = SimpleNamespace(argv=[])
+        self.env = dict(PAPER_MODE=True, wiz=wiz, threading=threading, _os=os, _sys=self.sys_ns,
                         _PAPER_WORKER_OWNER_KEY='paper_worker_owner_user_id',
                         Struct=SimpleNamespace(_worker_lock=threading.Lock()))
         exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), self.env)
-        self.state = {}
         self.live_calls = []
 
         def loop(_self, generation):
-            test.ran_as.append(flask.session.get('id'))
+            # Mirrors the real loop: it reads its state under its own session.
+            if generation != int(_self._worker_state().get('generation', 0) or 0):
+                test.exited_as.append(flask.session.get('id'))
+            else:
+                test.ran_as.append(flask.session.get('id'))
             test.done.set()
+            test.hold.wait(5)
 
         attrs = {name: self.env[name] for name in self.METHODS}
         attrs.update(
@@ -165,7 +174,6 @@ class PaperWorkerResumeTests(unittest.TestCase):
             _current_user_is_admin=lambda _self, uid=None: uid in test.admins,
             _lookup_config_value=lambda _self, key, missing=None: test.config.get(key, missing),
             _write_config_value=lambda _self, key, value, *a, **k: test.config.__setitem__(key, str(value)),
-            _worker_state=lambda _self: test.state,
             _daytrade_engine_model=lambda _self: object(),
             _daytrade_model=lambda _self: object(),
             _background_worker_loop=loop,
@@ -174,17 +182,37 @@ class PaperWorkerResumeTests(unittest.TestCase):
         )
         self.obj = type('StructDouble', (), attrs)()
 
-    def _finish_worker(self):
+    def state_for(self, owner):
+        return getattr(self.sys_ns, '_trading_daytrade_worker_state:paper:' + owner, {})
+
+    def _finish_worker(self, owner):
         self.assertTrue(self.done.wait(5))
-        self.state['thread'].join(5)
+        self.state_for(owner)['thread'].join(5)
         self.done.clear()
 
     def test_restart_resumes_remembered_owner_without_session(self):
         self.config['paper_worker_owner_user_id'] = 'admin'
         with self.app.test_request_context('/stock8-paper-bootstrap'):
             self.assertEqual(self.obj.resume_paper_worker(), 'admin')
-        self._finish_worker()
-        self.assertEqual(self.ran_as, ['admin'])
+        self._finish_worker('admin')
+        self.assertEqual((self.ran_as, self.exited_as), (['admin'], []))
+
+    def test_login_after_resume_does_not_start_a_second_worker(self):
+        self.hold.clear()
+        self.config['paper_worker_owner_user_id'] = 'admin'
+        with self.app.test_request_context('/stock8-paper-bootstrap'):
+            self.obj.resume_paper_worker()
+        self.assertTrue(self.done.wait(5))
+        resumed = self.state_for('admin')['thread']
+        try:
+            with self.app.test_request_context('/'):
+                flask.session['id'] = 'admin'
+                self.obj._ensure_background_worker()
+            self.assertIs(self.state_for('admin')['thread'], resumed)
+            self.assertEqual(self.ran_as, ['admin'])
+        finally:
+            self.hold.set()
+            resumed.join(5)
 
     def test_resume_waits_for_login_when_owner_is_gone_or_unsubscribed(self):
         for remembered, users, subscribed in (('', self.users, self.subscribed),
@@ -194,21 +222,22 @@ class PaperWorkerResumeTests(unittest.TestCase):
             self.users, self.subscribed = users, subscribed
             with self.app.test_request_context('/stock8-paper-bootstrap'):
                 self.assertEqual(self.obj.resume_paper_worker(), '')
-            self.assertNotIn('thread', self.state)
+            self.assertIsNone(self.state_for(remembered).get('thread'))
 
     def test_session_less_loads_never_start_a_worker(self):
         # Scripts load Struct without a session; only the bootstrap may resume.
         self.config['paper_worker_owner_user_id'] = 'admin'
         with self.app.test_request_context('/'):
             self.obj._ensure_background_worker()
-        self.assertNotIn('thread', self.state)
+        self.assertIsNone(self.state_for('').get('thread'))
+        self.assertIsNone(self.state_for('admin').get('thread'))
 
     def test_live_never_resumes_paper_owner(self):
         self.env['PAPER_MODE'] = False
         self.config['paper_worker_owner_user_id'] = 'admin'
         with self.app.test_request_context('/stock8-paper-bootstrap'):
             self.assertEqual(self.obj.resume_paper_worker(), '')
-        self.assertNotIn('thread', self.state)
+        self.assertIsNone(self.state_for('admin').get('thread'))
         self.assertEqual(self.live_calls, [])
 
     def test_login_start_remembers_owner_but_member_does_not_displace_admin(self):
@@ -216,7 +245,7 @@ class PaperWorkerResumeTests(unittest.TestCase):
             with self.app.test_request_context('/'):
                 flask.session['id'] = user
                 self.obj._ensure_background_worker()
-            self._finish_worker()
+            self._finish_worker(user)
             self.assertEqual(self.config['paper_worker_owner_user_id'], remembered)
         self.assertEqual(self.ran_as, ['admin', 'member', 'admin2'])
 
@@ -225,27 +254,8 @@ class PaperWorkerResumeTests(unittest.TestCase):
         with self.app.test_request_context('/'):
             flask.session['id'] = 'member'
             self.obj._ensure_background_worker()
-        self._finish_worker()
+        self._finish_worker('member')
         self.assertEqual(self.config['paper_worker_owner_user_id'], 'member')
-
-    def test_alive_worker_is_not_restarted_or_reassigned(self):
-        with self.app.test_request_context('/'):
-            flask.session['id'] = 'admin'
-            self.obj._ensure_background_worker()
-        self._finish_worker()
-        alive = threading.Event()
-        keeper = threading.Thread(target=alive.wait)
-        keeper.start()
-        self.state['thread'] = keeper
-        try:
-            with self.app.test_request_context('/'):
-                flask.session['id'] = 'admin2'
-                self.obj._ensure_background_worker()
-            self.assertIs(self.state['thread'], keeper)
-            self.assertEqual(self.config['paper_worker_owner_user_id'], 'admin')
-        finally:
-            alive.set()
-            keeper.join(5)
 
 
 if __name__ == '__main__':
