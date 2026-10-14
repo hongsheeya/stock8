@@ -1,4 +1,5 @@
 """US day-trade order sizing and pricing (no broker traffic)."""
+import contextlib
 import datetime
 import unittest
 from unittest.mock import Mock, patch
@@ -183,6 +184,61 @@ class UsPremarketGapTests(unittest.TestCase):
             signal = engine._signal_from_state("TEST", market="US", seed=1000000,
                                                strategy_id="us_premarket", sync_broker=False)["signal"]
         self.assertAlmostEqual(signal["us_meta"]["gap_pct"], 10.0, places=2)
+
+
+class UsSellFillTests(unittest.TestCase):
+    def _state(self):
+        return {"symbol": "TEST", "market": "US", "position_qty": 7, "avg_price": 100.0,
+                "pending_sell_order_no": "S1", "pending_sell_qty": 7, "pending_sell_type": "SELL_STOP_LOSS",
+                "pending_sell_placed_at": "2026-05-26 23:00:00", "pending_sell_position_before": 7,
+                "orders": [{"order_no": "S1", "action": "SELL", "qty": 7, "filled_qty": 0}]}
+
+    def _engine(self, rows):
+        engine, _ = _engine()
+        broker = Mock()
+        broker.request_options = lambda **_k: contextlib.nullcontext()
+        broker.get_overseas_order_history.return_value = rows
+        engine._broker = lambda: broker
+        engine._us_exchange = lambda _symbol: "NASD"
+        return engine
+
+    def test_filled_us_sell_takes_the_shares_off_the_books(self):
+        state = self._state()
+        engine = self._engine([{"order_no": "S1", "symbol": "TEST", "side": "SELL", "status": "FILLED",
+                                "filled_qty": 7, "filled_price": 92.0}])
+        self.assertEqual(engine._sync_us_pending_order(state, "TEST", "SELL"), "filled")
+        self.assertEqual((state["position_qty"], state["avg_price"]), (0, 0.0))
+        self.assertEqual(state["pending_sell_order_no"], "")
+        self.assertEqual(state["last_exit_action"], "SELL_STOP_LOSS")
+
+    def test_partly_filled_then_cancelled_keeps_the_rest(self):
+        state = self._state()
+        engine = self._engine([{"order_no": "S1", "symbol": "TEST", "side": "SELL", "status": "CANCELLED",
+                                "filled_qty": 3, "filled_price": 92.0}])
+        self.assertEqual(engine._sync_us_pending_order(state, "TEST", "SELL"), "cancelled")
+        self.assertEqual((state["position_qty"], state["avg_price"]), (4, 100.0))
+
+    def test_fill_already_applied_by_the_balance_is_not_subtracted_twice(self):
+        state = {**self._state(), "position_qty": 4, "pending_sell_position_before": 10, "pending_sell_qty": 10}
+        engine = self._engine([{"order_no": "S1", "symbol": "TEST", "side": "SELL", "status": "FILLED",
+                                "filled_qty": 6, "filled_price": 92.0}])
+        engine._sync_us_pending_order(state, "TEST", "SELL")
+        self.assertEqual(state["position_qty"], 4)
+
+    def test_order_without_a_recorded_position_keeps_the_balance_rule(self):
+        state = self._state()
+        del state["pending_sell_position_before"]
+        engine = self._engine([{"order_no": "S1", "symbol": "TEST", "side": "SELL", "status": "FILLED",
+                                "filled_qty": 7, "filled_price": 92.0}])
+        engine._sync_us_pending_order(state, "TEST", "SELL")
+        self.assertEqual(state["position_qty"], 7)
+
+    def test_open_order_changes_nothing(self):
+        state = self._state()
+        engine = self._engine([])
+        self.assertEqual(engine._sync_us_pending_order(state, "TEST", "SELL"), "open")
+        self.assertEqual(state["position_qty"], 7)
+        self.assertEqual(state["pending_sell_order_no"], "S1")
 
 
 if __name__ == "__main__":
