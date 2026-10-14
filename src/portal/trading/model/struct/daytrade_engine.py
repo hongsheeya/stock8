@@ -954,6 +954,8 @@ class DomesticDaytradeEngine:
                 self._clear_pending_sell(state)
                 return "filled"
             elif status == "CANCELLED":
+                if self._pending_sell_is_reservation(state):
+                    state["reservation_cancelled_at"] = self._now().isoformat()
                 self._clear_pending_sell(state)
                 return "cancelled"
             elif status == "PARTIAL":
@@ -981,6 +983,17 @@ class DomesticDaytradeEngine:
         Market exits that are only awaiting fill confirmation carry their action
         (SELL_STOP_LOSS, SELL_FULL, ...) as pending_sell_type."""
         return str((state or {}).get("pending_sell_type", "") or "").upper() in ("", "JACKPOT")
+
+    def _reservation_rearm_ready(self, state):
+        """Back off resting limits after cancellation; never delay risk exits."""
+        value = state.get("reservation_cancelled_at")
+        if not value:
+            return True
+        try:
+            elapsed = (self._now() - datetime.datetime.fromisoformat(value)).total_seconds()
+            return elapsed >= 300
+        except (ValueError, TypeError):
+            return False
 
     @staticmethod
     def _pending_sell_exit_action(state):
@@ -3116,20 +3129,9 @@ class DomesticDaytradeEngine:
                     # confirmed cancel, price-drift cancel). Without it a stale
                     # reservation suspended the stop-loss for the whole session.
                     pending_status = self._sync_pending_sell(state, symbol, market, current_price=current_price)
-                    placed_day = self._date_compact(state.get("pending_sell_placed_at", ""))
-                    if pending_status == "open" and len(placed_day) == 8 and placed_day < self._now().strftime("%Y%m%d"):
-                        # KRX day orders expire at the close, and only the full
-                        # signal path resets the session, which held slots never
-                        # reach. A reservation from a previous session cannot be
-                        # resting any more (a fill would have matched above).
-                        self._append_runtime_log(
-                            "warning",
-                            f"{symbol} 전일 매도 주문 {pending_order_no} 만료 처리 — 손절 감시를 재개합니다.",
-                            symbol=symbol,
-                            strategy_id=strategy_id,
-                            dedup_sec=300,
-                        )
-                        self._clear_pending_sell(state)
+                    # A date change is not broker evidence of an unfilled
+                    # expiry. A timeout or missing row may hide a fill; keep
+                    # tracking until the historical query confirms its result.
                     state["updated_at"] = self._timestamp()
                     self._store_state(state)
                     pending_order_no = str(state.get("pending_sell_order_no", "") or "")
@@ -3198,7 +3200,7 @@ class DomesticDaytradeEngine:
                 elif close_window and strategy_id == "volume_breakout":
                     action, order_qty, reason = "SELL_FULL", position_qty, "거래량 돌파 장마감 평탄화 (오버나잇 미보유)"
                     risk_exit = True
-                elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard:
+                elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard and self._reservation_rearm_ready(state):
                     action, order_qty, reason = "PRE_SELL_JACKPOT", position_qty, f"잭팟가 ₩{round(jackpot_price):,} 근접 — 사전 지정가 예약 우선"
                 elif breakout_exit:
                     # The fast path only knew vrev targets, so breakout slots
@@ -6568,7 +6570,7 @@ class DomesticDaytradeEngine:
                         "reason": f"목표 수익 {jackpot_pct_val}% 달성 전량 청산",
                         "order_qty": position_qty,
                     })
-                elif strategy_id == "vrev" and current_price >= jackpot_soft_exit_guard:
+                elif strategy_id == "vrev" and current_price >= jackpot_soft_exit_guard and self._reservation_rearm_ready(state):
                     # 잭팟가 근처에서는 soft exit보다 잭팟 예약을 우선한다.
                     signal.update({
                         "action": "PRE_SELL_JACKPOT",

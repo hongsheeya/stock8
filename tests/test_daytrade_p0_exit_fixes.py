@@ -92,14 +92,48 @@ class PendingReservationStopTests(unittest.TestCase):
         self.assertEqual(saved()["AAA.KS"]["pending_sell_order_no"], "")
         broker.cancel_domestic_order.assert_called_once()
 
-    def test_reservation_from_previous_session_expires_and_stop_resumes(self):
+    def test_previous_session_cancel_confirmation_resumes_stop(self):
         stale = self.reservation(pending_sell_placed_at="2026-05-25 14:00:00")
         engine, saved, _broker, decisions = _watch_engine([stale], {"AAA": 9800})
+        engine._domestic_fills_for_pending.return_value = [dict(order_no="555", status="CANCELLED")]
 
         engine.kr_execute_exit_watch(requested_seed=1000000)
 
         self.assertEqual(decisions["AAA"]["action"], "SELL_STOP_LOSS")
         self.assertEqual(saved()["AAA.KS"]["pending_sell_order_no"], "")
+
+    def test_previous_day_query_failure_never_releases_order(self):
+        stale = self.reservation(pending_sell_placed_at="2026-05-25 14:00:00")
+        engine, saved, broker, decisions = _watch_engine([stale], {"AAA": 9800})
+        engine._domestic_fills_for_pending.side_effect = TimeoutError('gateway')
+        engine.kr_execute_exit_watch(requested_seed=1000000)
+        self.assertEqual(saved()["AAA.KS"]["pending_sell_order_no"], "555")
+        self.assertEqual(decisions['AAA']['action'], 'HOLD')
+
+    def test_previous_day_market_exit_is_not_expired_or_resent(self):
+        stale = self.reservation(pending_sell_placed_at="2026-05-25 14:00:00", pending_sell_type='SELL_STOP_LOSS')
+        engine, saved, broker, decisions = _watch_engine([stale], {"AAA": 9500})
+        for _ in range(3):
+            engine.kr_execute_exit_watch(requested_seed=1000000)
+        self.assertEqual(saved()["AAA.KS"]["pending_sell_order_no"], "555")
+        self.assertEqual(decisions['AAA']['action'], 'HOLD')
+        broker.cancel_domestic_order.assert_not_called()
+
+    def test_repeated_watch_sends_only_one_cancel(self):
+        engine, saved, broker, decisions = _watch_engine([self.reservation()], {'AAA': 9800})
+        for _ in range(8):
+            engine.kr_execute_exit_watch(requested_seed=1000000)
+        broker.cancel_domestic_order.assert_called_once()
+
+    def test_cancelled_reservation_backs_off_without_delaying_stop(self):
+        engine, saved, broker, decisions = _watch_engine([self.reservation()], {'AAA': 10100})
+        engine._domestic_fills_for_pending.return_value = [dict(order_no='555', status='CANCELLED')]
+        engine.kr_execute_exit_watch(requested_seed=1000000)
+        state = saved()['AAA.KS']
+        self.assertEqual(decisions['AAA']['action'], 'HOLD')
+        self.assertFalse(engine._reservation_rearm_ready(state))
+        engine._now = lambda: _at(10, 5)
+        self.assertTrue(engine._reservation_rearm_ready(state))
 
     def test_filled_reservation_closes_watch_without_new_order(self):
         engine, saved, _broker, decisions = _watch_engine([self.reservation()], {"AAA": 10130})
