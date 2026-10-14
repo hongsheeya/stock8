@@ -58,6 +58,7 @@ class UsCycleBudgetTests(unittest.TestCase):
             _append_runtime_log=Mock(), _safe_float=lambda v,d=0: float(v or d),
             _safe_int=lambda v,d=0: int(v or d), _auto_max_symbols=lambda **kw: max_symbols,
             _minimum_entry_seed=lambda *a,**kw: 1000,
+            _minimum_entry_seed_krw=lambda *a,**kw: 1000,
             execute_live=Mock(side_effect=outcomes), daily_loss_status=lambda **kw: {},
             shared_budget_status=lambda **kw: {}, portfolio_usage=lambda **kw: {})
         result = ns['us_auto_cycle'](engine, requested_seed=seed)

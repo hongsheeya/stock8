@@ -20,6 +20,8 @@ _DATA_ROOT = "data/paper/daytrade" if _TRADING_MODE == "PAPER" else "data/live/d
 _PAPER_MODE = _TRADING_MODE == "PAPER"
 # Longer than the 120 s balance cache plus the broker's holding-update lag.
 _READOPT_GRACE_SEC = 180.0
+# Process-wide USD/KRW so the yfinance fallback is not hit on every signal tick.
+_USD_KRW_CACHE = sys.__dict__.setdefault("_stock8_daytrade_usd_krw", {})
 _PAPER_CONTINUOUS = _PAPER_MODE and str(os.environ.get("STOCK8_PAPER_CONTINUOUS", "true") or "true").lower() in ("1", "true", "yes", "on")
 
 
@@ -602,9 +604,15 @@ class DomesticDaytradeEngine:
         """장 마감 임박 여부 (강제청산 트리거): 국장 KST 15:10~15:20, 미장 ET 15:40+"""
         now = self._now()
         if self._is_us_market(market):
-            # ET = KST - 13h (EDT 여름) or -14h (EST 겨울) — 간단히 -13h 기준
-            et_hour = (now.hour - 13) % 24
-            et_min = now.minute
+            # KST-13h only holds in summer; after DST ends the window ran an
+            # hour late, past the 16:00 ET close.
+            et_hour, et_min = (now.hour - 13) % 24, now.minute
+            if ZoneInfo is not None:
+                try:
+                    et = (now if now.tzinfo else now.replace(tzinfo=ZoneInfo("Asia/Seoul"))).astimezone(ZoneInfo("America/New_York"))
+                    et_hour, et_min = et.hour, et.minute
+                except Exception:
+                    pass
             # ET 15:40~16:05 사이
             if et_hour == 15 and et_min >= 40:
                 return True
@@ -620,6 +628,13 @@ class DomesticDaytradeEngine:
             hhmm = now.hour * 100 + now.minute
             return start <= hhmm < 1520
 
+    def _us_marketable_price(self, price, side):
+        """US "market" orders are limits (KIS has no US market order); a limit at
+        the last price leaves a stop-loss unfilled once the price moves away."""
+        buffer_pct = min(max(self._safe_float(self._config("daytrade_us_limit_buffer_pct", "1.0"), 1.0), 0.0), 5.0)
+        factor = 1 + buffer_pct / 100 if side == "BUY" else 1 - buffer_pct / 100
+        return self._round_usd_price(self._safe_float(price, 0) * factor)
+
     def _round_usd_price(self, value):
         """USD 가격: $1 이상은 소수점 2자리, $1 미만은 4자리"""
         price = self._safe_float(value, 0)
@@ -628,6 +643,14 @@ class DomesticDaytradeEngine:
         if price < 1.0:
             return round(price, 4)
         return round(price, 2)
+
+    def _auto_stop_level(self, avg_price, stop_loss_pct, market="KS"):
+        """KS keeps whole-won rounding; US keeps cents (round() put a $4.90
+        entry's 8% stop at $5, above the entry)."""
+        if stop_loss_pct <= 0 or avg_price <= 0:
+            return 0
+        level = avg_price * (1 - stop_loss_pct / 100)
+        return self._round_usd_price(level) if self._is_us_market(market) else round(level)
 
     def _normalize_trigger_price(self, value, market="KS"):
         price = self._safe_float(value, 0)
@@ -1218,6 +1241,12 @@ class DomesticDaytradeEngine:
         changed = False
         default_strategy = self.strategy.defaults().get("strategy", "vrev")
         reserved_symbols = self._infinite_buy_symbols() if "US" in fetched_markets else set()
+        # KS vrev exits on a US holding produced PRE_SELL_JACKPOT orders sent to
+        # the domestic order API ("매매불가 종목").
+        try:
+            us_default_strategy = self.strategy.us_defaults().get("strategy", "us_premarket")
+        except Exception:
+            us_default_strategy = "us_premarket"
 
         # 브로커에 있는 종목 키셋 (qty > 0)
         broker_keys = set()
@@ -1233,8 +1262,9 @@ class DomesticDaytradeEngine:
                 continue
             key = self._state_key(symbol, market)
             broker_keys.add(key)
+            adopt_strategy = us_default_strategy if market == "US" else default_strategy
 
-            state = state_map.get(key, self._default_state(symbol, market, 0, name=item.get("name", ""), strategy_id=default_strategy))
+            state = state_map.get(key, self._default_state(symbol, market, 0, name=item.get("name", ""), strategy_id=adopt_strategy))
             prev_qty = self._safe_int(state.get("position_qty", 0), 0)
             prev_avg = self._safe_float(state.get("avg_price", 0), 0)
             broker_avg = self._safe_float(item.get("avg_price", 0), 0)
@@ -1255,7 +1285,7 @@ class DomesticDaytradeEngine:
             if broker_last_price > 0:
                 state["last_price"] = round(broker_last_price, 4)
             if not state.get("strategy_id"):
-                state["strategy_id"] = default_strategy
+                state["strategy_id"] = adopt_strategy
 
             managed_qty = max(prev_qty, rebuilt_qty)
             managed_avg = rebuilt_avg if rebuilt_avg > 0 else prev_avg
@@ -1439,25 +1469,7 @@ class DomesticDaytradeEngine:
         if self._is_us_market(market) is False:
             return payload
 
-        usd_krw = 0.0
-        try:
-            raw = self._fetch_kis_balance_raw(use_cache_only=True)
-            usd_krw = self._safe_float(raw.get("usd_krw", 0), 0)
-        except Exception:
-            usd_krw = 0.0
-        if usd_krw <= 0:
-            try:
-                present = self._broker().get_present_balance()
-                usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
-            except Exception:
-                usd_krw = 0.0
-        if usd_krw <= 0:
-            try:
-                fx = self._broker()._get_usd_krw_rate_fallback()
-                usd_krw = self._safe_float(fx.get("rate", 0), 0)
-            except Exception:
-                usd_krw = 0.0
-
+        usd_krw = self._usd_krw_rate()
         buy_budget_usd = (requested_seed_krw / usd_krw) if requested_seed_krw > 0 and usd_krw > 0 else 0.0
         min_entry_usd = self._minimum_entry_seed(current_price, market=market)
         budget_total_usd = max(buy_budget_usd, min_entry_usd) if min_entry_usd > 0 else buy_budget_usd
@@ -1470,6 +1482,39 @@ class DomesticDaytradeEngine:
             "min_entry_budget": round(min_entry_usd, 4),
         })
         return payload
+
+    def _usd_krw_rate(self):
+        """USD/KRW for US budgets: balance, KIS present balance, then yfinance (cached 10 min)."""
+        cached = _USD_KRW_CACHE.get("rate")
+        if cached and _clock.time() - cached[0] < 600:
+            return cached[1]
+        rate = 0.0
+        sources = (
+            lambda: self._fetch_kis_balance_raw().get("usd_krw", 0),
+            lambda: self._broker().get_present_balance().get("usd_krw", 0),
+            lambda: self._broker()._get_usd_krw_rate_fallback().get("rate", 0),
+        )
+        for source in sources:
+            try:
+                rate = self._safe_float(source(), 0)
+            except Exception:
+                rate = 0.0
+            if rate > 0:
+                _USD_KRW_CACHE["rate"] = (_clock.time(), rate)
+                break
+        return rate
+
+    def _minimum_entry_seed_krw(self, price, market="US"):
+        """The one-share US minimum entry, in the KRW the seed plumbing expects.
+
+        execute_live divides a US seed by USD/KRW again; passing the USD
+        minimum made every US auto entry order 0 shares. 1% headroom absorbs
+        rate drift between this conversion and the budget's.
+        """
+        usd_krw = self._usd_krw_rate()
+        if usd_krw <= 0:
+            return 0.0
+        return self._minimum_entry_seed(price, market=market) * usd_krw * 1.01
 
     def _minimum_entry_seed(self, price, market="KS"):
         base_price = self._safe_float(price, 0)
@@ -2900,7 +2945,7 @@ class DomesticDaytradeEngine:
                     if qty > planning_qty:
                         qty = planning_qty
                         order_value = round(current_price * qty, 2)
-                    order = self._broker().buy_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+                    order = self._broker().buy_order(symbol, qty, price=self._us_marketable_price(current_price, "BUY"), order_type="MARKET", exchange=exchange)
                     # 주문 접수와 체결은 다르다. 해외 체결 조회가 없는 동안
                     # 주문 수량 전체를 체결로 간주하면 모의자산이 부풀려진다.
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
@@ -2996,7 +3041,7 @@ class DomesticDaytradeEngine:
             else:
                 if self._is_us_market(market):
                     exchange = self._us_exchange(symbol)
-                    order = self._broker().sell_order(symbol, qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+                    order = self._broker().sell_order(symbol, qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
                 else:
                     order = self._broker().sell_domestic_order(symbol, qty, price=0, order_type="MARKET")
@@ -3568,7 +3613,7 @@ class DomesticDaytradeEngine:
         current_price = self._current_price(symbol, market=market, fallback=self._safe_float(state.get("avg_price", 0), 0))
         if self._is_us_market(market):
             exchange = self._us_exchange(symbol)
-            order = self._broker().sell_order(symbol, sell_qty, price=round(current_price, 2), order_type="MARKET", exchange=exchange)
+            order = self._broker().sell_order(symbol, sell_qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
             fill = {"filled_price": current_price, "filled_qty": sell_qty, "status": "UNKNOWN"}
             exec_price = self._safe_float(fill.get("filled_price", current_price), current_price)
         else:
@@ -5250,7 +5295,7 @@ class DomesticDaytradeEngine:
                 "source": "paper_exploration" if item.get("paper_exploration") else "leaderboard",
                 "paper_exploration": bool(item.get("paper_exploration", False)),
                 "entry_seed_krw": (
-                    round(self._minimum_entry_seed(last_price, market=item_market), 2)
+                    round(self._minimum_entry_seed_krw(last_price, market=item_market), 2)
                     if is_new_entry and self._is_us_market(item_market)
                     else round(min(remaining_seed_krw, slot_seed_limit_krw), 2) if is_new_entry else 0.0
                 ),
@@ -5448,7 +5493,7 @@ class DomesticDaytradeEngine:
             remaining_slots = max(0, self._auto_max_symbols(market="US") - tracked_position_count)
             is_new_entry = item.get("source") != "active_position"
             allocation_seed = 0.0
-            min_required_seed = self._minimum_entry_seed(self._safe_float(item.get("last_price", 0), 0), market=market)
+            min_required_seed = self._minimum_entry_seed_krw(self._safe_float(item.get("last_price", 0), 0), market=market)
 
             if is_new_entry:
                 if remaining_seed_krw <= 0:
@@ -5700,6 +5745,11 @@ class DomesticDaytradeEngine:
             bar["low"] = quote_low if quote_low > 0 else price
             bar["timestamp"] = quote.get("timestamp", bar.get("timestamp", ""))
             bar["price_source"] = quote.get("source", source_label)
+            # US sessions load one regular-hours day, so their own prev_close
+            # is today's first open; the quote carries the real one.
+            quote_prev_close = self._safe_float(quote.get("prev_close", 0), 0)
+            if quote_prev_close > 0:
+                bar["quote_prev_close"] = quote_prev_close
             return bar
 
         def _fallback_snapshot_from_state(reason=""):
@@ -6298,6 +6348,8 @@ class DomesticDaytradeEngine:
 
         current_price = self._safe_float(bar.get("close", 0))
         prev_close = self._safe_float(session.get("prev_close", 0), 0)
+        if self._is_us_market(market) and self._safe_float(bar.get("quote_prev_close", 0), 0) > 0:
+            prev_close = self._safe_float(bar.get("quote_prev_close", 0), 0)
         session_open = self._safe_float(bar.get("open", 0), 0)
         vwap_price = self._safe_float(bar.get("vwap", 0), 0)
         anchor_candidates = [price for price in [prev_close, session_open, vwap_price] if price > 0]
@@ -6384,7 +6436,7 @@ class DomesticDaytradeEngine:
         sell_priority_hit = False
         if position_qty > 0 and avg_price > 0:
             _stop_loss_pct_val = self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5)
-            _auto_stop_price = round(avg_price * (1 - _stop_loss_pct_val / 100)) if _stop_loss_pct_val > 0 else 0
+            _auto_stop_price = self._auto_stop_level(avg_price, _stop_loss_pct_val, market)
             _jackpot_pct_val = float(profile.get("jackpot_take_profit_pct", 2.0))
             _jackpot = avg_price * (1 + _jackpot_pct_val / 100)
             _jackpot_soft_exit_guard = _jackpot * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
@@ -6493,9 +6545,11 @@ class DomesticDaytradeEngine:
             entry_drawdown_min = self._safe_float(profile.get("entry_drawdown_min_pct", 3.0), 3.0)
             entry_drawdown_max = self._safe_float(profile.get("entry_drawdown_max_pct", 10.0), 10.0)
             min_volume_usd = self._safe_float(profile.get("min_volume_usd", 2_000_000), 2_000_000)
-            # 갭 = 반드시 전일 종가 대비 계산 (session_open/vwap 혼입 금지)
-            gap_anchor = prev_close if prev_close > 0 else current_price
-            gap_pct = (current_price - gap_anchor) / gap_anchor * 100 if gap_anchor > 0 else 0
+            # 갭 = 당일 시가 vs 전일 종가 (백테스트 _simulate_us_premarket_session과 동일).
+            # It used the current price against today's open, so a gap-up
+            # that faded read as a negative "gap".
+            day_open = session_open if session_open > 0 else current_price
+            gap_pct = (day_open - prev_close) / prev_close * 100 if prev_close > 0 else 0
             intraday_high = self._safe_float(bar.get("high", current_price), current_price)
             drawdown_from_high_pct = (intraday_high - current_price) / intraday_high * 100 if intraday_high > 0 else 0
             # 대략적인 거래대금 판단: close * volume (USD)
@@ -6636,7 +6690,7 @@ class DomesticDaytradeEngine:
             recent_target = anchor * (1 + float(profile.get("recent_lot_take_profit_pct", 0.6)) / 100)
             rescue_target = avg_price * (1 + float(profile.get("rescue_take_profit_pct", 0.5)) / 100)
             stop_loss_pct_val = self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5)
-            auto_stop_price = round(avg_price * (1 - stop_loss_pct_val / 100)) if stop_loss_pct_val > 0 else 0
+            auto_stop_price = self._auto_stop_level(avg_price, stop_loss_pct_val, market)
             break_even_price = self._break_even_price(avg_price)
             bb_upper_live = self._safe_float(bar.get("bb_upper", 0), 0)
             stop_touch_price = current_price
@@ -6736,6 +6790,13 @@ class DomesticDaytradeEngine:
                         "order_qty": position_qty,
                         "risk_exit": True,
                     })
+                elif self._is_us_market(market) and str(strategy_id).startswith("us_") and self._is_market_close_approaching(market):
+                    signal.update({
+                        "action": "SELL_FULL",
+                        "reason": "미장 단타 장마감 평탄화 (백테스트와 동일하게 오버나잇 미보유)",
+                        "order_qty": position_qty,
+                        "risk_exit": True,
+                    })
                 elif stop_loss_enabled and stop_loss_price > 0 and current_price <= stop_loss_price:
                     signal.update({
                         "action": "SELL_STOP_LOSS",
@@ -6768,7 +6829,7 @@ class DomesticDaytradeEngine:
                         "reason": f"목표 수익 {jackpot_pct_val}% 달성 전량 청산",
                         "order_qty": position_qty,
                     })
-                elif strategy_id == "vrev" and current_price >= jackpot_soft_exit_guard and self._reservation_rearm_ready(state):
+                elif strategy_id == "vrev" and not self._is_us_market(market) and current_price >= jackpot_soft_exit_guard and self._reservation_rearm_ready(state):
                     # 잭팟가 근처에서는 soft exit보다 잭팟 예약을 우선한다.
                     signal.update({
                         "action": "PRE_SELL_JACKPOT",
@@ -6853,26 +6914,43 @@ class DomesticDaytradeEngine:
         # Risk exits (close-rule clean-up, failed breakout) cut a loss on purpose;
         # the profit floor must not turn them back into HOLD.
         if signal["action"].startswith("SELL") and "STOP" not in signal["action"] and signal["action"] != "SELL_MANUAL" and not signal.get("risk_exit") and avg_price > 0 and current_price > 0:
-            break_even = avg_price * (1 + _FEE_BUY) / (1 - _FEE_SELL)  # ≈ avg_price * 1.0021
             sell_qty_for_check = min(position_qty, max(1, self._safe_int(signal.get("order_qty", position_qty), position_qty)))
-            min_exit_net_profit = max(0, round(self._safe_float(profile.get("min_exit_net_profit_krw", 500), 500)))
-            est_net_profit = round(self._estimate_exit_net_profit(avg_price, current_price, sell_qty_for_check))
-            est_total_fee = round(self._estimate_exit_total_fee(avg_price, current_price, sell_qty_for_check))
             min_exit_fee_multiple = max(1.0, self._safe_float(profile.get("min_exit_fee_multiple", 2.0), 2.0))
-            fee_based_min_profit = round(est_total_fee * min_exit_fee_multiple)
+            if self._is_us_market(market):
+                # USD position: KIS US fees (0.25% a side + SEC fee) and the
+                # KRW floor converted. The won floor and Korean fees used to be
+                # compared with dollar profits, which blocked US take-profits.
+                fee_buy = self._safe_float(profile.get("commission_bps", 25.0), 25.0) / 10000
+                fee_sell = (self._safe_float(profile.get("sell_commission_bps", 25.0), 25.0) / 10000
+                            + self._safe_float(profile.get("sec_fee_per_million_usd", 8.0), 8.0) / 1_000_000)
+                break_even = avg_price * (1 + fee_buy) / (1 - fee_sell)
+                usd_krw = self._usd_krw_rate()
+                floor_krw = max(0.0, self._safe_float(profile.get("min_exit_net_profit_krw", 500), 500))
+                min_exit_net_profit = round(floor_krw / usd_krw, 2) if usd_krw > 0 else 0.0
+                est_total_fee = round((avg_price * fee_buy + current_price * fee_sell) * sell_qty_for_check, 2)
+                est_net_profit = round((current_price - avg_price) * sell_qty_for_check - est_total_fee, 2)
+                fee_based_min_profit = round(est_total_fee * min_exit_fee_multiple, 2)
+                money = lambda value: f"${value:,.2f}"
+            else:
+                break_even = avg_price * (1 + _FEE_BUY) / (1 - _FEE_SELL)  # ≈ avg_price * 1.0021
+                min_exit_net_profit = max(0, round(self._safe_float(profile.get("min_exit_net_profit_krw", 500), 500)))
+                est_net_profit = round(self._estimate_exit_net_profit(avg_price, current_price, sell_qty_for_check))
+                est_total_fee = round(self._estimate_exit_total_fee(avg_price, current_price, sell_qty_for_check))
+                fee_based_min_profit = round(est_total_fee * min_exit_fee_multiple)
+                money = lambda value: f"₩{round(value):,}"
             required_min_profit = max(min_exit_net_profit, fee_based_min_profit)
             if current_price < break_even:
                 prev_reason = signal["reason"]
                 signal.update({
                     "action": "HOLD",
-                    "reason": f"수수료 손익분기 미달 — ₩{round(break_even):,} 이상 도달 후 매도 가능 (현재 {prev_reason})",
+                    "reason": f"수수료 손익분기 미달 — {money(break_even)} 이상 도달 후 매도 가능 (현재 {prev_reason})",
                     "order_qty": 0,
                 })
             elif required_min_profit > 0 and est_net_profit < required_min_profit:
                 prev_reason = signal["reason"]
                 signal.update({
                     "action": "HOLD",
-                    "reason": f"미세 익절 보류 — 예상 순이익 ₩{est_net_profit:,} < 최소 ₩{required_min_profit:,} (수수료 ₩{est_total_fee:,}×{min_exit_fee_multiple:.1f}, 현재 {prev_reason})",
+                    "reason": f"미세 익절 보류 — 예상 순이익 {money(est_net_profit)} < 최소 {money(required_min_profit)} (수수료 {money(est_total_fee)}×{min_exit_fee_multiple:.1f}, 현재 {prev_reason})",
                     "order_qty": 0,
                 })
 
