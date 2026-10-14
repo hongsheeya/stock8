@@ -5476,7 +5476,7 @@ class DomesticDaytradeEngine:
         exec() 재실행/클래스 재생성에도 캐시 유지.
         """
         import sys as _sys
-        _SNAP_KEY = "_trading_snapshot_cache_v2"
+        _SNAP_KEY = "_trading_snapshot_cache_v3"
         _SNAP_TTL = 12.0
         cache_key = f"{symbol}.{market}"
         now = self._now()
@@ -5600,16 +5600,19 @@ class DomesticDaytradeEngine:
             age = (now - cached["ts"]).total_seconds()
             if age < _SNAP_TTL:
                 return cached["session"], dict(cached["bar"])  # 캐시 히트 → KIS API 스킵
-            if age < max_session_reuse_sec:
+            dataset_age = (now - cached.get("dataset_ts", cached["ts"])).total_seconds()
+            if dataset_age < max_session_reuse_sec:
                 try:
                     bar = _apply_kis_quote(cached.get("bar", {}))
-                    snapshot_cache[cache_key] = {"session": cached["session"], "bar": bar, "ts": now}
+                    snapshot_cache[cache_key] = {"session": cached["session"], "bar": bar, "ts": now,
+                                                 "dataset_ts": cached.get("dataset_ts", cached["ts"])}
                     setattr(_sys, _SNAP_KEY, snapshot_cache)
                     return cached["session"], bar
                 except Exception:
                     return cached["session"], dict(cached["bar"])
         try:
-            sessions = self.strategy._prepare_dataset(symbol, market=market, period="1d", interval="1m")
+            sessions = self.strategy._prepare_dataset(symbol, market=market,
+                                                       period="1d" if self._is_us_market(market) else "5d", interval="1m")
             if len(sessions) == 0:
                 raise Exception("라이브 시그널에 사용할 분봉 데이터가 없습니다.")
             session = sessions[-1]
@@ -5627,7 +5630,7 @@ class DomesticDaytradeEngine:
         # sys 모듈에 캐시 저장 (exec() 재실행 후에도 유지)
         if not isinstance(snapshot_cache, dict):
             snapshot_cache = {}
-        snapshot_cache[cache_key] = {"session": session, "bar": bar, "ts": now}
+        snapshot_cache[cache_key] = {"session": session, "bar": bar, "ts": now, "dataset_ts": now}
         setattr(_sys, _SNAP_KEY, snapshot_cache)
         return session, bar
 
@@ -6107,6 +6110,9 @@ class DomesticDaytradeEngine:
         vwap_price = self._safe_float(bar.get("vwap", 0), 0)
         anchor_candidates = [price for price in [prev_close, session_open, vwap_price] if price > 0]
         anchor = max(anchor_candidates) if len(anchor_candidates) > 0 else current_price
+        if not self._is_us_market(market):
+            # Match the research anchor; never replace yesterday's close with today's VWAP/open.
+            anchor = prev_close
         state_position_qty = self._safe_int(state.get("position_qty", 0), 0)
         state_avg_price = self._safe_float(state.get("avg_price", 0), 0)
         if allow_buy or state_position_qty <= 0:
@@ -6677,6 +6683,12 @@ class DomesticDaytradeEngine:
                     "reason": f"미세 익절 보류 — 예상 순이익 ₩{est_net_profit:,} < 최소 ₩{required_min_profit:,} (수수료 ₩{est_total_fee:,}×{min_exit_fee_multiple:.1f}, 현재 {prev_reason})",
                     "order_qty": 0,
                 })
+
+        if not self._is_us_market(market) and signal["action"].startswith("BUY"):
+            if self._safe_int(bar.get("indicator_bar_count", 0), 0) < 20 or bar.get("intraday_unavailable"):
+                signal.update(action="HOLD", order_qty=0, reason="지표 워밍업 대기: 실제 분봉 최소 20개 필요")
+            elif prev_close <= 0 or session.get("prev_close_confirmed") is False:
+                signal.update(action="HOLD", order_qty=0, reason="전일 종가 미확인: 신규 진입 대기")
 
         # HOLD 상태일 때 이유를 문맥에 맞게 갱신 — 자동매매 결과 패널에서 원인 파악 가능하도록
         if signal["action"] == "HOLD":
