@@ -133,6 +133,12 @@ class UsExitTests(unittest.TestCase):
         self.assertTrue(signal["risk_exit"])
         self.assertIn("장마감", signal["reason"])
 
+    def test_exit_only_check_does_not_invent_a_vwap_stop(self):
+        # -1% on a us_vwap position: the synthetic bar's VWAP was the entry
+        # price, so this used to be "VWAP 하단 이탈 즉시 손절".
+        signal = _us_signal(_us_state(100.0, strategy_id="us_vwap"), 99.0, MIDDAY)
+        self.assertEqual(signal["action"], "HOLD")
+
     def test_us_holding_never_gets_a_domestic_pre_sell(self):
         signal = _us_signal(_us_state(100.0, strategy_id="vrev"), 102.6, MIDDAY,
                             _reservation_rearm_ready=lambda *_a, **_k: True)

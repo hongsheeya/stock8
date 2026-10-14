@@ -5822,7 +5822,7 @@ class DomesticDaytradeEngine:
                 "low": quote_low if quote_low > 0 else min(anchor_price, fallback_price),
                 "close": fallback_price,
                 "volume": 0,
-                "vwap": anchor_price,
+                "vwap": 0.0 if self._is_us_market(market) else anchor_price,
                 "open_price": quote_open if quote_open > 0 else anchor_price,
                 "volume_above_ratio": 0.5,
                 "volume_below_ratio": 0.5,
@@ -6294,7 +6294,9 @@ class DomesticDaytradeEngine:
                 "high": max(anchor_price, override_price),
                 "low": min(anchor_price, override_price),
                 "close": override_price,
-                "vwap": anchor_price,
+                # No intraday data here: a made-up US VWAP (>= the entry) made
+                # us_vwap "VWAP-stop" any position below its entry.
+                "vwap": 0.0 if self._is_us_market(market) else anchor_price,
                 "volume": 0,
                 "rsi14": 50.0,
                 "bb_upper": 0.0,
