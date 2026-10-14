@@ -744,6 +744,7 @@ class DomesticDaytradeEngine:
         state["pending_sell_type"] = ""
         state["pending_sell_placed_at"] = ""
         state.pop("pending_sell_cancel_requested_order", None)
+        state.pop("pending_sell_position_before", None)
 
     @staticmethod
     def _normalized_order_no(value):
@@ -918,11 +919,15 @@ class DomesticDaytradeEngine:
             if status in ("FILLED", "CANCELLED"):
                 if side == "SELL":
                     filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
-                    if filled_qty > 0:
+                    before = state.get("pending_sell_position_before")
+                    if filled_qty > 0 and before is not None:
                         # Leaving the sold shares on the books until the balance
                         # caught up made the exit watch re-send sells for shares
                         # already gone (TQQQ: 1,128 rejected SELL_FULL retries).
-                        state["position_qty"] = max(0, self._safe_int(state.get("position_qty", 0), 0) - filled_qty)
+                        # Count from the position at order time: the balance sync
+                        # may already have applied part of this fill.
+                        remaining = max(0, self._safe_int(before, 0) - filled_qty)
+                        state["position_qty"] = min(self._safe_int(state.get("position_qty", 0), 0), remaining)
                         if state["position_qty"] == 0:
                             state["avg_price"] = 0.0
                         filled_price = self._safe_float(matched.get("filled_price", 0), 0)
@@ -3021,6 +3026,7 @@ class DomesticDaytradeEngine:
                     state["pending_sell_qty"] = qty
                     state["pending_sell_type"] = action
                     state["pending_sell_placed_at"] = self._timestamp()
+                    state["pending_sell_position_before"] = prev_qty
                     state["last_signal"] = f"{action}_PENDING"
                     state["updated_at"] = self._timestamp()
                     self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
