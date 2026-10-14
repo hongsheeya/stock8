@@ -1363,7 +1363,11 @@ class Daytrade:
                 continue
             anchor = prev_close if prev_close > 0 else bars[0]["open"]
             decorated = self._decorate_bars(bars, anchor)
-            result.append({"date": day, "prev_close": anchor, "bars": decorated})
+            confirmed = prev_close > 0
+            for bar in decorated:
+                bar["prev_close_confirmed"] = confirmed
+            result.append({"date": day, "prev_close": anchor if is_us else prev_close,
+                           "prev_close_confirmed": confirmed, "bars": decorated})
             prev_close = decorated[-1]["close"]
         if len(result) == 0:
             raise Exception("사용 가능한 세션 데이터가 없습니다.")
@@ -1532,6 +1536,7 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
             trend_strength = ((ma_fast - ma_slow) / ma_slow * 100) if ma_slow > 0 else 0
             decorated.append({
                 **row,
+                "indicator_bar_count": len(closes),
                 "anchor_return_pct": round(ret_anchor, 4),
                 "vwap": round(vwap, 4),
                 "open_price": open_price,
@@ -1668,6 +1673,10 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
     def vrev_entry_issues(self, bar, profile=None):
         profile = {**self.DEFAULT_PROFILE, **(profile or {})}
         issues = []
+        if self._safe_int(bar.get("indicator_bar_count", 0), 0) < 20:
+            issues.append("지표 워밍업 대기: 최소 20봉 필요")
+        if bar.get("prev_close_confirmed") is False:
+            issues.append("전일 종가 미확인: 신규 진입 대기")
         current_price = self._safe_float(bar.get("close", 0), 0)
         vwap = self._safe_float(bar.get("vwap", 0), 0)
         rsi_live = self._safe_float(bar.get("rsi14", 50), 50)
@@ -1964,7 +1973,8 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 if price >= breakout_entry_bar['breakout_high_20']:
                     sustain_ticks += 1
 
-            if position_qty == 0 and entry_rule(bar, session, profile):
+            if (position_qty == 0 and self._safe_int(bar.get("indicator_bar_count", 0), 0) >= 20
+                    and bar.get("prev_close_confirmed") is not False and entry_rule(bar, session, profile)):
                 qty = self._chunk_qty(budget_total, price)
                 if qty > 0:
                     self._append_buy_lot(lots, qty, price, "VOLUME_BREAKOUT", timestamp, trades, profile, reason="volume_breakout entry")
