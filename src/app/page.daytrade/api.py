@@ -152,6 +152,16 @@ def _require_daytrade_access():
 def access_status():
     wiz.response.status(200, **_daytrade_access_payload())
 
+def _page_budget_status(engine, seed, force=False):
+    budget = engine.shared_budget_status(requested_seed=seed, use_cache_only=not force)
+    if _TRADING_MODE == 'PAPER' and not force and budget.get('budget_status') == 'unavailable':
+        # A cold cache is not a zero balance. Warm it on the first page read;
+        # subsequent polls use the existing engine TTL rather than refetching.
+        with engine._broker().request_options(timeout=8, retries=0):
+            budget = engine.shared_budget_status(requested_seed=seed, use_cache_only=False)
+    return budget
+
+
 def _recommendation_price_cap(engine, budget_status, seed):
     fallback_seed = float(seed or 0) if float(seed or 0) > 0 else 0
     base_seed = (
@@ -537,7 +547,7 @@ def bootstrap():
         )
         seed = requested_seed if requested_seed > 0 else configured_seed
         kis_status = engine.check_kis_connection()
-        budget_status = engine.shared_budget_status(requested_seed=seed, use_cache_only=True)
+        budget_status = _page_budget_status(engine, seed)
         budget_status = _merge_budget_with_worker_cache(budget_status, worker_status)
         budget_status = _normalize_budget_total_asset(budget_status)
         rec, price_cap = _stable_recommendation(service, engine, budget_status, seed, market=market, strategy_id="", symbol=symbol)
@@ -1031,7 +1041,7 @@ def live_status():
         except Exception:
             kis_status = (cached_entry or {}).get("payload", {}).get("kis_status", {}) if isinstance(cached_entry, dict) else {}
         # 폴링에서는 KIS 강제 조회를 피하고, 수동 갱신에서만 실조회한다.
-        budget_status = engine.shared_budget_status(requested_seed=seed, use_cache_only=(force_refresh is False))
+        budget_status = _page_budget_status(engine, seed, force=force_refresh)
         effective_seed = budget_status.get("effective_daytrade_seed", budget_status.get("live_order_seed", seed)) or seed
         auto_enabled = engine.auto_enabled()
         try:

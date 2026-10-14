@@ -412,7 +412,7 @@ div(class="flex items-center justify-between mb-4")
 
 //- PAPER Operations Console
 wiz-component-trading-controls(#tradeControls="", [positions]="holdings.concat(daytradePositions, infiniteBuyCycles)")
-section(*ngIf="showAdminControls && !legacyMode && isMock", class="dash-ops-console mb-6", [class]="'state-' + (automationState.code || 'off')")
+section(*ngIf="showAdminControls && legacyMode && isMock", class="dash-ops-console mb-6", [class]="'state-' + (automationState.code || 'off')")
     div(class="dash-ops-main")
         div(class="dash-ops-heading")
             div

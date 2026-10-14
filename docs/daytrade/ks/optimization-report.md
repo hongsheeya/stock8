@@ -1,50 +1,50 @@
 # Domestic Daytrade Optimization Report
 
-- Generated: 2026-10-08 13:52:17
-- Symbol: 252670
+- Generated: 2026-10-14 15:15:15
+- Symbol: 114800
 - Market: KS
-- Strategy: V-REV 역추세
+- Strategy: 거래량 돌파
 - Period/Interval: 10d / 5m
-- Seed: 1,000,000
+- Seed: 5,000,000
 
 ## Selection Criteria
 - Score: summary_score*0.45 + robustness_score*0.35 + graph_stability_score*0.20
 - Objective: maximize net return while controlling drawdown, turnover, fee drag, and overfitting.
 
 ## Strategy State Machine
-- Summary: 전일종가 앵커, VWAP, 거래량 지배력을 이용한 눌림-반등형 전략
-- Entry: 전일종가 대비 1차/2차 눌림 구간에서 분할 진입
-- Entry: VWAP과 거래량 지배력으로 횡보/추세 레짐 구분
-- Exit: 평단가 잭팟 전량 청산
-- Exit: 기준가 회복 방어 청산 및 구조 복구 청산
+- Summary: 오프닝레인지/직전 고점 돌파와 거래량 급증이 함께 나오는 구간을 추종
+- Entry: 거래량 급증률 임계치 초과
+- Entry: 직전 n봉 고점 돌파 + VWAP 상단 유지
+- Exit: 돌파 실패 재이탈
+- Exit: 트레일링/장마감 평탄화
 
 ## Best Candidate
-- Total Return: 8.9651%
-- Total Profit: 89651.44
-- Win Rate: 30.0%
-- Max Drawdown: 0.0%
-- Avg Trades/Day: 2.1
-- Profit Factor: 12.3999
-- Fee Total: 26465.57
-- Avg Holding Minutes: 6.2
-- Score: 12.2042
+- Total Return: 0.8905%
+- Total Profit: 44524.08
+- Win Rate: 50.0%
+- Max Drawdown: 1.4563%
+- Avg Trades/Day: 1.75
+- Profit Factor: 1.6458
+- Fee Total: 91217.93
+- Avg Holding Minutes: 107.75
+- Score: 11.1411
 
 ## Validation
-- Train/Test Split: 5:5
-- Robustness Score: 4.5377
-- Overfit Gap: 6.5619
-- Graph Stability Score: 1.0072
-- Graph Holdout Avg Return: 0.0%
-- Graph Negative Fold Ratio: 0.0
+- Train/Test Split: 4:4
+- Robustness Score: 13.2723
+- Overfit Gap: 0.3124
+- Graph Stability Score: 4.8973
+- Graph Holdout Avg Return: 0.4623%
+- Graph Negative Fold Ratio: 0.25
 
 ## Best Parameters
 - breakout_lookback: 20
-- breakout_stop_loss_pct: 0.8
-- breakout_take_profit_pct: 1.4
-- breakout_volume_ratio: 1.2
+- breakout_stop_loss_pct: 0.6
+- breakout_take_profit_pct: 1.0
+- breakout_volume_ratio: 2.2
 - budget_ratio: 1.0
 - buy_split_ratio: 1.0
-- buy_trigger_1_pct: -0.1
+- buy_trigger_1_pct: 0.0
 - buy_trigger_2_pct: -0.35
 - carry_max_loss_pct: 0.8
 - carry_min_close_strength_pct: -1.2
@@ -56,7 +56,7 @@
 - dominance_threshold: 0.45
 - force_cut_loss_pct: 8.0
 - jackpot_soft_exit_guard_ratio: 0.995
-- jackpot_take_profit_pct: 1.5
+- jackpot_take_profit_pct: 1.2
 - ma_fast: 5
 - ma_slow: 20
 - ma_trend: 60
@@ -76,7 +76,7 @@
 - rescue_take_profit_pct: 0.5
 - rsi_entry: 34
 - rsi_exit: 64
-- rsi_exit_overbought: 70
+- rsi_exit_overbought: 75
 - rsi_period: 14
 - rsi_reversion_min_trend_alignment_score: -0.1
 - sell_tax_bps: 18.0
@@ -94,8 +94,8 @@
 - vrev_min_trend_alignment_score: -0.18
 
 ## Top Candidates
-1. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
-2. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
-3. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
-4. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
-5. strategy=vrev selection=7.2815, score=12.2042, return=8.9651%, mdd=0.0%, robust=4.5377
+1. strategy=volume_breakout selection=10.6383, score=11.1411, return=0.8905%, mdd=1.4563%, robust=13.2723
+2. strategy=volume_breakout selection=10.6383, score=11.1411, return=0.8905%, mdd=1.4563%, robust=13.2723
+3. strategy=volume_breakout selection=10.6383, score=11.1411, return=0.8905%, mdd=1.4563%, robust=13.2723
+4. strategy=volume_breakout selection=9.3467, score=9.1855, return=-0.2725%, mdd=1.8142%, robust=12.175
+5. strategy=volume_breakout selection=9.3467, score=9.1855, return=-0.2725%, mdd=1.8142%, robust=12.175

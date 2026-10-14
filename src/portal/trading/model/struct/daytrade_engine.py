@@ -582,7 +582,14 @@ class DomesticDaytradeEngine:
         return self._round_krw_price(price)
 
     def _us_exchange(self, symbol):
-        """심볼 → KIS 거래소 코드. 기본값 NASD, NYSE 종목은 설정에서 관리."""
+        """Use discovered exchange metadata before legacy symbol defaults."""
+        normalized = str(symbol or "").strip().upper()
+        for item in self.strategy.us_candidate_universe() or []:
+            if str(item.get("symbol", "")).strip().upper() == normalized:
+                exchange = str(item.get("exchange", "")).upper()
+                exchange = {"NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX"}.get(exchange, exchange)
+                if exchange in ("NASD", "NYSE", "AMEX"):
+                    return exchange
         nyse_symbols = {"SPY", "GS", "JPM", "BAC", "WMT", "BRK", "XOM", "JNJ", "PG", "V", "MA"}
         sym = str(symbol or "").upper().split(".")[0]
         return "NYSE" if sym in nyse_symbols else "NASD"
@@ -629,23 +636,18 @@ class DomesticDaytradeEngine:
         return 400 <= hhmm < 930
 
     def _us_auto_buy_ready(self, now=None):
-        if _PAPER_CONTINUOUS:
-            return True
-        now = now or self._now()
-        hhmm = now.hour * 100 + now.minute
-        cutoff = 2220 if self._is_us_dst() else 2320
-        return 1000 <= hhmm <= cutoff
+        # Intraday orders are not LOC reservations. In particular, opening
+        # the regular session must not close the daytrade entry window.
+        return self._us_market_open() or self._us_premarket_open()
 
     def _us_auto_buy_window(self, now=None):
         now = now or self._now()
         ready = self._us_auto_buy_ready(now)
-        cutoff_label = "22:20" if self._is_us_dst() else "23:20"
-        window_label = f"10:00-{cutoff_label} KST"
         return {
             "ready": ready,
-            "scheduled_at": "10:00 KST",
-            "label": f"{window_label} 예약매수 가능",
-            "message": (f"{window_label} 원화 자동환전 예약매수 허용" if ready else f"{window_label} 전/후라 원화 자동환전 예약매수 대기 중"),
+            "scheduled_at": "미국 프리마켓·정규장",
+            "label": "미장 단타 주문 시간",
+            "message": ("단타 주문 시간 · 증권사 주문가능액 확인 필요" if ready else "미국 프리마켓·정규장 시작 대기"),
             "current_time": now.strftime("%H:%M KST"),
         }
 
@@ -724,6 +726,30 @@ class DomesticDaytradeEngine:
         })
         updated = 0
         errors = []
+        us_pending = [(key, state) for key, state in state_map.items()
+                      if self._is_us_market(state.get("market", "KS"))
+                      and (state.get("pending_buy_order_no") or state.get("pending_sell_order_no"))]
+        for key, snapshot in us_pending[:max_dates]:
+            for side, prefix in (("BUY", "pending_buy"), ("SELL", "pending_sell")):
+                original = snapshot.get(prefix + "_order_no")
+                if not original:
+                    continue
+                self._sync_us_pending_order(snapshot, snapshot.get("symbol", ""), side)
+                with self._global_lock("state_io"):
+                    current = self._load_state_map()
+                    state = current.get(key, {})
+                    if not self._same_order_no(state.get(prefix + "_order_no"), original):
+                        continue
+                    # Merge only evidence, never overwrite concurrently refreshed holdings.
+                    for field, value in snapshot.items():
+                        if field.startswith(prefix + "_"):
+                            state[field] = value
+                    for evidence in snapshot.get("orders", []):
+                        if self._same_order_no(evidence.get("order_no"), original):
+                            self._mark_state_order_fill(state, original, evidence)
+                    current[key] = state
+                    self._save_state_map(current)
+                    updated += 1
         # Oldest unresolved dates first so historical sells do not starve.
         cursor = int(getattr(sys, "_stock8_reconcile_date_cursor", 0)) % max(1, len(dates))
         selected_dates = (dates[cursor:] + dates[:cursor])[:max_dates]
@@ -775,12 +801,16 @@ class DomesticDaytradeEngine:
             order["status"] = str(fill.get("status", "FILLED") or "FILLED").upper()
             order["filled_qty"] = self._safe_int(fill.get("filled_qty", order.get("qty", 0)), 0)
             order["filled_price"] = self._safe_float(fill.get("filled_price", order.get("price", 0)), 0)
+            if fill.get("verification") == "kis":
+                order["verification"] = "kis"
             break
 
     def _sync_pending_buy(self, state, symbol, market):
         order_no = str(state.get("pending_buy_order_no", "") or "")
-        if not order_no or self._is_us_market(market):
+        if not order_no:
             return "none"
+        if self._is_us_market(market):
+            return self._sync_us_pending_order(state, symbol, "BUY")
         try:
             fills = self._domestic_fills_for_pending(symbol, state.get("pending_buy_placed_at", ""))
         except Exception:
@@ -802,6 +832,52 @@ class DomesticDaytradeEngine:
             state["pending_buy_price"] = 0
             state["pending_buy_placed_at"] = ""
             return status.lower()
+        return "open"
+
+    def _sync_us_pending_order(self, state, symbol, side):
+        """Broker cumulative evidence only; balance sync owns position quantity.
+
+        No inferred fills, automatic cancellation, or retries on an empty query.
+        Keeping the order pending prevents replacement orders during ambiguity.
+        """
+        prefix = "pending_buy" if side == "BUY" else "pending_sell"
+        order_no = str(state.get(prefix + "_order_no", "") or "")
+        if not order_no:
+            return "none"
+        try:
+            import datetime as dt
+            placed = str(state.get(prefix + "_placed_at", "") or "")[:10]
+            date = dt.date.fromisoformat(placed) if placed else self._now().date()
+            # Stored timestamps are KST; include the preceding US session date.
+            start = (date - dt.timedelta(days=1)).strftime("%Y%m%d")
+            end = self._now().strftime("%Y%m%d")
+            broker = self._broker()
+            with broker.request_options(timeout=5, retries=0):
+                fills = broker.get_overseas_order_history(start_date=start, end_date=end,
+                    symbol=symbol, exchanges=[self._us_exchange(symbol)], strict=True)
+            matched = next((row for row in fills if self._same_order_no(row.get("order_no"), order_no)
+                            and str(row.get("symbol", "")).upper() == str(symbol).upper()
+                            and str(row.get("side", "")).upper() == side), None)
+            if not matched:
+                return "open"
+            previous = next((row for row in state.get("orders", [])
+                             if self._same_order_no(row.get("order_no"), order_no)), {})
+            if self._safe_int(matched.get("filled_qty", 0), 0) < self._safe_int(previous.get("filled_qty", 0), 0):
+                return "open"  # Never regress a cumulative fill on a stale query.
+            self._mark_state_order_fill(state, order_no, matched)
+            previous["verification"] = "kis"
+            status = str(matched.get("status", "OPEN")).upper()
+            if status in ("FILLED", "CANCELLED"):
+                if side == "SELL":
+                    self._clear_pending_sell(state)
+                else:
+                    for suffix in ("order_no", "action", "placed_at"):
+                        state[prefix + "_" + suffix] = ""
+                    state[prefix + "_qty"] = 0
+                    state[prefix + "_price"] = 0
+                return status.lower()
+        except Exception:
+            return "open"
         return "open"
 
     def _open_sell_orders(self, symbol):
@@ -846,6 +922,8 @@ class DomesticDaytradeEngine:
         order_no = state.get("pending_sell_order_no", "")
         if not order_no:
             return "none"
+        if self._is_us_market(market):
+            return self._sync_us_pending_order(state, symbol, "SELL")
 
         # 체결 내역 조회
         try:
@@ -1452,13 +1530,16 @@ class DomesticDaytradeEngine:
             "timestamp": now.replace(second=0, microsecond=0),
         }
 
-    def infinite_buy_daily_reserve(self):
+    def infinite_buy_daily_reserve(self, use_cache_only=False):
+        import math
         reserve_items = []
         reserve_usd = 0.0
+        errors = []
         try:
             cycles = self.struct.engine.get_active_cycles()
-        except Exception:
-            cycles = []
+        except Exception as exc:
+            return {"reserve_usd": 0.0, "cycles": [], "cycle_count": 0,
+                    "ready": False, "errors": ["무한매수 사이클 조회 실패: " + str(exc)]}
         for cycle in cycles:
             status = str(cycle.get("status", ""))
             if status not in ["ACTIVE", "HOLDING"]:
@@ -1469,7 +1550,33 @@ class DomesticDaytradeEngine:
             remaining_rounds = max(division_count - current_round, 0)
             if remaining_rounds <= 0 or remaining_investment <= 0:
                 continue
-            next_buy_usd = remaining_investment / remaining_rounds
+            # Use the same order legs as the reservation scheduler, including
+            # additional dip orders. A per-round average under-reserves cash.
+            try:
+                reference = self._safe_float(cycle.get("avg_price", 0), 0)
+                if current_round <= 0 or self._safe_int(cycle.get("total_qty", 0), 0) <= 0 or reference <= 0:
+                    if use_cache_only:
+                        raise ValueError("첫 매수 기준 시세 확인 대기")
+                    broker = self._broker()
+                    with broker.request_options(timeout=3, retries=0):
+                        quote = broker.get_current_price(cycle.get("symbol", ""))
+                    reference = self._safe_float(quote.get("prev_close", 0), 0)
+                    if reference <= 0:
+                        raise ValueError("전일종가 확인 실패")
+                decision = self.struct.engine.calculate_buy_decision(cycle, reference)
+                legs = decision.get("buy_orders") or ([decision] if decision.get("should_buy") else [])
+                next_buy_usd = 0.0
+                for leg in legs:
+                    price = self._safe_float(leg.get("loc_price", 0), 0)
+                    qty = self._safe_int(leg.get("order_qty", 0), 0)
+                    if not math.isfinite(price) or price <= 0 or qty <= 0 or str(leg.get("order_type", "LOC")).upper() == "MARKET":
+                        raise ValueError("확정되지 않은 매수 주문 금액")
+                    next_buy_usd += price * qty
+                # Gross limits plus a conservative fee/rounding allowance.
+                next_buy_usd = round(next_buy_usd * 1.01, 2)
+            except Exception as exc:
+                errors.append(str(cycle.get("symbol", "")) + ": " + str(exc))
+                continue
             reserve_usd += next_buy_usd
             reserve_items.append({
                 "symbol": cycle.get("symbol", ""),
@@ -1482,6 +1589,8 @@ class DomesticDaytradeEngine:
             "reserve_usd": round(reserve_usd, 2),
             "cycles": reserve_items,
             "cycle_count": len(reserve_items),
+            "ready": not errors,
+            "errors": errors,
         }
 
     def _fetch_kis_balance_raw(self):
@@ -1732,6 +1841,10 @@ class DomesticDaytradeEngine:
             target_seed_krw = requested_seed if requested_seed > 0 else allocation_cap_krw
             ratio = (target_seed_krw / total_asset_krw) if total_asset_krw > 0 else 0.0
             reasons = ["수동 설정 시드"]
+        if _PAPER_MODE and requested_seed > 0:
+            target_seed_krw = min(target_seed_krw, requested_seed)
+            ratio = (target_seed_krw / total_asset_krw) if total_asset_krw > 0 else 0.0
+            reasons.append("모의 설정 시드 상한 적용")
         return {
             "enabled": enabled,
             "ratio": round(ratio, 4),
@@ -1749,7 +1862,7 @@ class DomesticDaytradeEngine:
         """
         import time as _t, sys as _sys
         market_key = "US" if self._is_us_market(market) else "KS"
-        reserve = self.infinite_buy_daily_reserve()
+        reserve = self.infinite_buy_daily_reserve(use_cache_only=use_cache_only)
         _CACHE_KEY = "_trading_kis_balance_cache_v2" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
         _CACHE_TS_KEY = "_trading_kis_balance_cache_ts" + ((":" + self.struct.live_data_scope) if not _PAPER_MODE else "")
         _CACHE_TTL = 120.0
@@ -1832,7 +1945,8 @@ class DomesticDaytradeEngine:
             if withdrawable_krw > 0:
                 us_krw_auto_exchange_krw = withdrawable_krw
         # 무한매수 예약금 차감 여부 콜록 (DB 콘피그)
-        ignore_reserve = str(self._config("daytrade_ignore_reserve", "false")).lower() == "true"
+        # Infinite-buy funding has priority; legacy bypass cannot spend it.
+        ignore_reserve = False
         reserved_krw = 0.0
         if ignore_reserve is False:
             reserved_krw = reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0
@@ -1850,6 +1964,9 @@ class DomesticDaytradeEngine:
             tradable_cash_krw = withdrawable_krw
         available_before_reserve = max(0.0, tradable_cash_krw)
         available_for_daytrade = max(0.0, available_before_reserve - reserved_krw)
+        reserve_ready = reserve.get("ready", True) and (reserve.get("reserve_usd", 0) <= 0 or usd_krw > 0)
+        if not reserve_ready:
+            available_for_daytrade = 0.0
         requested_seed = self._safe_float(requested_seed, 0)
         live_order_seed = available_for_daytrade
         portfolio = self.portfolio_usage(use_live_price=not use_cache_only, market_filter=market_key, sync_broker=not use_cache_only, budget_only=True)
@@ -1922,7 +2039,8 @@ class DomesticDaytradeEngine:
             "infinite_buy_daily_reserve_krw": round(reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0, 2),
             "reserve_ignored": ignore_reserve,
             "applied_reserve_krw": round(reserved_krw, 2),
-            "budget_status": "unavailable" if source == "cache_miss" else "ready",
+            "budget_status": "reserve_unavailable" if not reserve_ready else ("unavailable" if source == "cache_miss" else "ready"),
+            "reserve_errors": reserve.get("errors", []),
             "budget_updated_at": self._now().isoformat(),
             "available_for_daytrade": round(available_for_daytrade, 2),
             "actual_orderable_seed_krw": round(available_for_daytrade, 2),
@@ -2392,11 +2510,37 @@ class DomesticDaytradeEngine:
                 "action": "DISABLED",
                 "order_value": 0,
             }
+        lock = self._global_lock(f"order:{market}:{str(symbol).upper()}")
+        if not lock.acquire(blocking=False):
+            return {"executed": False, "submitted": False, "action": "ORDER_IN_FLIGHT",
+                    "order_value": 0, "message": "같은 종목 주문 검증·체결 확인이 진행 중입니다."}
+        try:
+            return self._execute_live_locked(symbol, market, seed, name, strategy_id, force,
+                allow_buy, sync_broker, forced_sell_qty, force_reason, current_price_override, precomputed_status)
+        finally:
+            lock.release()
+
+    def _execute_live_locked(self, symbol, market, seed, name, strategy_id, force,
+                             allow_buy, sync_broker, forced_sell_qty, force_reason,
+                             current_price_override, precomputed_status):
         strategy_id = self.strategy._normalize_strategy(strategy_id)
+        if isinstance(precomputed_status, dict):
+            previous = precomputed_status.get("state", {}) or {}
+            current = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
+            if (str((precomputed_status.get("signal", {}) or {}).get("action", "")).startswith("SELL")
+                    and self._safe_int(previous.get("position_qty", 0), 0) > 0
+                    and self._safe_int(current.get("position_qty", 0), 0) <= 0):
+                return {"executed": False, "submitted": False, "action": "STALE_SIGNAL",
+                        "order_value": 0, "message": "이미 청산된 포지션의 이전 매도 신호를 폐기했습니다."}
         status = precomputed_status if isinstance(precomputed_status, dict) else self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id, sync_broker=sync_broker, allow_buy=allow_buy, current_price_override=current_price_override)
         signal = status.get("signal", {}) or {}
         state = status.get("state", {}) or {}
         runtime = status.get("runtime", {}) or {}
+        latest_state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
+        if any(row.get("pending_buy_order_no") or row.get("pending_sell_order_no") for row in (state, latest_state)):
+            return {"executed": False, "submitted": False, "action": "PENDING_ORDER",
+                    "order_value": 0, "status": status,
+                    "message": "기존 주문의 체결·취소 확정 대기 중입니다. 추가 주문은 전송하지 않습니다."}
         action = str(signal.get("action", "HOLD") or "HOLD")
         qty = max(0, self._safe_int(signal.get("order_qty", 0), 0))
         current_price = self._safe_float(signal.get("current_price", 0), 0)
@@ -2605,8 +2749,8 @@ class DomesticDaytradeEngine:
                     auto_exchange_usd = self._safe_float(buying_power.get("auto_exchange_usd", 0), 0)
                     auto_exchange_ready = bool(buying_power.get("auto_exchange_ready", False))
                     requested_amount_usd = round(current_price * qty, 2)
-                    planning_amount_usd = max(orderable_amount_usd, estimated_amount_usd)
-                    planning_qty = max(max_qty, estimated_qty)
+                    planning_amount_usd = orderable_amount_usd
+                    planning_qty = max_qty
                     if planning_qty <= 0 or planning_amount_usd <= 0 or (requested_amount_usd > 0 and planning_amount_usd + 1e-9 < requested_amount_usd):
                         message = (
                             f"{symbol} 해외 주문가능금액 부족. "
@@ -5161,12 +5305,9 @@ class DomesticDaytradeEngine:
                     self._safe_float(item.get("entry_seed_krw", 0), 0),
                     min_required_seed,
                 )
-                if self._is_us_market(market):
-                    allocation_seed = max(allocation_seed, min_required_seed)
-                else:
-                    if slot_seed_limit_krw > 0:
-                        allocation_seed = min(allocation_seed, slot_seed_limit_krw)
-                    allocation_seed = min(remaining_seed_krw, allocation_seed)
+                if slot_seed_limit_krw > 0:
+                    allocation_seed = min(allocation_seed, slot_seed_limit_krw)
+                allocation_seed = min(remaining_seed_krw, allocation_seed)
             else:
                 current_price = max(
                     self._safe_float(item.get("last_price", 0), 0),
@@ -5176,7 +5317,8 @@ class DomesticDaytradeEngine:
                 current_position_value = self._safe_float(item.get("position_value_krw", 0), 0)
                 target_position_seed = slot_seed_limit_krw if slot_seed_limit_krw > 0 else remaining_seed_krw
                 addable_seed = max(0.0, target_position_seed - current_position_value)
-                allocation_seed = max(current_price, min(remaining_seed_krw, addable_seed)) if addable_seed > 0 else 0.0
+                # Prices are USD; the allocation and position value are KRW.
+                allocation_seed = min(remaining_seed_krw, addable_seed) if addable_seed > 0 else 0.0
                 if allocation_seed <= 0:
                     results.append({
                         "symbol": symbol,
@@ -5202,12 +5344,14 @@ class DomesticDaytradeEngine:
                 runtime_payload = outcome.get("status", {}).get("runtime", {}) or {}
                 if outcome.get("executed"):
                     executed_count += 1
-                    if action.startswith("BUY"):
+                if (outcome.get("executed") or outcome.get("submitted")) and action.startswith("BUY"):
+                    # Reserve the entire KRW allocation until broker reconciliation.
+                    # order_value is USD and partial/pending fills still consume cash.
+                    if is_new_entry:
                         tracked_position_count += 1
-                        remaining_seed_krw = max(0.0, remaining_seed_krw - max(order_value, 0))
-                    elif action.startswith("SELL"):
-                        tracked_position_count = max(0, tracked_position_count - 1)
-                        remaining_seed_krw = min(effective_seed, remaining_seed_krw + max(order_value, 0))
+                    remaining_seed_krw = max(0.0, remaining_seed_krw - allocation_seed)
+                # A sell acceptance/partial fill is not a freed slot or spendable
+                # cash. The next broker-reconciled budget decides both.
                 results.append({
                     "symbol": symbol,
                     "market": market,
@@ -5216,6 +5360,7 @@ class DomesticDaytradeEngine:
                     "source": item.get("source", "leaderboard"),
                     "score": item.get("score", 0),
                     "executed": bool(outcome.get("executed", False)),
+                    "submitted": bool(outcome.get("submitted", False)),
                     "message": outcome.get("message", ""),
                     "signal": outcome.get("status", {}).get("signal", {}).get("action", "HOLD"),
                     "risk_status": outcome.get("status", {}).get("runtime", {}).get("risk_status", "SAFE"),
@@ -5877,7 +6022,7 @@ class DomesticDaytradeEngine:
         if sync_broker:
             self._sync_broker_positions()
         state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
-        if not self._is_us_market(market) and state.get("pending_buy_order_no"):
+        if state.get("pending_buy_order_no"):
             self._sync_pending_buy(state, symbol, market)
             self._store_state(state)
         override_price = max(0.0, self._safe_float(current_price_override, 0))

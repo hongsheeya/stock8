@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ['TRADING_MODE'] = 'LIVE'
@@ -44,9 +45,13 @@ class ReadOnlyKis(kis.KisApi):
         return super()._request(method, path, *args, **kwargs)
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--start', required=True)
+    parser.add_argument('--end', required=True)
+    args = parser.parse_args()
     api = ReadOnlyKis(Config())
     with api.request_options(timeout=8, retries=0):
-        rows = api.get_overseas_reservation_orders(start_date='20261002', end_date='20261005')
+        rows = api.get_overseas_reservation_orders(start_date=args.start, end_date=args.end)
     fields = ('symbol', 'side', 'order_type', 'qty', 'price', 'filled_qty',
               'receipt_date', 'status_code', 'status_name', 'cancel_yn', 'reject_reason')
     print(json.dumps({'total_rows': len(rows), 'soxl': [

@@ -12,6 +12,20 @@ spec.loader.exec_module(bridge)
 
 
 class FireGateBridgeTests(unittest.TestCase):
+    def test_manual_match_is_flagged_without_deleting(self):
+        manual = {'date':'2026. 10. 12', 'type':'buy', 'size':5, 'price':136.5}
+        automatic = dict(manual, source='infinitystock')
+        self.assertEqual(bridge.matching_manual_transactions([manual, automatic], automatic), [manual])
+        self.assertEqual(bridge.matching_manual_transactions([manual], dict(automatic, size=4)), [])
+
+    def test_alphabetic_transaction_identity_does_not_become_zero(self):
+        from unittest.mock import Mock
+        remote = bridge.FireGateBridge('test', 'test')
+        remote._request = Mock(return_value={})
+        remote.create_transaction({'type':'buy'}, doc_id='localtradeabc')
+        body = remote._request.call_args.kwargs['body']
+        self.assertEqual(bridge.decode_firestore_document(body)['id'], 'localtradeabc')
+
     def test_archived_duplicate_is_not_pulled_or_found(self):
         from unittest.mock import Mock
         active = {'id': 'original', 'ticker': 'SOXL', 'source': 'infinitystock',

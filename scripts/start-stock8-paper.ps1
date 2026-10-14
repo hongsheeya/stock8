@@ -1,7 +1,8 @@
 param(
     [string]$RuntimeRoot = "C:\stock8-runtime2\app",
     [int]$Port = 3002,
-    [int]$RestartDelaySeconds = 10
+    [int]$RestartDelaySeconds = 10,
+    [switch]$RebuildBeforeStart
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,7 +70,9 @@ while ($true) {
         continue
     }
 
-    if ((Test-Path -LiteralPath $frontendBuilder) -and (Test-ProjectRebuildRequired)) {
+    # LIVE and PAPER share bundle files. Restarting PAPER must not silently
+    # deploy unrelated source changes to both environments.
+    if ($RebuildBeforeStart -and (Test-Path -LiteralPath $frontendBuilder) -and (Test-ProjectRebuildRequired)) {
         Write-SupervisorLog "Project source is newer than runtime bundle; rebuilding frontend and backend before server start."
         try {
             & $frontendBuilder -RuntimeRoot $RuntimeRoot | ForEach-Object { Write-SupervisorLog $_ }

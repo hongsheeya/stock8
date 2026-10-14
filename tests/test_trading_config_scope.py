@@ -5,6 +5,7 @@ import sys
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -339,6 +340,7 @@ class TradingConfigScopeTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertIn("scheduled_count=1", result["reason"])
 
+    @patch.object(trading_struct, 'PAPER_MODE', False)
     def test_recent_reservation_rebuild_cooldown_blocks_immediate_rebuild_loop(self):
         class _Engine:
             def __init__(self):
@@ -408,9 +410,11 @@ class TradingConfigScopeTests(unittest.TestCase):
 
         self.assertEqual(engine.buy_schedule_calls, 1)
         self.assertEqual(engine.sell_schedule_calls, 1)
-        self.assertEqual(engine.rebuild_calls, [["TQQQ"]])
-        self.assertTrue(retried["rebuild"]["executed"])
+        self.assertEqual(engine.rebuild_calls, [])
+        self.assertFalse(retried["rebuild"]["executed"])
+        self.assertEqual(retried['rebuild']['status'], 'partial_plan_preserved')
 
+    @patch.object(trading_struct, 'PAPER_MODE', False)
     def test_newly_submitted_clean_reservations_keep_cooldown_for_broker_echo(self):
         class _Engine:
             def __init__(self):
@@ -470,7 +474,8 @@ class TradingConfigScopeTests(unittest.TestCase):
         self.assertEqual(second["status"], "cooldown_wait")
         self.assertFalse(second["buy"]["scheduled"])
 
-    def test_force_rebuild_bypasses_new_order_cooldown_in_same_run(self):
+    @patch.object(trading_struct, 'PAPER_MODE', False)
+    def test_missing_line_flag_never_authorizes_automatic_cancel_rebuild(self):
         class _Engine:
             def __init__(self):
                 self.rebuild_calls = []
@@ -526,8 +531,13 @@ class TradingConfigScopeTests(unittest.TestCase):
 
         result = self.struct.run_due_loc_automation(verify=True, reason="10min_reservation_verify")
 
-        self.assertTrue(result["rebuild"]["executed"])
-        self.assertEqual(engine.rebuild_calls, [["SOXL", "TQQQ"]])
+        self.assertFalse(result["rebuild"]["executed"])
+        self.assertEqual(engine.rebuild_calls, [])
+        self.assertEqual(result['rebuild']['status'], 'partial_plan_preserved')
+        for _ in range(20):
+            self.struct.set_config('loc_reservation_rebuild_cooldown_until_ts', '0')
+            self.struct.run_due_loc_automation(verify=True, reason='repeated_verify')
+        self.assertEqual(engine.rebuild_calls, [])
 
 
 if __name__ == "__main__":

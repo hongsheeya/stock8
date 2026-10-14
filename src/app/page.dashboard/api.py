@@ -2551,7 +2551,8 @@ def _profit_store(trading):
 
 def _fast_profit_summary(trading, period, date_from='', date_to='', force_refresh=False):
     store, scope = _profit_store(trading)
-    name = json.dumps([period, date_from, date_to])
+    # Version rendered views separately; keep expensive broker partitions.
+    name = json.dumps(['broker-realized-v2', period, date_from, date_to])
     entry = store.read('view:' + name)
     age = time.time() - entry['at'] if entry else None
     needs_refresh = force_refresh or entry is None or age >= 30
@@ -2783,13 +2784,9 @@ def _profit_summary_data(period, date_from="", date_to="", force_refresh=False):
                 include_valuation=api_connected and filter_to == today_str,
             ) or {}
         daytrade_realized_profit = float(daytrade_summary.get("pnl_net", 0) or 0)
-        if filter_from == today_str and filter_to == today_str:
-            state_realized_profit = _daytrade_state_realized_total(trading, session_date=today_str)
-            daytrade_realized_profit = state_realized_profit
-        elif period == "ALL" and date_from == "" and date_to == "":
-            state_realized_profit = _daytrade_state_realized_total(trading)
-            if abs(state_realized_profit) > 0:
-                daytrade_realized_profit = state_realized_profit
+        # The period ledger includes broker/manual fills. Engine session state
+        # covers only its own activity and must never replace that ledger,
+        # including when the session has no trades (zero is not reconciliation).
         if daytrade_summary.get("valuation_available", False):
             daytrade_unrealized_profit = float(daytrade_summary.get("remaining_unrealized_pnl", 0) or 0)
         daytrade_trade_count = int(daytrade_summary.get("trade_count", 0) or 0)

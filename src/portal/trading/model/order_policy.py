@@ -88,12 +88,41 @@ class Policy:
         except ValueError:
             state = {'infinite_buy': False, 'daytrade': False, 'daytrade_ks': False, 'daytrade_us': False, 'symbols': {}}
             configured = False
+        if not self.live and configured and hasattr(self.struct, 'get_config'):
+            # PAPER workers use account-scoped engine flags, not LIVE consent.
+            # Report those flags without migrating or enabling anything.
+            state = dict(state)
+            state['infinite_buy'] = str(self.struct.get_config('auto_trade_enabled', 'false')).lower() == 'true'
+            state['daytrade_ks'] = self.struct.daytrade_engine.auto_enabled(market='KS')
+            state['daytrade_us'] = self.struct.daytrade_engine.auto_enabled(market='US')
+            state['daytrade'] = state['daytrade_ks'] or state['daytrade_us']
         registry = getattr(sys, '_stock8_live_policy_workers', {})
         jobs = registry.get('jobs', {})
         worker_status = {}
         if configured:
             worker_status = {job: {k: v for k, v in item.items() if k != 'thread'}
                              for (key, job), item in list(jobs.items()) if key == self._key()}
+        if not self.live and configured and hasattr(self.struct, '_worker_state'):
+            paper = self.struct._worker_state()
+            snapshot = paper.get('last_result', {}) or {}
+            results = snapshot.get('result', {}) or {}
+            for job, result_key, lane in (
+                    ('loc', 'loc_automation', 'infinite_buy'),
+                    ('entry_ks', 'auto_cycle', 'daytrade_ks'),
+                    ('exit_ks', 'exit_watch', 'daytrade_ks'),
+                    ('entry_us', 'us_auto_cycle', 'daytrade_us'),
+                    ('exit_us', 'us_exit_watch', 'daytrade_us')):
+                result = results.get(result_key, {}) or {}
+                worker_status[job] = {
+                    'status': ('off' if not state.get(lane) else
+                               'unsupported' if result.get('status') == 'unsupported' else
+                               'error' if result.get('status') == 'error' else
+                               'checking' if result.get('running') else
+                               'waiting' if snapshot else 'starting'),
+                    'message': result.get('message', ''),
+                    'last_check': snapshot.get('last_run_at', ''),
+                    'error': result.get('message', '') if result.get('status') == 'error' else '',
+                }
         allowed = self.daytrade_allowed()
         if not allowed:
             state = {**state, 'daytrade': False, 'daytrade_ks': False, 'daytrade_us': False}

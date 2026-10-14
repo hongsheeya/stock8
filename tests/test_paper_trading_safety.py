@@ -3,6 +3,7 @@ import datetime
 import importlib.util
 import pathlib
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
 
@@ -91,6 +92,17 @@ class PaperTradingSafetyTests(unittest.TestCase):
                 "GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
                 url=f"{self.module.REAL_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
             )
+
+    def test_unsupported_paper_reservations_and_loc_fail_before_network(self):
+        with self.assertRaises(NotImplementedError):
+            self.api._assert_safe_request('GET', '/uapi/overseas-stock/v1/trading/order-resv-list', 'VTTT3039R')
+        with self.assertRaises(NotImplementedError):
+            self.api._assert_safe_request('POST', '/uapi/overseas-stock/v1/trading/order', 'VTTT1002U',
+                                          body={'ORD_QTY': '1', 'ORD_DVSN': '34'})
+        self.api._assert_safe_request('POST', '/uapi/overseas-stock/v1/trading/order', 'VTTT1002U',
+                                      body={'ORD_QTY': '1', 'ORD_DVSN': '00'})
+        with patch.object(self.api, 'get_overseas_reservation_orders', side_effect=AssertionError('unsupported call')):
+            self.assertEqual(self.api._overseas_reservation_history_rows('20261013', '20261013', ['NASD']), [])
 
     def test_live_order_tr_id_is_blocked_in_paper(self):
         with self.assertRaises(RuntimeError):
@@ -208,7 +220,7 @@ class PaperTradingSafetyTests(unittest.TestCase):
         spec.loader.exec_module(other)
         self.assertIs(other._GATEWAY_STATE, self.module._GATEWAY_STATE)
         self.assertIs(other.KisApi._token_issue_lock, self.module.KisApi._token_issue_lock)
-        with patch.dict(self.module._GATEWAY_STATE, {"last": 99.8, "blocked_until": 0}), patch.object(other.time, "monotonic", return_value=100), patch.object(other.time, "sleep") as sleep:
+        with patch.object(other, '_shared_paper_gateway', return_value=nullcontext({"last": 99.8, "blocked_until": 0})), patch.object(other.time, "time", return_value=100), patch.object(other.time, "monotonic", return_value=100), patch.object(other.time, "sleep") as sleep:
             other.KisApi(_StructStub())._rate_limit_wait()
             self.assertAlmostEqual(sleep.call_args.args[0], 0.9)
 

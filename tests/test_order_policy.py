@@ -32,6 +32,18 @@ class PolicyTests(unittest.TestCase):
     def on(self, lane='infinite_buy'):
         self.policy.update(lane=lane, enabled=True, confirmation=policy.WARNING_VERSION)
 
+    def test_paper_status_reports_worker_flags_without_writing_consent(self):
+        self.policy.live = False
+        self.struct.get_config = lambda key, default: 'true' if key == 'auto_trade_enabled' else default
+        self.struct.daytrade_engine = SimpleNamespace(auto_enabled=lambda market: market == 'US')
+        before = dict(self.db.rows)
+        status = self.policy.status()
+        self.assertTrue(status['infinite_buy'])
+        self.assertFalse(status['daytrade_ks'])
+        self.assertTrue(status['daytrade_us'])
+        self.assertEqual(status['mode'], 'PAPER')
+        self.assertEqual(self.db.rows, before)
+
     def unlock(self, symbol='TQQQ'):
         self.policy.update(symbol=symbol, locked=False, confirmation=policy.WARNING_VERSION)
 

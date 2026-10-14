@@ -12,6 +12,7 @@ import os
 import time
 import threading
 import sys
+import tempfile
 from contextlib import contextmanager
 
 _TIME = wiz.model("portal/trading/kst")
@@ -48,6 +49,57 @@ _GATEWAY_STATE = sys.__dict__.setdefault("_stock8_kis_gateway_v1", {
     "lock": threading.RLock(), "last": 0.0, "blocked_until": 0.0,
     "token_lock": threading.RLock(), "cache_lock": threading.RLock(), "cache": {},
 })
+
+
+@contextmanager
+def _shared_paper_gateway(scope, deadline=None):
+    """One OS lock per host/app key, shared by server and audit processes.
+
+    Only a digest and timing metadata touch disk; never credentials or replies.
+    Lock/storage failures fail closed rather than bypassing request throttling.
+    """
+    deadline = deadline if deadline is not None else time.monotonic() + 45
+    directory = os.path.join(tempfile.gettempdir(), 'stock8-kis-rate-v1')
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, hashlib.sha256(scope.encode()).hexdigest() + '.lock')
+    with open(path, 'a+b') as handle:
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write(b' ')
+            handle.flush()
+        acquired = False
+        try:
+            while not acquired:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError('KIS 프로세스 간 호출 대기 한도 초과')
+                handle.seek(0)
+                try:
+                    if os.name == 'nt':
+                        import msvcrt
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except (OSError, BlockingIOError):
+                    time.sleep(0.025)
+            handle.seek(1)
+            raw = handle.read()
+            state = json.loads(raw.decode()) if raw.strip() else {'last': 0, 'blocked_until': 0}
+            yield state
+            handle.seek(1)
+            handle.truncate()
+            handle.write(json.dumps(state).encode())
+            handle.flush()
+        finally:
+            if acquired:
+                handle.seek(0)
+                if os.name == 'nt':
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class KisApi:
@@ -414,6 +466,11 @@ class KisApi:
         if PAPER_MODE:
             if url.startswith(MOCK_BASE_URL) is False or REAL_BASE_URL in url:
                 raise RuntimeError("PAPER safety guard blocked a non-mock KIS endpoint")
+            if '/overseas-stock/' in path and '/order-resv' in path:
+                raise NotImplementedError('KIS 모의투자는 해외 예약주문 API를 지원하지 않습니다. 실전 예약 검증과 구분해야 합니다.')
+            if method == 'POST' and path == '/uapi/overseas-stock/v1/trading/order':
+                if str((body or {}).get('ORD_DVSN', '00')) != '00':
+                    raise NotImplementedError('KIS 해외 모의주문은 지정가만 지원합니다. LOC를 일반 지정가로 자동 변경하지 않습니다.')
             if method == "POST" and "/trading/" in path and not tr_id.startswith("V"):
                 raise RuntimeError(f"PAPER safety guard blocked live order TR ID: {tr_id}")
         else:
@@ -459,6 +516,18 @@ class KisApi:
     def _rate_limit_wait(self):
         """API 호출 간 최소 간격 보장 (초당 호출 수 제한)"""
         deadline = getattr(_REQUEST_OPTIONS, 'deadline', None)
+        if PAPER_MODE and getattr(self, 'app_key', ''):
+            deadline = deadline if deadline is not None else time.monotonic() + 45
+            scope = str(self.base_url) + ':' + str(self.app_key)
+            with _shared_paper_gateway(scope, deadline) as state:
+                wait = max(float(state['last']) + max(1.10, self._min_request_interval),
+                           float(state['blocked_until'])) - time.time()
+                if deadline is not None and wait >= deadline - time.monotonic():
+                    raise TimeoutError('KIS 공유 호출 제한 대기: 조회 미완료')
+                if wait > 0:
+                    time.sleep(wait)
+                state['last'] = time.time()
+            return
         if deadline is not None:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not _GATEWAY_STATE['lock'].acquire(timeout=max(0, remaining)):
@@ -488,6 +557,11 @@ class KisApi:
     def _apply_rate_limit_cooldown(self, attempt=0):
         """Share KIS back-pressure across all API instances and worker threads."""
         cooldown = min(5.0, 1.25 * (2 ** max(0, int(attempt))))
+        if PAPER_MODE and getattr(self, 'app_key', ''):
+            scope = str(self.base_url) + ':' + str(self.app_key)
+            with _shared_paper_gateway(scope, time.monotonic() + 10) as state:
+                state['blocked_until'] = max(float(state['blocked_until']), time.time() + cooldown)
+            return cooldown
         with _GATEWAY_STATE["lock"]:
             _GATEWAY_STATE["blocked_until"] = max(
                 float(_GATEWAY_STATE["blocked_until"]),
@@ -2317,6 +2391,10 @@ class KisApi:
         ])
 
     def _overseas_reservation_history_rows(self, start_date, end_date, exchanges):
+        # No reservation-origin fills exist in the unsupported PAPER API.
+        # Do not spend the shared gateway budget on a guaranteed OPSQ0002.
+        if not self.is_real:
+            return []
         try:
             reservations = self.get_overseas_reservation_orders(start_date=start_date, end_date=end_date, exchanges=exchanges) or []
         except Exception as e:
@@ -2836,6 +2914,36 @@ class KisApi:
     # =========================================================================
     # 국내주식 주문 취소
     # =========================================================================
+
+    def cancel_overseas_order(self, order_no, symbol, qty, exchange="NASD"):
+        """Cancel only the explicitly identified regular overseas order.
+
+        Acceptance is not cancellation confirmation; reconcile order history.
+        No automatic retry after an ambiguous broker response.
+        """
+        if not str(order_no or '').strip() or not str(symbol or '').strip():
+            raise ValueError('취소할 원주문번호와 종목이 필요합니다.')
+        if isinstance(qty, bool) or float(qty) != int(qty) or int(qty) <= 0:
+            raise ValueError('취소수량은 양의 정수여야 합니다.')
+        if exchange not in ('NASD', 'NYSE', 'AMEX'):
+            raise ValueError('원주문의 미국 거래소를 확인하세요.')
+        if not self.account_prefix or not self.account_suffix:
+            raise ValueError('취소 계좌를 확인하세요.')
+        body = {
+            'CANO': self.account_prefix, 'ACNT_PRDT_CD': self.account_suffix,
+            'OVRS_EXCG_CD': exchange, 'PDNO': str(symbol).upper(),
+            'ORGN_ODNO': str(order_no), 'RVSE_CNCL_DVSN_CD': '02',
+            'ORD_QTY': str(int(qty)), 'OVRS_ORD_UNPR': '0',
+            'MGCO_APTM_ODNO': '', 'ORD_SVR_DVSN_CD': '0',
+        }
+        data = self._request('POST', '/uapi/overseas-stock/v1/trading/order-rvsecncl',
+                             'TTTT1004U' if self.is_real else 'VTTT1004U', body=body, retries=0)
+        if not data or data.get('rt_cd') != '0':
+            raise RuntimeError('해외 주문 취소 실패: ' + str((data or {}).get('msg1', 'No response')))
+        output = data.get('output', {}) or {}
+        return {'cancel_order_no': output.get('ODNO', output.get('odno', '')),
+                'original_order_no': str(order_no), 'symbol': str(symbol).upper(),
+                'submitted': True, 'confirmed': False}
 
     def cancel_domestic_order(self, order_no, symbol, qty, org_branch_no="", exchange=None, ord_dvsn=None):
         """

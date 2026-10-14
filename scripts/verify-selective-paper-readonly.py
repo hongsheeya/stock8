@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--account-last4', help='Confirmed PAPER account last four digits, excluding product code')
     parser.add_argument('--refresh-auth', action='store_true', help='Allow PAPER OAuth only; keep refreshed token in memory, never change trading settings')
+    parser.add_argument('--us', action='store_true', help='Also verify overseas balance and complete order history')
     args = parser.parse_args()
     if args.account_last4 and (len(args.account_last4) != 4 or not args.account_last4.isdigit()):
         parser.error('account-last4 must contain exactly four digits')
@@ -63,24 +64,33 @@ def main():
             def _request(self,method,path,*args,**kwargs):
                 if self.is_real is not False or self.base_url != 'https://openapivts.koreainvestment.com:29443':
                     raise RuntimeError('PAPER host binding failed')
-                if method!='GET' or path not in ('/uapi/domestic-stock/v1/trading/inquire-balance','/uapi/domestic-stock/v1/trading/inquire-daily-ccld'):
+                if method!='GET' or path not in ('/uapi/domestic-stock/v1/trading/inquire-balance','/uapi/domestic-stock/v1/trading/inquire-daily-ccld', '/uapi/overseas-stock/v1/trading/inquire-balance', '/uapi/overseas-stock/v1/trading/inquire-ccnl', '/uapi/overseas-stock/v1/trading/order-resv-list'):
+                    report.setdefault('denied_paths', []).append(path)
                     raise RuntimeError('Request denied')
-                return super()._request(method,path,*args,**kwargs)
+                result = super()._request(method,path,*args,**kwargs)
+                if result and result.get('rt_cd') not in (None, '0'):
+                    report.setdefault('broker_errors', []).append({'path': path, 'code': result.get('msg_cd'), 'message': str(result.get('msg1', ''))[:160]})
+                return result
         api=PaperReadOnly(Config())
         report['paper_host_verified']=api.is_real is False and api.base_url==module.MOCK_BASE_URL
         report['credentials_present']=bool(api.app_key and api.app_secret and api.account_no)
         report['cached_auth_valid']=api.has_valid_cached_token()
-        with api.request_options(timeout=8,retries=0):
-            for method in ('get_domestic_balance','get_domestic_fills_today'):
+        methods = ['get_domestic_balance','get_domestic_fills_today']
+        if args.us:
+            methods.extend(['get_balance', 'get_overseas_order_history'])
+        for method in methods:
+            # Overseas history spans three exchanges and continuation pages.
+            # This is a total deadline, not a per-request socket timeout.
+            with api.request_options(timeout=45 if method == 'get_overseas_order_history' else 15,retries=0):
                 try:
-                    result=getattr(api,method)()
+                    result=getattr(api,method)(strict=True) if method == 'get_overseas_order_history' else getattr(api,method)()
                     count=len(result) if isinstance(result,list) else len(result.get('holdings',[]))
                     report['checks'].append(dict(method=method,ok=True,rows=count))
                 except Exception as exc:
                     message = str(exc)
                     reason = ('cached_auth_unavailable' if 'cached token missing/expired' in message else
                               'oauth_rejected' if 'OAuth' in message else
-                              'timeout' if 'timeout' in message.lower() else 'request_failed')
+                              'timeout' if isinstance(exc, TimeoutError) or 'timeout' in message.lower() else 'request_failed')
                     report['checks'].append(dict(method=method,ok=False,error_type=type(exc).__name__,reason=reason))
     target=ROOT/'data/reconciliation-audits/selective-paper-readonly-latest.json'
     target.parent.mkdir(parents=True,exist_ok=True)
