@@ -9,6 +9,7 @@ import math
 import time
 import os
 import json
+import hashlib
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -748,6 +749,7 @@ class Engine:
         total_qty = 0
         total_commission = 0.0
         buy_round = 0
+        round_days = set()
         had_sell = False
         applied_rows = 0
         audit_only_rows = 0
@@ -792,7 +794,15 @@ class Engine:
             avg_before = total_spent / total_qty if total_qty > 0 else 0.0
             if action == ACTION_BUY:
                 applied_rows += 1
-                buy_round += 1
+                # One round per trading day of regular buys (see execute_buy);
+                # crash buys never consume a round. Rows without a date keep
+                # the old one-row-one-round behaviour.
+                if self._counts_toward_round(row):
+                    trade_day = str((row or {}).get("trade_date", "") or "")[:10]
+                    if not trade_day or trade_day not in round_days:
+                        buy_round += 1
+                    if trade_day:
+                        round_days.add(trade_day)
                 total_qty += qty
                 total_spent += amount + commission
                 total_commission += commission
@@ -1082,7 +1092,10 @@ class Engine:
         remaining_turns = division_count - self._firegate_v4_t_value(cycle)
         if remaining_turns <= 0:
             return 0.0
-        return self._firegate_v4_remaining_seed(cycle) / remaining_turns
+        # T is fractional (FireGate). Buying stops only at floor(T) >= splits, so
+        # at T=19.5 the raw division asked for 2x the remaining seed. One turn can
+        # never exceed what is left.
+        return self._firegate_v4_remaining_seed(cycle) / max(remaining_turns, 1.0)
 
     def _firegate_v4_star_percent(self, symbol, division_count, t_value):
         symbol = str(symbol or "").upper()
@@ -1387,7 +1400,6 @@ class Engine:
         total_spent = float(cycle["total_spent"])
         total_qty = int(cycle["total_qty"])
         target_profit = float(cycle["target_profit"])
-        total_commission = float(cycle.get("total_commission", 0))
 
         if total_qty <= 0 or total_spent <= 0:
             return {
@@ -1405,8 +1417,10 @@ class Engine:
         rates = self._get_commission_rates()
         sell_commission = self._calc_sell_commission(current_eval, rates)
 
-        # 순수익 = 매도금액 - 총투입 - 누적매수수수료 - 매도수수료
-        net_profit = current_eval - total_spent - total_commission - sell_commission
+        # 순수익 = 매도금액 - 총투입 - 매도수수료.
+        # total_spent는 매수 수수료를 이미 포함한 원가(execute_buy, _recalculate_cycle_from_trades)라
+        # total_commission을 다시 빼면 매수 수수료가 두 번 차감된다.
+        net_profit = current_eval - total_spent - sell_commission
         profit_rate = (net_profit / total_spent) * 100
 
         params = self._get_strategy_params()
@@ -1461,6 +1475,26 @@ class Engine:
     # 거래 실행 (매수)
     # =========================================================================
 
+    @staticmethod
+    def _counts_toward_round(row):
+        """A filled, non-crash BUY row consumes (at most) the round of its trade date."""
+        row = row or {}
+        if str(row.get("action", "") or "").upper() != ACTION_BUY:
+            return False
+        status = str(row.get("status", "") or "").upper()
+        if status and status != ORDER_FILLED:
+            return False
+        return str(row.get("strategy_type", "") or "").upper() != STRATEGY_CRASH_BUY
+
+    def _cycle_has_round_buy_on(self, trade_db, cycle_id, trade_date):
+        if not str(trade_date or "").strip():
+            return False
+        try:
+            rows = trade_db.rows(cycle_id=cycle_id, trade_date=trade_date, dump=500) or []
+        except Exception:
+            raise RuntimeError("매수 거래일 확인 실패: 회차 변경을 중단합니다")
+        return any(self._counts_toward_round(row) and not self._is_synthetic_external_trade(row) for row in rows)
+
     def execute_buy(self, cycle_id, filled_price, filled_qty, order_type="LOC", order_price=0, trade_date="", broker_order_no="", source="", memo=""):
         """
         매수 체결 처리 (DB 업데이트)
@@ -1483,7 +1517,10 @@ class Engine:
         rates = self._get_commission_rates()
         commission = self._calc_buy_commission(filled_amount, rates)
 
-        current_round = int(cycle["current_round"]) + 1
+        # One 회차 is one trading day of buys. A day's LOC lines (평단, ★, extra
+        # ladder) fill as separate broker orders; counting each one as a round
+        # pushed cycles into PENDING_EXTENSION long before the splits were used.
+        current_round = int(cycle["current_round"]) + (0 if self._cycle_has_round_buy_on(trade_db, cycle_id, trade_date) else 1)
         # 실비용 = 체결금액 + 수수료
         total_spent = float(cycle["total_spent"]) + filled_amount + commission
         total_qty = int(cycle["total_qty"]) + filled_qty
@@ -1914,13 +1951,12 @@ class Engine:
 
         total_qty = int(cycle["total_qty"])
         total_spent = float(cycle["total_spent"])
-        total_commission = float(cycle.get("total_commission", 0))
         current_eval = total_qty * current_price
 
-        # 예상 매도 수수료 반영한 순수익률
+        # 예상 매도 수수료 반영한 순수익률 (total_spent에 매수 수수료가 이미 포함됨)
         rates = self._get_commission_rates()
         est_sell_commission = self._calc_sell_commission(current_eval, rates)
-        net_profit = current_eval - total_spent - total_commission - est_sell_commission
+        net_profit = current_eval - total_spent - est_sell_commission
         profit_rate = (net_profit / total_spent * 100) if total_spent > 0 else 0
 
         cycle_db.update({
@@ -1934,6 +1970,83 @@ class Engine:
     # 일일 매매 판단 실행 (종목별)
     # =========================================================================
 
+    DAILY_ORDER_EVENT = "IB_DAILY_ORDER_SUBMITTED"
+    DAILY_ORDER_INTENT = "IB_DAILY_ORDER_INTENT"
+
+    def _claim_daily_order(self, symbol, cycle_id, action):
+        """Persist a unique intent BEFORE contacting the broker; never replay ambiguity."""
+        if self._daily_order_already_submitted(cycle_id, action):
+            return False
+        key = f"ib-daily:{cycle_id}:{action}:{self._us_order_day()}"
+        try:
+            self._log_db().insert({
+                "id": hashlib.sha256(key.encode()).hexdigest()[:32],
+                "cycle_id": cycle_id, "symbol": symbol,
+                "event_type": self.DAILY_ORDER_INTENT, "action": action,
+                "created": self._now(),
+                "message": "주문 전 의도 저장: 응답 불명확 시 자동 재접수 금지",
+            })
+            return True
+        except Exception:
+            # Includes concurrent attempts rejected by the log primary key.
+            return False
+
+    def _daily_orders_blocked_reason(self):
+        """run_daily must not place orders when the reservation path owns them.
+
+        With LOC automation on, FireGate-built reservations already carry the
+        day's buy/sell; a run_daily order on top doubled the position (the
+        dashboard "즉시 점검" calls it even when auto trading is off). FireGate
+        authoritative mode forbids locally computed orders altogether.
+        """
+        auto_trade = str(self._get_config_value("auto_trade_enabled", "false") or "false").lower() == "true"
+        loc_auto = str(self._get_config_value("loc_auto_schedule_enabled", "true") or "true").lower() == "true"
+        if auto_trade and loc_auto:
+            return "LOC 예약 자동화가 FireGate 기준으로 주문을 담당합니다. 일일 실행은 시세·수익률만 갱신하고 주문하지 않습니다."
+        if self._firegate_reservation_authority_required():
+            return "FireGate 기준 예약 전용 모드라 로컬 계산 주문을 내지 않습니다."
+        return ""
+
+    def _us_order_day(self, moment=None):
+        """KST timestamp → US trading day it belongs to (a session ends before 07:00 KST)."""
+        if moment is None:
+            moment = self._now()
+        if not hasattr(moment, "hour"):
+            text = str(moment or "").strip()
+            parsed = None
+            for fmt, size in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%dT%H:%M:%S", 19), ("%Y-%m-%d", 10)):
+                try:
+                    parsed = datetime.datetime.strptime(text[:size], fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                return ""
+            moment = parsed
+        if moment.hour < 7:
+            moment = moment - datetime.timedelta(days=1)
+        return moment.strftime("%Y-%m-%d")
+
+    def _daily_order_already_submitted(self, cycle_id, action):
+        """True if run_daily already sent an order of this side for the cycle today.
+        Fails closed: if the log cannot be read, assume an order exists."""
+        today = self._us_order_day()
+        try:
+            rows = []
+            for event in (self.DAILY_ORDER_INTENT, self.DAILY_ORDER_EVENT):
+                rows.extend(self._log_db().rows(cycle_id=cycle_id, event_type=event, action=action,
+                                               orderby="created", order="DESC") or [])
+        except Exception:
+            return True
+        return any(self._us_order_day((row or {}).get("created")) == today for row in rows)
+
+    def _record_daily_order(self, symbol, cycle_id, action, order_result, qty, price, label):
+        order_no = str((order_result or {}).get("order_no", "") or "")
+        self._log_event(symbol, cycle_id, self.DAILY_ORDER_EVENT, action=action,
+                        message=f"{label} 주문 접수 {qty}주 @ ${float(price or 0):.2f} (주문번호 {order_no or '-'}) — 체결은 브로커 체결 동기화로 반영",
+                        order_no=order_no, order_price=price, order_qty=qty)
+        return order_no
+
     def run_daily(self, symbol):
         """
         종목별 일일 매매 판단 및 실행 (전략 반영)
@@ -1943,6 +2056,8 @@ class Engine:
         4. 매수 판단 (회차에 따라 시장가/LOC)
         반환: dict {action, detail}
         """
+        if str(self._get_config_value("auto_trade_enabled", "false")).lower() != "true":
+            return {"action": "OFF", "detail": "자동매매 OFF — 조회 및 주문하지 않습니다."}
         kis_api = self._load_kis_api()
 
         # 활성 사이클 조회 (PENDING_EXTENSION도 매도 체크 대상)
@@ -1981,32 +2096,41 @@ class Engine:
 
         # 1) 매도 판단 (전략 반영 — 전량 or 분할)
         sell_decision = self.calculate_sell_decision(cycle, current_price)
+        blocked_reason = self._daily_orders_blocked_reason()
+        if blocked_reason:
+            return {
+                "action": "RESERVATION_MODE",
+                "detail": blocked_reason,
+                "profit_rate": sell_decision.get("profit_rate", 0.0),
+            }
         if sell_decision["should_sell"]:
             sell_type = sell_decision.get("sell_type", STRATEGY_FULL_SELL)
             sell_qty = sell_decision.get("sell_qty", int(cycle["total_qty"]))
+            if self._daily_order_already_submitted(cycle["id"], ACTION_SELL):
+                return {
+                    "action": "ALREADY_SUBMITTED",
+                    "detail": "오늘 이미 매도 주문을 접수했습니다. 브로커 체결 동기화 후 다시 판단합니다.",
+                }
 
             try:
                 configured_sell_method = str(self._get_config_value("sell_method", "firegate") or "firegate").lower()
                 sell_method = "LOC" if configured_sell_method == "loc" else "MARKET"
                 sell_price = current_price if sell_method == "LOC" else 0
+                if not self._claim_daily_order(symbol, cycle["id"], ACTION_SELL):
+                    return {"action": "ALREADY_SUBMITTED", "detail": "주문 의도 확인 필요: 재접수 차단"}
                 order_result = kis_api.sell_order(symbol, sell_qty, price=sell_price, order_type=sell_method, exchange=order_exchange)
-
-                if sell_type == STRATEGY_PARTIAL_SELL:
-                    trade = self.execute_partial_sell(cycle["id"], current_price, sell_qty, order_type=sell_method)
-                    return {
-                        "action": "PARTIAL_SELL",
-                        "detail": sell_decision["reason"],
-                        "trade": trade,
-                        "order": order_result,
-                    }
-                else:
-                    trade = self.execute_sell(cycle["id"], current_price, sell_qty, order_type=sell_method)
-                    return {
-                        "action": "SELL",
-                        "detail": sell_decision["reason"],
-                        "trade": trade,
-                        "order": order_result,
-                    }
+                # Acceptance is not a fill: LOC fills at the close (or not at all)
+                # and a market fill price is unknown here. The ledger is updated
+                # by sync_external_cycle_trades from verified broker fills.
+                partial = sell_type == STRATEGY_PARTIAL_SELL
+                order_no = self._record_daily_order(symbol, cycle["id"], ACTION_SELL, order_result, sell_qty,
+                                                    sell_price or current_price, "분할 매도" if partial else "매도")
+                return {
+                    "action": "PARTIAL_SELL_SUBMITTED" if partial else "SELL_SUBMITTED",
+                    "detail": f"{sell_decision['reason']} · 체결은 브로커 체결 동기화로 반영",
+                    "order": order_result,
+                    "order_no": order_no,
+                }
             except Exception as e:
                 err_msg = str(e)
                 detail_msg = (
@@ -2027,15 +2151,14 @@ class Engine:
 
             # 5일 이동평균은 간이 계산 (prev_close 기준)
             crash_decision = crash_strat.evaluate(cycle, current_price, prev_close, ma5=None, crash_count=crash_count)
-            if crash_decision["should_buy"]:
+            if crash_decision["should_buy"] and not self._daily_order_already_submitted(cycle["id"], "CRASH"):
                 try:
                     crash_qty = int(crash_decision["buy_amount"] / crash_decision["loc_price"]) if crash_decision["loc_price"] > 0 else 0
-                    if crash_qty > 0:
+                    if crash_qty > 0 and self._claim_daily_order(symbol, cycle["id"], "CRASH"):
                         order_result = kis_api.buy_order(symbol, crash_qty, price=crash_decision["loc_price"], order_type="LOC", exchange=order_exchange)
-                        trade = self.execute_crash_buy(cycle["id"], crash_decision["loc_price"], crash_qty)
-                        self._log_event(symbol, cycle["id"], "CRASH_BUY_ORDER",
-                                        action=ACTION_BUY,
-                                        message=f"폭락장 추가 매입 주문: {crash_qty}주 @ ${crash_decision['loc_price']:.2f}")
+                        # Booked only when the broker reports the fill (see sell branch).
+                        self._record_daily_order(symbol, cycle["id"], "CRASH", order_result, crash_qty,
+                                                 crash_decision["loc_price"], "폭락장 추가 매입")
                 except Exception as e:
                     self._log_event(symbol, cycle["id"], "CRASH_BUY_ERROR", message=str(e))
 
@@ -2053,6 +2176,12 @@ class Engine:
             return {
                 "action": "SKIP",
                 "detail": buy_decision["reason"],
+            }
+        if self._daily_order_already_submitted(cycle["id"], ACTION_BUY):
+            # Each call used to send (and book) another round: one buy per day.
+            return {
+                "action": "ALREADY_SUBMITTED",
+                "detail": "오늘 이미 매수 주문을 접수했습니다. 브로커 체결 동기화 후 다음 회차를 판단합니다.",
             }
 
         # 매수 주문 실행
@@ -2086,6 +2215,8 @@ class Engine:
                 self.record_skip(cycle["id"], detail_msg)
                 return {"action": "BUY_ERROR", "detail": detail_msg}
 
+            if not self._claim_daily_order(symbol, cycle["id"], ACTION_BUY):
+                return {"action": "ALREADY_SUBMITTED", "detail": "주문 의도 확인 필요: 재접수 차단"}
             order_result = kis_api.buy_order(
                 symbol,
                 buy_decision["order_qty"],
@@ -2093,18 +2224,17 @@ class Engine:
                 order_type=buy_decision["order_type"],
                 exchange=order_exchange,
             )
-            trade = self.execute_buy(
-                cycle["id"],
-                filled_price=buy_decision["loc_price"],
-                filled_qty=buy_decision["order_qty"],
-                order_type=buy_decision["order_type"],
-                order_price=buy_decision["loc_price"],
-            )
+            # A LOC order fills at the close only if close <= limit. Booking it
+            # here at the limit price created fills that never happened, and the
+            # later broker sync (no order number to match) booked the real fill
+            # a second time. Record the submission; the sync books the fill.
+            order_no = self._record_daily_order(symbol, cycle["id"], ACTION_BUY, order_result,
+                                                buy_decision["order_qty"], buy_decision["loc_price"], "매수")
             return {
-                "action": "BUY",
-                "detail": buy_decision["reason"],
-                "trade": trade,
+                "action": "BUY_SUBMITTED",
+                "detail": f"{buy_decision['reason']} · 체결은 브로커 체결 동기화로 반영",
                 "order": order_result,
+                "order_no": order_no,
             }
         except Exception as e:
             err_msg = str(e)
@@ -4390,6 +4520,8 @@ class Engine:
 
     def run_all(self):
         """모든 활성 종목에 대해 일일 매매 판단 실행 (cycle_mode 반영)"""
+        if str(self._get_config_value("auto_trade_enabled", "false")).lower() != "true":
+            return []
         watchlist = self._watchlist_db()
         active_etfs = watchlist.rows(is_active=True)
         results = []
@@ -4482,7 +4614,7 @@ class Engine:
     # 로그 기록
     # =========================================================================
 
-    def _log_event(self, symbol, cycle_id, event_type, action="", message=""):
+    def _log_event(self, symbol, cycle_id, event_type, action="", message="", order_no="", order_price=0, order_qty=0):
         """trade_log에 이벤트 기록"""
         log_db = self._log_db()
         event_type = str(event_type or "").upper().strip()
@@ -4493,9 +4625,9 @@ class Engine:
             "symbol": symbol,
             "event_type": event_type,
             "action": action,
-            "order_no": "",
-            "order_price": 0,
-            "order_qty": 0,
+            "order_no": str(order_no or ""),
+            "order_price": float(order_price or 0),
+            "order_qty": int(order_qty or 0),
             "filled_price": None,
             "filled_qty": 0,
             "message": message,
