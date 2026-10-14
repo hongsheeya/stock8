@@ -18,6 +18,8 @@ _TIME = wiz.model("portal/trading/kst")
 _TRADING_MODE = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
 _DATA_ROOT = "data/paper/daytrade" if _TRADING_MODE == "PAPER" else "data/live/daytrade"
 _PAPER_MODE = _TRADING_MODE == "PAPER"
+# Longer than the 120 s balance cache plus the broker's holding-update lag.
+_READOPT_GRACE_SEC = 180.0
 _PAPER_CONTINUOUS = _PAPER_MODE and str(os.environ.get("STOCK8_PAPER_CONTINUOUS", "true") or "true").lower() in ("1", "true", "yes", "on")
 
 
@@ -707,6 +709,8 @@ class DomesticDaytradeEngine:
 
     def _mark_exit_watch(self, state, reason="", action="", order_no=""):
         state["last_exit_watch_at"] = self._timestamp()
+        if str(action or "").startswith("SELL") and self._safe_int(state.get("position_qty", 0), 0) <= 0:
+            state["flat_after_exit_at"] = _clock.time()
         if reason != "":
             state["last_exit_reason"] = reason
         if action != "":
@@ -1255,7 +1259,15 @@ class DomesticDaytradeEngine:
 
             managed_qty = max(prev_qty, rebuilt_qty)
             managed_avg = rebuilt_avg if rebuilt_avg > 0 else prev_avg
-            if managed_qty > 0:
+            # Right after our own exit fill the balance can still list the sold
+            # shares (holding-update lag, then a 120 s cache). Re-adopting them
+            # made the exit watch re-send sells for shares that no longer
+            # existed ("잔고내역이 없습니다") on every tick until the cache expired.
+            recently_flat = managed_qty <= 0 and (
+                _clock.time() - self._safe_float(state.get("flat_after_exit_at", 0), 0) < _READOPT_GRACE_SEC)
+            if recently_flat:
+                pass
+            elif managed_qty > 0:
                 # Once the broker balance is available it is authoritative.
                 # Local order reconstruction may lag partial fills, corporate
                 # actions or externally submitted orders and must not keep a
