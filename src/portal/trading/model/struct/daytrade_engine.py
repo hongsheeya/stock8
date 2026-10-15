@@ -516,6 +516,48 @@ class DomesticDaytradeEngine:
             return str(value or "")
         return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
 
+    def _volume_breakout_signal_bar(self, session, bar, profile, current_price):
+        """The newest closed bar meeting the backtest entry rule, or None.
+
+        The live check runs every few minutes, so a breakout on any closed bar
+        of the last daytrade_signal_lookback_bars minutes still counts while
+        the price is within daytrade_signal_max_chase_pct of that bar's close
+        and above its VWAP. Older bars never count, so delayed data cannot
+        trigger a stale entry. Without session bars, the snapshot bar at the
+        current price is judged as before.
+        """
+        profile = profile or {}
+        threshold = self._safe_float(profile.get("breakout_volume_ratio", 1.2), 1.2)
+
+        def fires(row):
+            close = self._safe_float(row.get("close", 0), 0)
+            return (close > 0
+                    and self._safe_float(row.get("volume_surge_ratio", 0), 0) >= threshold
+                    and close >= self._safe_float(row.get("breakout_high_20", 0), 0) * 0.998
+                    and close >= self._safe_float(row.get("vwap", 0), 0) * 0.995)
+
+        rows = list((session or {}).get("bars", []) or [])
+        if not rows:
+            row = {**(bar or {}), "close": current_price}
+            return row if fires(row) else None
+        lookback = max(1, min(15, self._safe_int(self._config("daytrade_signal_lookback_bars", "5"), 5)))
+        chase_pct = max(0.0, min(2.0, self._safe_float(self._config("daytrade_signal_max_chase_pct", "0.3"), 0.3)))
+        now = self._now()
+        for row in reversed(rows):
+            try:
+                age_min = (now - datetime.datetime.strptime(str(row.get("timestamp", ""))[:16], "%Y-%m-%d %H:%M")).total_seconds() / 60
+            except Exception:
+                continue
+            if age_min < 1:
+                continue  # still forming
+            if age_min > lookback + 1:
+                break
+            close = self._safe_float(row.get("close", 0), 0)
+            if (fires(row) and current_price <= close * (1 + chase_pct / 100)
+                    and current_price >= self._safe_float(row.get("vwap", 0), 0) * 0.995):
+                return row
+        return None
+
     def _volume_breakout_exit(self, current_price, avg_price, profile, bar):
         """Exit rule of volume_breakout: target reached, or the breakout failed
         (price back under VWAP or the 20-bar low). A failed breakout is a risk
@@ -6030,7 +6072,11 @@ class DomesticDaytradeEngine:
             bars = session.get("bars", [])
             if len(bars) == 0:
                 raise Exception("라이브 시그널에 사용할 장중 바가 없습니다.")
-            bar = dict(bars[-1])
+            # Real-time KIS bars end with the minute still forming: its
+            # volume is partial, so volume-surge tests almost never passed.
+            # Backtests judge closed bars; the quote below supplies the price.
+            closed = bars[:-1] if len(bars) > 1 and str(bars[-1].get("timestamp", ""))[:16] == now.strftime("%Y-%m-%d %H:%M") else bars
+            bar = dict(closed[-1])
             try:
                 bar = _apply_kis_quote(bar)
             except Exception:
@@ -6677,7 +6723,9 @@ class DomesticDaytradeEngine:
                 "preflight_issues": [],
             }
 
-            if self._safe_float(bar.get("volume_surge_ratio", 0), 0) >= self._safe_float(profile.get("breakout_volume_ratio", 1.2), 1.2) and current_price >= self._safe_float(bar.get("breakout_high_20", 0), 0) * 0.998 and current_price >= self._safe_float(bar.get("vwap", 0), 0) * 0.995:
+            signal_bar = self._volume_breakout_signal_bar(session, bar, profile, current_price)
+            if signal_bar is not None:
+                breakout_meta["signal_bar"] = str(signal_bar.get("timestamp", "") or "")
                 preflight_issues = self._breakout_preflight_check(symbol, market, bar, profile)
                 breakout_meta["preflight_issues"] = preflight_issues
 
