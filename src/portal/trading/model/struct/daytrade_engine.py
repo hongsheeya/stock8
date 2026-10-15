@@ -613,6 +613,22 @@ class DomesticDaytradeEngine:
             return round(price, 4)
         return round(price, 2)
 
+    # Take-profit / stop-loss per US strategy, as in its backtest
+    # (daytrade.py _simulate_us_*_session): (tp key, default, floor, sl key, default, floor).
+    _US_EXIT_LEVELS = {
+        "us_premarket": ("jackpot_take_profit_pct", 3.0, 0.0, "stop_loss_pct", 8.0, 0.0),
+        "us_breakout": ("breakout_take_profit_pct", 4.0, 0.0, "breakout_stop_loss_pct", 2.5, 0.0),
+        "us_pullback": ("breakout_take_profit_pct", 3.5, 2.5, "breakout_stop_loss_pct", 2.2, 1.5),
+        "us_vwap": ("breakout_take_profit_pct", 3.5, 2.5, "breakout_stop_loss_pct", 2.0, 1.5),
+        "us_opening_reclaim": ("breakout_take_profit_pct", 3.8, 2.5, "breakout_stop_loss_pct", 1.8, 1.2),
+    }
+
+    def _us_exit_levels(self, strategy_id, profile):
+        tp_key, tp_default, tp_floor, sl_key, sl_default, sl_floor = self._US_EXIT_LEVELS[strategy_id]
+        take_profit = max(tp_floor, self._safe_float((profile or {}).get(tp_key, tp_default), tp_default))
+        stop_loss = max(sl_floor, self._safe_float((profile or {}).get(sl_key, sl_default), sl_default))
+        return take_profit, stop_loss
+
     def _auto_stop_level(self, avg_price, stop_loss_pct, market="KS"):
         """KS keeps whole-won rounding; US keeps cents (round() put a $4.90
         entry's 8% stop at $5, above the entry)."""
@@ -6849,28 +6865,26 @@ class DomesticDaytradeEngine:
                         "order_qty": position_qty,
                         "risk_exit": breakout_exit["risk_exit"],
                     })
-                elif strategy_id in ("us_premarket", "us_breakout", "us_pullback", "us_vwap"):
-                    # ── US 전략 공통 청산 로직 ──────────────────────────────
+                elif strategy_id in self._US_EXIT_LEVELS:
+                    # ── US 전략 공통 청산 로직: 각 전략 백테스트와 같은 익절/손절 ──
+                    # Live exits used +5% / -8% (and a +3% partial that never
+                    # fired) for every US strategy, while each backtest — what
+                    # training validated — exits fully at its own levels.
+                    tp_pct, sl_pct = self._us_exit_levels(strategy_id, profile)
                     us_high_stop_pct = self._safe_float(profile.get("high_stop_pct", 20.0), 20.0)
-                    jackpot2_pct = self._safe_float(profile.get("jackpot2_take_profit_pct", 5.0), 5.0)
-                    jackpot1_pct = self._safe_float(profile.get("jackpot_take_profit_pct", 3.0), 3.0)
-                    jackpot1_target = avg_price * (1 + jackpot1_pct / 100)
-                    jackpot2_target = avg_price * (1 + jackpot2_pct / 100)
-                    split_ratio = self._safe_float(profile.get("buy_split_ratio", 0.5), 0.5)
-                    buy1_used = bool(state.get("buy1_used", False))
                     intraday_high = self._safe_float(bar.get("high", current_price), current_price)
                     high_stop_price = intraday_high * (1 - us_high_stop_pct / 100) if intraday_high > 0 else 0
                     vwap = self._safe_float(bar.get("vwap", 0), 0)
+                    stop_price = self._round_usd_price(avg_price * (1 - sl_pct / 100))
 
-                    if strategy_id == "us_vwap" and vwap > 0 and current_price < vwap:
-                        signal.update({"action": "SELL_STOP_LOSS", "reason": f"VWAP 하단 이탈 즉시 손절 (현재 ${current_price:.2f} < VWAP ${vwap:.2f})", "order_qty": position_qty})
+                    if strategy_id == "us_vwap" and vwap > 0 and current_price < vwap * 0.997:
+                        signal.update({"action": "SELL_STOP_LOSS", "reason": f"VWAP 하단 이탈 손절 (현재 ${current_price:.2f} < VWAP ${vwap:.2f})", "order_qty": position_qty})
+                    elif stop_price > 0 and current_price <= stop_price:
+                        signal.update({"action": "SELL_STOP_LOSS", "reason": f"손절 -{sl_pct:g}% (${stop_price:.2f})", "order_qty": position_qty})
                     elif high_stop_price > 0 and current_price <= high_stop_price:
                         signal.update({"action": "SELL_STOP_LOSS", "reason": f"고점 대비 -{us_high_stop_pct:.0f}% 손절 (고점 ${intraday_high:.2f})", "order_qty": position_qty})
-                    elif current_price >= jackpot2_target:
-                        signal.update({"action": "SELL_FULL", "reason": f"2차 목표 +{jackpot2_pct:.0f}% 달성 전량 청산", "order_qty": position_qty})
-                    elif current_price >= jackpot1_target and not buy1_used:
-                        sell_partial_qty = max(1, round(position_qty * split_ratio))
-                        signal.update({"action": "SELL_PARTIAL", "reason": f"1차 목표 +{jackpot1_pct:.0f}% 달성 부분 청산 ({sell_partial_qty}주)", "order_qty": sell_partial_qty})
+                    elif current_price >= avg_price * (1 + tp_pct / 100):
+                        signal.update({"action": "SELL_FULL", "reason": f"목표 +{tp_pct:g}% 달성 전량 청산", "order_qty": position_qty})
 
         if strategy_id == "vrev" and signal.get("action") in ["SELL_FULL", "SELL_RECENT", "SELL_RESCUE"] and current_price > 0:
             if bool(signal.get("ignore_jackpot_soft_guard", False)) is False and current_price < jackpot_soft_exit_guard:

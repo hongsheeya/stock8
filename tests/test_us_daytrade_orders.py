@@ -145,6 +145,33 @@ class UsExitTests(unittest.TestCase):
         self.assertNotEqual(signal["action"], "PRE_SELL_JACKPOT")
 
 
+class UsExitLevelTests(unittest.TestCase):
+    """Live US exits use each strategy's backtest take-profit / stop-loss."""
+
+    def setUp(self):
+        self.addCleanup(daytrade_engine._USD_KRW_CACHE.clear)
+
+    def test_breakout_takes_profit_and_stops_at_its_backtest_levels(self):
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 104.1, MIDDAY)["action"], "SELL_FULL")
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 97.4, MIDDAY)["action"], "SELL_STOP_LOSS")
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 103.0, MIDDAY)["action"], "HOLD")
+
+    def test_premarket_exits_fully_at_three_percent(self):
+        signal = _us_signal(_us_state(100.0, buy1_used=True), 103.1, MIDDAY)
+        self.assertEqual((signal["action"], signal["order_qty"]), ("SELL_FULL", 7))
+
+    def test_trained_levels_override_the_defaults(self):
+        profile = {**daytrade_module.Daytrade.US_DEFAULT_PROFILE, "breakout_take_profit_pct": 3.0}
+        signal = _us_signal(_us_state(100.0, strategy_id="us_pullback"), 103.1, MIDDAY,
+                            _profile_for=lambda *_a, **_k: dict(profile))
+        self.assertEqual(signal["action"], "SELL_FULL")
+
+    def test_floors_match_the_backtests(self):
+        engine, _ = _engine()
+        self.assertEqual(engine._us_exit_levels("us_vwap", {"breakout_take_profit_pct": 1.0,
+                                                            "breakout_stop_loss_pct": 0.5}), (2.5, 1.5))
+
+
 class UsPricingTests(unittest.TestCase):
     def test_market_orders_are_marketable_limits(self):
         engine, _ = _engine()
