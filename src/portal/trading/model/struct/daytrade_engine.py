@@ -7812,8 +7812,16 @@ class DomesticDaytradeEngine:
                 pass
             elif position_qty > 0 and avg_price > 0:
                 pnl_pct = round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0
-                gap_to_jackpot = round(avg_price * (1 + float(profile.get("jackpot_take_profit_pct", 2.0)) / 100) - current_price)
-                signal["reason"] = f"보유 중 ({pnl_pct:+.2f}%) 잭팟까지 ₩{gap_to_jackpot:,} 남음"
+                if self._is_us_market(market):
+                    # A US position is in dollars: "₩2 남음" meant about $2, and
+                    # the target is the strategy's own take-profit level.
+                    take_profit = (self._us_exit_levels(strategy_id, profile)[0] if strategy_id in self._US_EXIT_LEVELS
+                                   else self._safe_float(profile.get("jackpot_take_profit_pct", 2.0), 2.0))
+                    gap_to_target = avg_price * (1 + take_profit / 100) - current_price
+                    signal["reason"] = f"보유 중 ({pnl_pct:+.2f}%) 목표가(+{take_profit:g}%)까지 ${gap_to_target:,.2f} 남음"
+                else:
+                    gap_to_jackpot = round(avg_price * (1 + float(profile.get("jackpot_take_profit_pct", 2.0)) / 100) - current_price)
+                    signal["reason"] = f"보유 중 ({pnl_pct:+.2f}%) 잭팟까지 ₩{gap_to_jackpot:,} 남음"
             elif reentry_cooldown.get("active"):
                 signal["reason"] = reentry_cooldown.get("reason", "재진입 쿨다운 중")
             elif strategy_id == "vrev" and position_qty == 0 and state.get("buy1_used") == False and current_price <= buy1_trigger and profit_reentry_guard_buy1.get("active"):
