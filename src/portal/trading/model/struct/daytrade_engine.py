@@ -646,41 +646,77 @@ class DomesticDaytradeEngine:
                 return row
         return None
 
-    # Direction ETFs and the index each one follows.
+    # Direction ETFs and the index each one follows, per market.
     _REGIME_TREND_STRATEGY = "paper_regime_trend"
     _REGIME_TREND_ETFS = {
         "114800": ("BEAR", "069500"), "252670": ("BEAR", "069500"), "251340": ("BEAR", "229200"),
         "122630": ("BULL", "069500"), "233740": ("BULL", "229200"),
     }
+    _US_REGIME_TREND_ETFS = {
+        "SQQQ": ("BEAR", "QQQ"), "PSQ": ("BEAR", "QQQ"), "SH": ("BEAR", "SPY"), "SPXU": ("BEAR", "SPY"),
+        "SOXS": ("BEAR", "SOXX"), "QLD": ("BULL", "QQQ"), "SSO": ("BULL", "SPY"), "USD": ("BULL", "SOXX"),
+    }
 
-    def _regime_trend_enabled(self):
+    def _regime_trend_pairs(self, market="KS"):
+        return self._US_REGIME_TREND_ETFS if self._is_us_market(market) else self._REGIME_TREND_ETFS
+
+    def _regime_trend_market(self, symbol):
+        symbol = str(symbol or "").strip().upper()
+        if symbol in self._REGIME_TREND_ETFS:
+            return "KS"
+        if symbol in self._US_REGIME_TREND_ETFS:
+            return "US"
+        return ""
+
+    def _regime_trend_enabled(self, market="KS"):
         if not _PAPER_MODE:
             return False
-        value = str(self._config("daytrade_paper_regime_trend_enabled", "true") or "true").strip().lower()
+        key = "daytrade_paper_us_regime_trend_enabled" if self._is_us_market(market) else "daytrade_paper_regime_trend_enabled"
+        value = str(self._config(key, "true") or "true").strip().lower()
         return value in ("1", "true", "yes", "on")
 
-    def _regime_trend_params(self):
+    def _regime_trend_params(self, market="KS"):
+        us = self._is_us_market(market)
+        prefix = "daytrade_regime_trend_us_" if us else "daytrade_regime_trend_"
         return {
-            "move_pct": max(0.2, min(5.0, self._safe_float(self._config("daytrade_regime_trend_move_pct", "1.0"), 1.0))),
-            "stop_pct": max(0.5, min(5.0, self._safe_float(self._config("daytrade_regime_trend_stop_pct", "1.5"), 1.5))),
-            "start": str(self._config("daytrade_regime_trend_start", "09:30") or "09:30"),
-            "end": str(self._config("daytrade_regime_trend_end", "14:30") or "14:30"),
-            "cooldown_min": max(0, self._safe_int(self._config("daytrade_regime_trend_cooldown_min", "10"), 10)),
+            "move_pct": max(0.2, min(5.0, self._safe_float(self._config(prefix + "move_pct", "1.0"), 1.0))),
+            "stop_pct": max(0.5, min(5.0, self._safe_float(self._config(prefix + "stop_pct", "1.5"), 1.5))),
+            # KS in KST from 30 minutes after the open; US in ET likewise.
+            "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
+            "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
+            "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "10"), 10)),
         }
 
-    def _regime_trend_view(self, symbol):
+    def _regime_trend_clock(self, market="KS"):
+        """(session date, HH:MM) on the market's own clock: KST for KS, ET for US."""
+        now = self._now()
+        if not self._is_us_market(market):
+            return now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+        et = None
+        if ZoneInfo is not None:
+            try:
+                aware = now if now.tzinfo else now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                et = aware.astimezone(ZoneInfo("America/New_York"))
+            except Exception:
+                et = None
+        if et is None:
+            et = now - datetime.timedelta(hours=13 if self._is_us_dst() else 14)
+        return self._us_session_date(now), et.strftime("%H:%M")
+
+    def _regime_trend_view(self, symbol, market=None):
         """Where the index behind a direction ETF stands: move from its open and
         side of its VWAP. A BEAR ETF trends while the index is below its VWAP
         and down move_pct or more; a BULL ETF is the mirror image."""
-        side, proxy = self._REGIME_TREND_ETFS[str(symbol)]
-        params = self._regime_trend_params()
+        market = market or self._regime_trend_market(symbol) or "KS"
+        side, proxy = self._regime_trend_pairs(market)[str(symbol).strip().upper()]
+        params = self._regime_trend_params(market)
         view = {"side": side, "proxy": proxy, "ok": False, "trend": False, "reversed": False}
         try:
-            session, bar = self._latest_snapshot(proxy, market="KS")
+            session, bar = self._latest_snapshot(proxy, market=market)
         except Exception as exc:
             return {**view, "reason": f"지수 {proxy} 시세 조회 실패: {exc}"}
         bars = list((session or {}).get("bars", []) or [])
-        today = self._now().strftime("%Y-%m-%d")
+        today = self._regime_trend_clock(market)[0]
         if not bars or str((session or {}).get("date", ""))[:10] != today:
             return {**view, "reason": f"지수 {proxy} 오늘 분봉 미수신"}
         day_open = self._safe_float(bars[0].get("open", 0), 0) or self._safe_float(bars[0].get("close", 0), 0)
@@ -698,16 +734,17 @@ class DomesticDaytradeEngine:
                 "proxy_close": close, "proxy_vwap": round(vwap, 4), "proxy_open": day_open,
                 "reason": f"지수 {proxy} {move:+.2f}% · VWAP {'아래' if below else '위'}"}
 
-    def _regime_trend_exit(self, symbol, current_price, avg_price, view=None):
+    def _regime_trend_exit(self, symbol, current_price, avg_price, view=None, market=None):
         """Exit of the trend hold: -stop_pct, or the index back across its VWAP."""
+        market = market or self._regime_trend_market(symbol) or "KS"
         current_price = self._safe_float(current_price, 0)
         avg_price = self._safe_float(avg_price, 0)
         if current_price <= 0 or avg_price <= 0:
             return None
-        stop_pct = self._regime_trend_params()["stop_pct"]
+        stop_pct = self._regime_trend_params(market)["stop_pct"]
         if current_price <= avg_price * (1 - stop_pct / 100):
             return {"action": "SELL_STOP_LOSS", "reason": f"방향 추세 손절 (평단 -{stop_pct:g}%)", "risk_exit": True}
-        view = view if view is not None else self._regime_trend_view(symbol)
+        view = view if view is not None else self._regime_trend_view(symbol, market=market)
         if view.get("ok") and view.get("reversed"):
             return {"action": "SELL_FULL", "reason": f"지수 VWAP 회복 — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
         return None
@@ -724,36 +761,41 @@ class DomesticDaytradeEngine:
     def _regime_trend_signal(self, symbol, market, seed, name, strategy_id, sync_broker, allow_buy):
         """PAPER: hold a direction ETF while the index trends its way.
 
-        On 10-15 (KOSPI -8%) the inverse ETFs traded above VWAP 97-98% of the
-        day, but the scalping rules' guards blocked all 111 breakout signals.
-        Over 09-16..10-15 this rule (fixed before testing: 1.0% move, VWAP
-        reversal, -1.5% stop, flat at the close) made +15.5% over 76 trades,
-        +5.3% without 10-15; loosening the scalping guards lost 50.7% there.
+        KS, 10-15 (KOSPI -8%): the inverse ETFs traded above VWAP 97-98% of
+        the day, but the scalping rules' guards blocked all 111 breakout
+        signals. Over 09-16..10-15 this rule (fixed before testing: 1.0% move,
+        VWAP reversal, -1.5% stop, flat at the close) made +15.5% over 76
+        trades, +5.3% without 10-15. US, 09-17..10-14, the same rule on
+        SQQQ/PSQ/SH/SPXU/SOXS/QLD/SSO/USD: +6.0% over 30 trades (mostly SOXS).
         """
-        symbol = str(symbol)
-        if not _PAPER_MODE or str(market or "KS").upper() != "KS" or symbol not in self._REGIME_TREND_ETFS:
-            raise ValueError("시장 방향 추세 전략은 국내 모의투자 방향성 ETF 전용입니다.")
+        symbol = str(symbol).strip().upper()
+        market = "US" if self._is_us_market(market) else "KS"
+        if not _PAPER_MODE or symbol not in self._regime_trend_pairs(market):
+            raise ValueError("시장 방향 추세 전략은 모의투자 방향성 ETF 전용입니다.")
         if sync_broker:
             self._sync_broker_positions()
-        state = self._state_for(symbol, market="KS", seed=seed, name=name, strategy_id=strategy_id)
+        state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
         if state.get("pending_buy_order_no"):
-            self._sync_pending_buy(state, symbol, "KS")
+            self._sync_pending_buy(state, symbol, market)
             self._store_state(state)
-        session, bar = self._latest_snapshot(symbol, market="KS")
+        session, bar = self._latest_snapshot(symbol, market=market)
         bar = bar or {}
         price = self._safe_float(bar.get("close", 0), 0)
-        params = self._regime_trend_params()
-        view = self._regime_trend_view(symbol)
+        params = self._regime_trend_params(market)
+        view = self._regime_trend_view(symbol, market=market)
         qty = self._safe_int(state.get("position_qty", 0), 0)
         avg_price = self._safe_float(state.get("avg_price", 0), 0)
-        now_hm = self._now().strftime("%H:%M")
+        now_hm = self._regime_trend_clock(market)[1]
+        # The order path refuses a buy without a live price source; carry the
+        # snapshot's (KIS quote) one, which also blocks buys on stale bars.
         signal = {"action": "HOLD", "order_qty": 0, "strategy_id": strategy_id, "current_price": price,
+                  "price_source": str(bar.get("price_source", "") or ""),
                   "reason": view.get("reason", "시장 방향 대기"), "regime_view": view}
         if state.get("pending_buy_order_no") or state.get("pending_sell_order_no"):
             signal["reason"] = "미체결 주문 확인 중: 중복 주문 금지"
         elif qty > 0:
-            exit_signal = self._regime_trend_exit(symbol, price, avg_price, view=view)
-            if exit_signal is None and self._is_market_close_approaching("KS"):
+            exit_signal = self._regime_trend_exit(symbol, price, avg_price, view=view, market=market)
+            if exit_signal is None and self._is_market_close_approaching(market):
                 exit_signal = {"action": "SELL_FULL", "reason": "방향 추세 장마감 평탄화 (오버나잇 미보유)", "risk_exit": True}
             if exit_signal:
                 signal.update(action=exit_signal["action"], order_qty=qty, reason=exit_signal["reason"],
@@ -765,7 +807,7 @@ class DomesticDaytradeEngine:
         elif not view.get("ok"):
             pass
         elif not (params["start"] <= now_hm <= params["end"]):
-            signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']})"
+            signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
         elif self._regime_trend_cooling(state, params["cooldown_min"]):
             signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
         elif not view.get("trend"):
@@ -773,7 +815,10 @@ class DomesticDaytradeEngine:
         elif price <= 0 or price <= self._safe_float(bar.get("vwap", 0), 0):
             signal["reason"] = f"ETF가 VWAP 아래 — 추세 확인 대기 · {view.get('reason', '')}"
         else:
-            order_qty = self._buy_qty(seed, price)
+            budget = seed
+            if market == "US":
+                budget = self._safe_float(self._market_buy_budget(seed, price, market="US").get("buy_budget", 0), 0)
+            order_qty = self._buy_qty(budget, price)
             if order_qty > 0:
                 signal.update(action="BUY1", order_qty=order_qty,
                               reason=f"{'하락' if view['side'] == 'BEAR' else '상승'} 추세 진입 · {view.get('reason', '')}")
@@ -782,18 +827,19 @@ class DomesticDaytradeEngine:
         state["last_signal_reason"] = signal["reason"]
         if price > 0:
             state["last_price"] = price
-        return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, "KS"),
+        return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, market),
                     bar=bar, session=session or {}, feature_snapshot={"regime_view": view})
 
-    def _with_regime_trend_candidates(self, rows, payload):
+    def _with_regime_trend_candidates(self, rows, payload, market="KS"):
         """PAPER: every pass, evaluate the direction ETFs with the trend rule
         first. Their scalping candidates are dropped unless they hold a
         position (those still need their own exits)."""
-        if not self._regime_trend_enabled():
+        if not self._regime_trend_enabled(market):
             return rows
-        etfs = self._REGIME_TREND_ETFS
-        kept = [row for row in rows if str(row.get("symbol", "")) not in etfs or row.get("source") == "active_position"]
-        held = {str(row.get("symbol", "")) for row in kept if row.get("source") == "active_position"}
+        market = "US" if self._is_us_market(market) else "KS"
+        etfs = self._regime_trend_pairs(market)
+        kept = [row for row in rows if str(row.get("symbol", "")).upper() not in etfs or row.get("source") == "active_position"]
+        held = {str(row.get("symbol", "")).upper() for row in kept if row.get("source") == "active_position"}
         total = self._safe_float(payload.get("total_seed_krw", payload.get("effective_seed", 0)), 0)
         remaining = self._safe_float(payload.get("remaining_seed_krw", total), total)
         added = []
@@ -801,9 +847,9 @@ class DomesticDaytradeEngine:
             if symbol in held or not self.analysis_allowed(symbol):
                 continue
             added.append({
-                "symbol": symbol, "market": "KS", "name": self.strategy.symbol_name(symbol),
+                "symbol": symbol, "market": market, "name": self.strategy.symbol_name(symbol) if market == "KS" else symbol,
                 "strategy_id": self._REGIME_TREND_STRATEGY, "source": "regime_trend", "score": 0,
-                "entry_seed_krw": self._risk_sized_entry_seed_krw(symbol, self._REGIME_TREND_STRATEGY, "KS", total, remaining),
+                "entry_seed_krw": self._risk_sized_entry_seed_krw(symbol, self._REGIME_TREND_STRATEGY, market, total, remaining),
                 "last_price": 0,
             })
         return added + kept
@@ -1076,6 +1122,12 @@ class DomesticDaytradeEngine:
                 exchange = {"NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX"}.get(exchange, exchange)
                 if exchange in ("NASD", "NYSE", "AMEX"):
                     return exchange
+        # Direction ETFs (paper_regime_trend): NYSE Arca listings order as AMEX,
+        # like SOXL; an unknown symbol would otherwise default to NASD.
+        known_etfs = {"SQQQ": "NASD", "QQQ": "NASD", "SOXX": "NASD", "PSQ": "AMEX", "SH": "AMEX",
+                      "SPXU": "AMEX", "SOXS": "AMEX", "QLD": "AMEX", "SSO": "AMEX", "USD": "AMEX"}
+        if normalized in known_etfs:
+            return known_etfs[normalized]
         nyse_symbols = {"SPY", "GS", "JPM", "BAC", "WMT", "BRK", "XOM", "JNJ", "PG", "V", "MA"}
         sym = str(symbol or "").upper().split(".")[0]
         return "NYSE" if sym in nyse_symbols else "NASD"
@@ -1831,7 +1883,7 @@ class DomesticDaytradeEngine:
         if resolved_strategy == 'paper_regime_trend':
             return {**self.strategy._default_profile_for_market(market=market),
                     'budget_ratio': 1.0, 'buy_split_ratio': 1.0,
-                    'stop_loss_pct': self._regime_trend_params()['stop_pct'],
+                    'stop_loss_pct': self._regime_trend_params(market)['stop_pct'],
                     'carry_overnight_enabled': False, 'stop_reentry_same_day_block': False}
         default_profile = self.strategy._default_profile_for_market(market=market, strategy_id=resolved_strategy)
         trained_profile = self.strategy.latest_profile(symbol=symbol, strategy_id=resolved_strategy, market=market)
@@ -3198,7 +3250,7 @@ class DomesticDaytradeEngine:
         if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
             return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
                     'order_value': 0, 'message': f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 주문이 잠겨 있습니다.'}
-        if str(strategy_id) == 'paper_regime_trend' and (not _PAPER_MODE or market != 'KS'):
+        if str(strategy_id) == 'paper_regime_trend' and not _PAPER_MODE:
             return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
                     'message': '이 전략은 국내 모의투자에서만 검증할 수 있습니다.', 'order_value': 0}
         if str(strategy_id).startswith('paper_selective_'):
@@ -3989,7 +4041,7 @@ class DomesticDaytradeEngine:
                 auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
                 breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
                 if strategy_id == "paper_regime_trend" and str(symbol) in self._REGIME_TREND_ETFS:
-                    breakout_exit = self._regime_trend_exit(symbol, current_price, avg_price)
+                    breakout_exit = self._regime_trend_exit(symbol, current_price, avg_price, market="KS")
                 if pending_order_no:
                     if (user_stop_hit or auto_stop_hit) and self._pending_sell_is_reservation(state):
                         # The resting limit locks the shares: request the cancel
@@ -6067,7 +6119,7 @@ class DomesticDaytradeEngine:
 
         results = []
         executed_count = 0
-        candidate_rows = list(candidate_payload.get("candidates", []) or [])
+        candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload, market="US")
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
