@@ -854,6 +854,211 @@ class DomesticDaytradeEngine:
             })
         return added + kept
 
+    _MOMENTUM_STRATEGY = "paper_momentum_ride"
+
+    def _momentum_enabled(self, market="KS"):
+        if not _PAPER_MODE:
+            return False
+        key = "daytrade_paper_us_momentum_enabled" if self._is_us_market(market) else "daytrade_paper_momentum_enabled"
+        return str(self._config(key, "true") or "true").strip().lower() in ("1", "true", "yes", "on")
+
+    def _momentum_params(self, market="KS"):
+        us = self._is_us_market(market)
+        prefix = "daytrade_momentum_us_" if us else "daytrade_momentum_"
+
+        def number(key, default):
+            return self._safe_float(self._config(prefix + key, str(default)), default)
+        return {
+            "in_play_pct": number("in_play_pct", 5.0),
+            # KS stops short of the +30% limit, where a locked book cannot exit.
+            "max_change_pct": number("max_change_pct", 45.0 if us else 25.0),
+            "min_volume": number("min_volume", 1_000_000 if us else 0),
+            "min_turnover": number("min_turnover", 10_000_000 if us else 3_000_000_000),
+            "volume_ratio": number("volume_ratio", 1.5),
+            "trail_pct": number("trail_pct", 3.0),
+            "stop_pct": number("stop_pct", 4.0),
+            "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
+            "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
+            "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "15"), 15)),
+            "max_entries": max(1, self._safe_int(self._config(prefix + "max_entries", "3"), 3)),
+            "candidates": max(1, min(20, self._safe_int(self._config(prefix + "candidates", "10"), 10))),
+        }
+
+    def _momentum_frame(self, symbol, market):
+        """Today's closed bars, the newest closed bar and the day's totals.
+        The last bar of a live session is still forming, so it is dropped."""
+        session, bar = self._latest_snapshot(symbol, market=market)
+        bar = bar or {}
+        bars = list((session or {}).get("bars", []) or [])
+        if not bars or str((session or {}).get("date", ""))[:10] != self._regime_trend_clock(market)[0]:
+            return None
+        closed = bars[:-1] if len(bars) > 1 else bars
+        prev_close = self._safe_float(bar.get("quote_prev_close", 0), 0) or self._safe_float((session or {}).get("prev_close", 0), 0)
+        return {
+            "session": session, "bar": bar, "closed": closed, "signal_bar": closed[-1],
+            "price": self._safe_float(bar.get("close", 0), 0), "price_source": str(bar.get("price_source", "") or ""),
+            "prev_close": prev_close,
+            "day_volume": sum(self._safe_float(row.get("volume", 0), 0) for row in bars),
+            "day_turnover": sum(self._safe_float(row.get("close", 0), 0) * self._safe_float(row.get("volume", 0), 0) for row in bars),
+        }
+
+    def _momentum_exit(self, state, frame, avg_price, market):
+        """Trail 3% under the highest close since entry, VWAP break, -4% stop."""
+        params = self._momentum_params(market)
+        avg_price = self._safe_float(avg_price, 0)
+        if not frame or avg_price <= 0:
+            return None
+        price = frame["price"] or self._safe_float(frame["signal_bar"].get("close", 0), 0)
+        if price > 0 and price <= avg_price * (1 - params["stop_pct"] / 100):
+            return {"action": "SELL_STOP_LOSS", "reason": f"급등주 편승 손절 (평단 -{params['stop_pct']:g}%)", "risk_exit": True}
+        recent = [self._safe_float(row.get("close", 0), 0) for row in frame["closed"][-5:]]
+        peak = max([self._safe_float(state.get("momentum_peak", 0), 0), avg_price] + recent)
+        state["momentum_peak"] = round(peak, 4)
+        close = self._safe_float(frame["signal_bar"].get("close", 0), 0)
+        vwap = self._safe_float(frame["signal_bar"].get("vwap", 0), 0)
+        if close > 0 and close <= peak * (1 - params["trail_pct"] / 100):
+            return {"action": "SELL_FULL", "reason": f"급등주 고점 대비 -{params['trail_pct']:g}% 추적 청산 (고점 {peak:,.2f})", "risk_exit": True}
+        if close > 0 and vwap > 0 and close < vwap:
+            return {"action": "SELL_FULL", "reason": "급등주 VWAP 이탈 청산", "risk_exit": True}
+        return None
+
+    def _momentum_entries_today(self, state):
+        today = self._now().strftime("%Y-%m-%d")
+        return sum(1 for order in list(state.get("orders", []) or [])
+                   if str(order.get("action", "")).startswith("BUY") and order.get("strategy_id") == self._MOMENTUM_STRATEGY
+                   and str(order.get("timestamp", "")).startswith(today))
+
+    def _momentum_signal(self, symbol, market, seed, name, strategy_id, sync_broker, allow_buy):
+        """PAPER: ride today's movers (US and KS).
+
+        Rule fixed before testing (breakout continuation): in play at +5% on
+        the previous close with volume, entry when a closed bar sets a new
+        20-bar high above VWAP on 1.5x volume, exit on a 3% trail from the
+        peak close, a VWAP break, -4% or the close. US replay 09-16..10-14
+        (141 theme names, weak tape): 333 trades, -55% summed, PF 0.76. It
+        runs at the user's request to collect forward evidence; its results
+        are kept apart by strategy id.
+        """
+        symbol = str(symbol).strip().upper()
+        market = "US" if self._is_us_market(market) else "KS"
+        if not _PAPER_MODE:
+            raise ValueError("급등주 편승 전략은 모의투자 전용입니다.")
+        if sync_broker:
+            self._sync_broker_positions()
+        state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
+        if state.get("pending_buy_order_no"):
+            self._sync_pending_buy(state, symbol, market)
+            self._store_state(state)
+        params = self._momentum_params(market)
+        frame = self._momentum_frame(symbol, market)
+        bar = (frame or {}).get("bar", {}) or {}
+        price = (frame or {}).get("price", 0) or 0
+        qty = self._safe_int(state.get("position_qty", 0), 0)
+        avg_price = self._safe_float(state.get("avg_price", 0), 0)
+        signal = {"action": "HOLD", "order_qty": 0, "strategy_id": strategy_id, "current_price": price,
+                  "price_source": (frame or {}).get("price_source", ""), "reason": "급등 조건 대기"}
+        if state.get("pending_buy_order_no") or state.get("pending_sell_order_no"):
+            signal["reason"] = "미체결 주문 확인 중: 중복 주문 금지"
+        elif qty > 0:
+            exit_signal = self._momentum_exit(state, frame, avg_price, market)
+            if exit_signal is None and self._is_market_close_approaching(market):
+                exit_signal = {"action": "SELL_FULL", "reason": "급등주 편승 장마감 정리 (오버나잇 미보유)", "risk_exit": True}
+            if exit_signal:
+                signal.update(action=exit_signal["action"], order_qty=qty, reason=exit_signal["reason"],
+                              risk_exit=exit_signal["risk_exit"])
+            else:
+                signal["reason"] = f"급등주 편승 보유 중 (고점 {self._safe_float(state.get('momentum_peak', 0), 0):,.2f})"
+        else:
+            state["momentum_peak"] = 0
+            now_hm = self._regime_trend_clock(market)[1]
+            if not allow_buy:
+                signal["reason"] = "신규 진입 비활성"
+            elif frame is None:
+                signal["reason"] = "오늘 분봉 미수신"
+            elif not (params["start"] <= now_hm <= params["end"]):
+                signal["reason"] = f"급등주 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
+            elif self._regime_trend_cooling(state, params["cooldown_min"]):
+                signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
+            elif self._momentum_entries_today(state) >= params["max_entries"]:
+                signal["reason"] = f"종목당 하루 {params['max_entries']}회 진입 한도"
+            else:
+                change = (price / frame["prev_close"] - 1) * 100 if frame["prev_close"] > 0 and price > 0 else 0.0
+                closed = frame["closed"]
+                signal_bar = frame["signal_bar"]
+                prior = closed[-21:-1]
+                close = self._safe_float(signal_bar.get("close", 0), 0)
+                vwap = self._safe_float(signal_bar.get("vwap", 0), 0)
+                prior_high = max([self._safe_float(row.get("high", 0), 0) for row in prior] or [0])
+                prior_volume = [self._safe_float(row.get("volume", 0), 0) for row in prior]
+                volume_mean = sum(prior_volume) / len(prior_volume) if prior_volume else 0.0
+                if not (params["in_play_pct"] <= change <= params["max_change_pct"]):
+                    signal["reason"] = f"급등 조건 미달 (전일 대비 {change:+.2f}%, 기준 +{params['in_play_pct']:g}~{params['max_change_pct']:g}%)"
+                elif frame["day_volume"] < params["min_volume"] or frame["day_turnover"] < params["min_turnover"]:
+                    signal["reason"] = "급등주 거래량/거래대금 부족"
+                elif len(prior) < 20 or volume_mean <= 0:
+                    signal["reason"] = "분봉 20개 이상 필요"
+                elif not (close > vwap > 0 and close > prior_high and self._safe_float(signal_bar.get("volume", 0), 0) >= volume_mean * params["volume_ratio"]):
+                    signal["reason"] = f"급등주 돌파 대기 (전일 대비 {change:+.2f}%)"
+                else:
+                    budget = seed
+                    if market == "US":
+                        budget = self._safe_float(self._market_buy_budget(seed, price, market="US").get("buy_budget", 0), 0)
+                    order_qty = self._buy_qty(budget, price)
+                    if order_qty > 0:
+                        signal.update(action="BUY1", order_qty=order_qty,
+                                      reason=f"급등주 편승 진입 · 전일 대비 {change:+.2f}% · 20분 고점·거래량 돌파")
+                    else:
+                        signal["reason"] = "배정 시드로 1주도 살 수 없음"
+        state["last_signal_reason"] = signal["reason"]
+        if price > 0:
+            state["last_price"] = price
+        return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, market),
+                    bar=bar, session=(frame or {}).get("session", {}) or {}, feature_snapshot={})
+
+    def _with_momentum_candidates(self, rows, payload, market="KS"):
+        """PAPER: today's movers from the scan, evaluated with the momentum rule
+        right after the direction ETFs. Symbols already in the list keep their
+        own strategy (one state per symbol)."""
+        if not self._momentum_enabled(market):
+            return rows
+        market = "US" if self._is_us_market(market) else "KS"
+        params = self._momentum_params(market)
+        try:
+            if market == "US":
+                self.strategy.refresh_us_dynamic_candidate_universe()
+                universe = [row for row in (self.strategy.us_candidate_universe() or [])
+                            if row.get("source") in ("yahoo_gainers", "kis_momentum_rank")]
+            else:
+                universe = list(self.strategy.candidate_universe("KS") or [])
+        except Exception:
+            universe = []
+        present = {str(row.get("symbol", "")).upper() for row in rows}
+        skip = set(self._regime_trend_pairs(market)) | present
+        movers = []
+        for row in universe:
+            symbol = str(row.get("symbol", "") or "").strip().upper()
+            if not symbol or symbol in skip or self._is_infinite_buy_symbol(symbol, market) or not self.analysis_allowed(symbol):
+                continue
+            if self._safe_float(row.get("change_pct", 0), 0) < params["in_play_pct"]:
+                continue
+            skip.add(symbol)
+            movers.append(row)
+        turnover_key = "turnover_usd" if market == "US" else "turnover_krw"
+        movers.sort(key=lambda row: self._safe_float(row.get(turnover_key, 0), 0), reverse=True)
+        total = self._safe_float(payload.get("total_seed_krw", payload.get("effective_seed", 0)), 0)
+        remaining = self._safe_float(payload.get("remaining_seed_krw", total), total)
+        added = [{
+            "symbol": str(row["symbol"]).upper(), "market": market, "name": row.get("name", row["symbol"]),
+            "strategy_id": self._MOMENTUM_STRATEGY, "source": "momentum", "score": 0,
+            "entry_seed_krw": self._risk_sized_entry_seed_krw(str(row["symbol"]).upper(), self._MOMENTUM_STRATEGY, market, total, remaining),
+            "last_price": self._safe_float(row.get("price", 0), 0),
+        } for row in movers[:params["candidates"]]]
+        if not added:
+            return rows
+        lead = [row for row in rows if row.get("source") == "regime_trend"]
+        rest = [row for row in rows if row.get("source") != "regime_trend"]
+        return lead + added + rest
+
     def _volume_breakout_exit(self, current_price, avg_price, profile, bar):
         """Exit rule of volume_breakout: target reached, or the breakout failed
         (price back under VWAP or the 20-bar low). A failed breakout is a risk
@@ -1891,6 +2096,12 @@ class DomesticDaytradeEngine:
                     'budget_ratio': .3, 'buy_split_ratio': 1.0, 'stop_loss_pct': 1.0,
                     'jackpot_take_profit_pct': 2.5, 'carry_overnight_enabled': False,
                     'stop_reentry_same_day_block': True}
+        if resolved_strategy == 'paper_momentum_ride':
+            return {**self.strategy._default_profile_for_market(market=market),
+                    'budget_ratio': 1.0, 'buy_split_ratio': 1.0,
+                    'stop_loss_pct': self._momentum_params(market)['stop_pct'],
+                    'max_live_day_range_pct': 60.0, 'max_live_gap_pct': 60.0,
+                    'carry_overnight_enabled': False, 'stop_reentry_same_day_block': False}
         if resolved_strategy == 'paper_regime_trend':
             return {**self.strategy._default_profile_for_market(market=market),
                     'budget_ratio': 1.0, 'buy_split_ratio': 1.0,
@@ -3054,6 +3265,7 @@ class DomesticDaytradeEngine:
         results = []
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload)
+        candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="KS")
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
@@ -3261,7 +3473,7 @@ class DomesticDaytradeEngine:
         if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
             return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
                     'order_value': 0, 'message': f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 주문이 잠겨 있습니다.'}
-        if str(strategy_id) == 'paper_regime_trend' and not _PAPER_MODE:
+        if str(strategy_id) in ('paper_regime_trend', 'paper_momentum_ride') and not _PAPER_MODE:
             return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
                     'message': '이 전략은 국내 모의투자에서만 검증할 수 있습니다.', 'order_value': 0}
         if str(strategy_id).startswith('paper_selective_'):
@@ -4034,13 +4246,13 @@ class DomesticDaytradeEngine:
                         continue
                 close_window = self._is_market_close_approaching(market)
                 live_bar = {}
-                if strategy_id in ("volume_breakout", "paper_regime_trend") or (close_window and strategy_id == "vrev"):
+                if strategy_id in ("volume_breakout", "paper_regime_trend", "paper_momentum_ride") or (close_window and strategy_id == "vrev"):
                     try:
                         _session, live_bar = self._latest_snapshot(symbol, market=market)
                     except Exception:
                         live_bar = {}
                     live_bar = live_bar or {}
-                if strategy_id in ("volume_breakout", "paper_regime_trend") and str(live_bar.get("price_source", "") or "").startswith("kis_"):
+                if strategy_id in ("volume_breakout", "paper_regime_trend", "paper_momentum_ride") and str(live_bar.get("price_source", "") or "").startswith("kis_"):
                     # The balance price can be two minutes old; a 0.8% stop
                     # needs the quote the breakout exit already fetched.
                     current_price = self._safe_float(live_bar.get("close", 0), 0) or current_price
@@ -4054,6 +4266,11 @@ class DomesticDaytradeEngine:
                 breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
                 if strategy_id == "paper_regime_trend" and str(symbol) in self._REGIME_TREND_ETFS:
                     breakout_exit = self._regime_trend_exit(symbol, current_price, avg_price, market="KS")
+                if strategy_id == "paper_momentum_ride":
+                    try:
+                        breakout_exit = self._momentum_exit(state, self._momentum_frame(symbol, "KS"), avg_price, "KS")
+                    except Exception:
+                        breakout_exit = None
                 if pending_order_no:
                     if (user_stop_hit or auto_stop_hit) and self._pending_sell_is_reservation(state):
                         # The resting limit locks the shares: request the cancel
@@ -4088,7 +4305,7 @@ class DomesticDaytradeEngine:
                 elif close_window and strategy_id == "volume_breakout":
                     action, order_qty, reason = "SELL_FULL", position_qty, "거래량 돌파 장마감 평탄화 (오버나잇 미보유)"
                     risk_exit = True
-                elif close_window and strategy_id == "paper_regime_trend":
+                elif close_window and strategy_id in ("paper_regime_trend", "paper_momentum_ride"):
                     action, order_qty, reason = "SELL_FULL", position_qty, "방향 추세 장마감 평탄화 (오버나잇 미보유)"
                     risk_exit = True
                 elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard and self._reservation_rearm_ready(state):
@@ -6132,6 +6349,7 @@ class DomesticDaytradeEngine:
         results = []
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload, market="US")
+        candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="US")
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
@@ -6913,6 +7131,8 @@ class DomesticDaytradeEngine:
             return self._selective_paper_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
         if str(strategy_id) == 'paper_regime_trend':
             return self._regime_trend_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
+        if str(strategy_id) == 'paper_momentum_ride':
+            return self._momentum_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
         strategy_id = self.strategy._normalize_strategy(strategy_id)
         profile = self._profile_for(symbol, strategy_id=strategy_id, market=market)
         if sync_broker:
