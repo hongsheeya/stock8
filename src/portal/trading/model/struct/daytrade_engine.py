@@ -1022,6 +1022,9 @@ class DomesticDaytradeEngine:
         state["pending_sell_type"] = ""
         state["pending_sell_placed_at"] = ""
         state.pop("pending_sell_cancel_requested_order", None)
+        state.pop("pending_sell_cancel_requested_at", None)
+        state.pop("pending_sell_cancel_attempts", None)
+        state.pop("pending_sell_cancel_error", None)
         state.pop("pending_sell_position_before", None)
 
     @staticmethod
@@ -1397,21 +1400,48 @@ class DomesticDaytradeEngine:
         pending_type = str((state or {}).get("pending_sell_type", "") or "").upper()
         return pending_type if pending_type.startswith("SELL") else "SELL_FULL"
 
+    _CANCEL_RETRY_SEC = 30
+    _CANCEL_MAX_ATTEMPTS = 10
+
     def _request_pending_sell_cancel(self, state, symbol):
-        """Request once; only a later broker observation can release the order."""
+        """Request the cancel; only a later broker observation releases the order.
+
+        A failed request is retried, at most every _CANCEL_RETRY_SEC and
+        _CANCEL_MAX_ATTEMPTS times. Callers run only after a sync still shows
+        the order open, so a retry acts on broker evidence that the cancel did
+        not take (a timeout may hide an accepted one; re-cancelling a cancelled
+        order is just rejected). It never frees the shares for a second sell.
+        Before, one rejected request (e.g. a rate limit) left the reservation
+        resting and the stop-loss suspended for the rest of the session.
+        """
         order_no = str(state.get("pending_sell_order_no", "") or "")
         qty = self._safe_int(state.get("pending_sell_qty", 0), 0)
         if not order_no or qty <= 0:
             return
+        attempts = 0
         if self._same_order_no(state.get("pending_sell_cancel_requested_order", ""), order_no):
-            return
+            if not state.get("pending_sell_cancel_error"):
+                return
+            attempts = self._safe_int(state.get("pending_sell_cancel_attempts", 1), 1)
+            if attempts >= self._CANCEL_MAX_ATTEMPTS:
+                return
+            try:
+                last = datetime.datetime.strptime(str(state.get("pending_sell_cancel_requested_at", ""))[:19], "%Y-%m-%d %H:%M:%S")
+                if (self._now() - last).total_seconds() < self._CANCEL_RETRY_SEC:
+                    return
+            except ValueError:
+                pass
         state["pending_sell_cancel_requested_order"] = order_no
+        state["pending_sell_cancel_requested_at"] = self._timestamp()
+        state["pending_sell_cancel_attempts"] = attempts + 1
         try:
             self._broker().cancel_domestic_order(order_no, symbol, qty)
-        except Exception:
+            state["pending_sell_cancel_error"] = ""
+        except Exception as exc:
             # Timeout can mean the broker accepted it but the response was lost.
-            # Do not replay or release a replacement sell against the same shares.
-            pass
+            # Never release a replacement sell here; retry only after a later
+            # sync still shows the order open.
+            state["pending_sell_cancel_error"] = str(exc)[:160] or type(exc).__name__
 
     def _default_state(self, symbol, market, seed, name="", strategy_id="vrev"):
         return {
