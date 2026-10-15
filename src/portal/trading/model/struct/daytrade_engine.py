@@ -91,6 +91,19 @@ class DomesticDaytradeEngine:
         prefix = "DT_US" if self._market_key(market, symbol) == "US" else "DT_KS"
         return f"{prefix}_{str(action or '').upper()}"
 
+    _EXPLICIT_FILL_STATUSES = ("FILLED", "EXECUTED", "DONE", "COMPLETE", "COMPLETED")
+
+    def _explicit_state_fill(self, order):
+        """(qty, price) when a saved state order carries fill evidence, else None."""
+        if not isinstance(order, dict):
+            return None
+        status = str(order.get("status", order.get("execution_status", "")) or "").upper()
+        qty = max(0, self._safe_int(order.get("filled_qty", 0), 0))
+        price = max(0.0, self._safe_float(order.get("filled_price", 0), 0))
+        if status in self._EXPLICIT_FILL_STATUSES and qty > 0 and price > 0:
+            return qty, price
+        return None
+
     def _backfill_state_history_once(self):
         """Copy legacy state-file fills into trade_log once per server process."""
         marker = f"_stock8_daytrade_history_backfilled_{os.getpid()}_{_TRADING_MODE.lower()}"
@@ -100,6 +113,7 @@ class DomesticDaytradeEngine:
             db = self.struct.db("trade_log")
             existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
             corrected = 0
+            restored = 0
             # A previous compatibility backfill treated every legacy order
             # number as a fill. Those rows are only broker acceptances unless
             # the saved state contains explicit fill evidence.
@@ -110,6 +124,30 @@ class DomesticDaytradeEngine:
                     raw = {}
                 runtime = raw.get("runtime", {}) if isinstance(raw, dict) else {}
                 if not isinstance(runtime, dict) or runtime.get("history_backfill") is not True:
+                    continue
+                order = raw.get("order") if isinstance(raw.get("order"), dict) else {}
+                fill = self._explicit_state_fill(order)
+                if fill is not None:
+                    # The evidence check above was missing, so every restart
+                    # turned the backfill's own verified fills (96 PAPER rows,
+                    # 76 KIS-verified) into PENDING with qty 0. Restore them.
+                    if str(row.get("action", "") or "").upper() == "PENDING":
+                        qty, price = fill
+                        action_detail = str(order.get("action", "") or raw.get("action", "") or "").upper().replace("_PENDING", "")
+                        reason = str(runtime.get("reason", "") or order.get("reason", "") or "상태 파일에서 복구한 PAPER 체결")
+                        raw["execution_status"] = "FILLED"
+                        raw["action"] = action_detail
+                        raw["message"] = reason
+                        db.update({
+                            "action": self._normalize_trade_action(action_detail),
+                            "filled_price": price,
+                            "filled_qty": qty,
+                            "message": reason,
+                            "raw_response": self._safe_json_dumps(raw),
+                        }, id=row.get("id"))
+                        restored += 1
+                    continue
+                if str(row.get("action", "") or "").upper() == "PENDING" and raw.get("execution_status") == "ACCEPTED_UNVERIFIED":
                     continue
                 raw["execution_status"] = "ACCEPTED_UNVERIFIED"
                 raw["action"] = f"{str(raw.get('action', row.get('action', 'ORDER')) or 'ORDER').replace('_PENDING', '')}_PENDING"
@@ -122,7 +160,7 @@ class DomesticDaytradeEngine:
                     "raw_response": self._safe_json_dumps(raw),
                 }, id=row.get("id"))
                 corrected += 1
-            if corrected:
+            if corrected or restored:
                 existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
             existing_order_nos = {
                 str(row.get("order_no", "") or "").strip()
@@ -141,12 +179,10 @@ class DomesticDaytradeEngine:
                     action_detail = str(order.get("action", "") or "").upper()
                     action = self._normalize_trade_action(action_detail)
                     order_no = str(order.get("order_no", "") or order.get("reserve_order_no", "") or "").strip()
-                    execution_status = str(order.get("status", order.get("execution_status", "")) or "").upper()
-                    qty = max(0, self._safe_int(order.get("filled_qty", 0), 0))
-                    price = max(0.0, self._safe_float(order.get("filled_price", 0), 0))
-                    explicitly_filled = execution_status in ("FILLED", "EXECUTED", "DONE", "COMPLETE", "COMPLETED") and qty > 0 and price > 0
-                    if action not in ("BUY", "SELL") or not order_no or order_no in existing_order_nos or not explicitly_filled:
+                    fill = self._explicit_state_fill(order)
+                    if action not in ("BUY", "SELL") or not order_no or order_no in existing_order_nos or fill is None:
                         continue
+                    qty, price = fill
                     created_kst = str(order.get("timestamp", "") or state.get("updated_at", "") or self._timestamp())
                     reason = str(order.get("reason", "") or "상태 파일에서 복구한 PAPER 체결")
                     payload = {
@@ -182,6 +218,8 @@ class DomesticDaytradeEngine:
                 self._append_runtime_log("info", f"기존 PAPER 단타 체결 {inserted}건을 거래 DB에 복구했습니다.", market="KS")
             if corrected:
                 self._append_runtime_log("warning", f"체결 근거가 없던 과거 주문 {corrected}건을 접수·확인대기로 정정했습니다.", market="KS")
+            if restored:
+                self._append_runtime_log("info", f"체결 근거가 있는 과거 주문 {restored}건의 체결 기록을 복원했습니다.", market="KS")
         except Exception:
             # Startup must remain available even if a legacy state file is malformed.
             return
