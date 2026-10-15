@@ -646,6 +646,168 @@ class DomesticDaytradeEngine:
                 return row
         return None
 
+    # Direction ETFs and the index each one follows.
+    _REGIME_TREND_STRATEGY = "paper_regime_trend"
+    _REGIME_TREND_ETFS = {
+        "114800": ("BEAR", "069500"), "252670": ("BEAR", "069500"), "251340": ("BEAR", "229200"),
+        "122630": ("BULL", "069500"), "233740": ("BULL", "229200"),
+    }
+
+    def _regime_trend_enabled(self):
+        if not _PAPER_MODE:
+            return False
+        value = str(self._config("daytrade_paper_regime_trend_enabled", "true") or "true").strip().lower()
+        return value in ("1", "true", "yes", "on")
+
+    def _regime_trend_params(self):
+        return {
+            "move_pct": max(0.2, min(5.0, self._safe_float(self._config("daytrade_regime_trend_move_pct", "1.0"), 1.0))),
+            "stop_pct": max(0.5, min(5.0, self._safe_float(self._config("daytrade_regime_trend_stop_pct", "1.5"), 1.5))),
+            "start": str(self._config("daytrade_regime_trend_start", "09:30") or "09:30"),
+            "end": str(self._config("daytrade_regime_trend_end", "14:30") or "14:30"),
+            "cooldown_min": max(0, self._safe_int(self._config("daytrade_regime_trend_cooldown_min", "10"), 10)),
+        }
+
+    def _regime_trend_view(self, symbol):
+        """Where the index behind a direction ETF stands: move from its open and
+        side of its VWAP. A BEAR ETF trends while the index is below its VWAP
+        and down move_pct or more; a BULL ETF is the mirror image."""
+        side, proxy = self._REGIME_TREND_ETFS[str(symbol)]
+        params = self._regime_trend_params()
+        view = {"side": side, "proxy": proxy, "ok": False, "trend": False, "reversed": False}
+        try:
+            session, bar = self._latest_snapshot(proxy, market="KS")
+        except Exception as exc:
+            return {**view, "reason": f"지수 {proxy} 시세 조회 실패: {exc}"}
+        bars = list((session or {}).get("bars", []) or [])
+        today = self._now().strftime("%Y-%m-%d")
+        if not bars or str((session or {}).get("date", ""))[:10] != today:
+            return {**view, "reason": f"지수 {proxy} 오늘 분봉 미수신"}
+        day_open = self._safe_float(bars[0].get("open", 0), 0) or self._safe_float(bars[0].get("close", 0), 0)
+        close = self._safe_float((bar or {}).get("close", 0), 0)
+        vwap = self._safe_float((bar or {}).get("vwap", 0), 0)
+        if min(day_open, close, vwap) <= 0:
+            return {**view, "reason": f"지수 {proxy} 시가/VWAP 확인 불가"}
+        move = (close / day_open - 1) * 100
+        below = close < vwap
+        if side == "BEAR":
+            trend, reversed_ = below and move <= -params["move_pct"], not below
+        else:
+            trend, reversed_ = (not below) and move >= params["move_pct"], below
+        return {**view, "ok": True, "trend": trend, "reversed": reversed_, "move_pct": round(move, 3),
+                "proxy_close": close, "proxy_vwap": round(vwap, 4), "proxy_open": day_open,
+                "reason": f"지수 {proxy} {move:+.2f}% · VWAP {'아래' if below else '위'}"}
+
+    def _regime_trend_exit(self, symbol, current_price, avg_price, view=None):
+        """Exit of the trend hold: -stop_pct, or the index back across its VWAP."""
+        current_price = self._safe_float(current_price, 0)
+        avg_price = self._safe_float(avg_price, 0)
+        if current_price <= 0 or avg_price <= 0:
+            return None
+        stop_pct = self._regime_trend_params()["stop_pct"]
+        if current_price <= avg_price * (1 - stop_pct / 100):
+            return {"action": "SELL_STOP_LOSS", "reason": f"방향 추세 손절 (평단 -{stop_pct:g}%)", "risk_exit": True}
+        view = view if view is not None else self._regime_trend_view(symbol)
+        if view.get("ok") and view.get("reversed"):
+            return {"action": "SELL_FULL", "reason": f"지수 VWAP 회복 — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
+        return None
+
+    def _regime_trend_cooling(self, state, minutes):
+        if minutes <= 0 or not str(state.get("last_exit_action", "") or "").startswith("SELL"):
+            return False
+        try:
+            last = datetime.datetime.strptime(str(state.get("last_exit_watch_at", ""))[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return False
+        return (self._now() - last).total_seconds() < minutes * 60
+
+    def _regime_trend_signal(self, symbol, market, seed, name, strategy_id, sync_broker, allow_buy):
+        """PAPER: hold a direction ETF while the index trends its way.
+
+        On 10-15 (KOSPI -8%) the inverse ETFs traded above VWAP 97-98% of the
+        day, but the scalping rules' guards blocked all 111 breakout signals.
+        Over 09-16..10-15 this rule (fixed before testing: 1.0% move, VWAP
+        reversal, -1.5% stop, flat at the close) made +15.5% over 76 trades,
+        +5.3% without 10-15; loosening the scalping guards lost 50.7% there.
+        """
+        symbol = str(symbol)
+        if not _PAPER_MODE or str(market or "KS").upper() != "KS" or symbol not in self._REGIME_TREND_ETFS:
+            raise ValueError("시장 방향 추세 전략은 국내 모의투자 방향성 ETF 전용입니다.")
+        if sync_broker:
+            self._sync_broker_positions()
+        state = self._state_for(symbol, market="KS", seed=seed, name=name, strategy_id=strategy_id)
+        if state.get("pending_buy_order_no"):
+            self._sync_pending_buy(state, symbol, "KS")
+            self._store_state(state)
+        session, bar = self._latest_snapshot(symbol, market="KS")
+        bar = bar or {}
+        price = self._safe_float(bar.get("close", 0), 0)
+        params = self._regime_trend_params()
+        view = self._regime_trend_view(symbol)
+        qty = self._safe_int(state.get("position_qty", 0), 0)
+        avg_price = self._safe_float(state.get("avg_price", 0), 0)
+        now_hm = self._now().strftime("%H:%M")
+        signal = {"action": "HOLD", "order_qty": 0, "strategy_id": strategy_id, "current_price": price,
+                  "reason": view.get("reason", "시장 방향 대기"), "regime_view": view}
+        if state.get("pending_buy_order_no") or state.get("pending_sell_order_no"):
+            signal["reason"] = "미체결 주문 확인 중: 중복 주문 금지"
+        elif qty > 0:
+            exit_signal = self._regime_trend_exit(symbol, price, avg_price, view=view)
+            if exit_signal is None and self._is_market_close_approaching("KS"):
+                exit_signal = {"action": "SELL_FULL", "reason": "방향 추세 장마감 평탄화 (오버나잇 미보유)", "risk_exit": True}
+            if exit_signal:
+                signal.update(action=exit_signal["action"], order_qty=qty, reason=exit_signal["reason"],
+                              risk_exit=exit_signal["risk_exit"])
+            else:
+                signal["reason"] = f"방향 추세 보유 중 · {view.get('reason', '')}"
+        elif not allow_buy:
+            signal["reason"] = "신규 진입 비활성"
+        elif not view.get("ok"):
+            pass
+        elif not (params["start"] <= now_hm <= params["end"]):
+            signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']})"
+        elif self._regime_trend_cooling(state, params["cooldown_min"]):
+            signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
+        elif not view.get("trend"):
+            signal["reason"] = f"시장 방향 대기 · {view.get('reason', '')} (기준 ±{params['move_pct']:g}%)"
+        elif price <= 0 or price <= self._safe_float(bar.get("vwap", 0), 0):
+            signal["reason"] = f"ETF가 VWAP 아래 — 추세 확인 대기 · {view.get('reason', '')}"
+        else:
+            order_qty = self._buy_qty(seed, price)
+            if order_qty > 0:
+                signal.update(action="BUY1", order_qty=order_qty,
+                              reason=f"{'하락' if view['side'] == 'BEAR' else '상승'} 추세 진입 · {view.get('reason', '')}")
+            else:
+                signal["reason"] = "배정 시드로 1주도 살 수 없음"
+        state["last_signal_reason"] = signal["reason"]
+        if price > 0:
+            state["last_price"] = price
+        return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, "KS"),
+                    bar=bar, session=session or {}, feature_snapshot={"regime_view": view})
+
+    def _with_regime_trend_candidates(self, rows, payload):
+        """PAPER: every pass, evaluate the direction ETFs with the trend rule
+        first. Their scalping candidates are dropped unless they hold a
+        position (those still need their own exits)."""
+        if not self._regime_trend_enabled():
+            return rows
+        etfs = self._REGIME_TREND_ETFS
+        kept = [row for row in rows if str(row.get("symbol", "")) not in etfs or row.get("source") == "active_position"]
+        held = {str(row.get("symbol", "")) for row in kept if row.get("source") == "active_position"}
+        total = self._safe_float(payload.get("total_seed_krw", payload.get("effective_seed", 0)), 0)
+        remaining = self._safe_float(payload.get("remaining_seed_krw", total), total)
+        added = []
+        for symbol in etfs:
+            if symbol in held or not self.analysis_allowed(symbol):
+                continue
+            added.append({
+                "symbol": symbol, "market": "KS", "name": self.strategy.symbol_name(symbol),
+                "strategy_id": self._REGIME_TREND_STRATEGY, "source": "regime_trend", "score": 0,
+                "entry_seed_krw": self._risk_sized_entry_seed_krw(symbol, self._REGIME_TREND_STRATEGY, "KS", total, remaining),
+                "last_price": 0,
+            })
+        return added + kept
+
     def _volume_breakout_exit(self, current_price, avg_price, profile, bar):
         """Exit rule of volume_breakout: target reached, or the breakout failed
         (price back under VWAP or the 20-bar low). A failed breakout is a risk
@@ -1666,6 +1828,11 @@ class DomesticDaytradeEngine:
                     'budget_ratio': .3, 'buy_split_ratio': 1.0, 'stop_loss_pct': 1.0,
                     'jackpot_take_profit_pct': 2.5, 'carry_overnight_enabled': False,
                     'stop_reentry_same_day_block': True}
+        if resolved_strategy == 'paper_regime_trend':
+            return {**self.strategy._default_profile_for_market(market=market),
+                    'budget_ratio': 1.0, 'buy_split_ratio': 1.0,
+                    'stop_loss_pct': self._regime_trend_params()['stop_pct'],
+                    'carry_overnight_enabled': False, 'stop_reentry_same_day_block': False}
         default_profile = self.strategy._default_profile_for_market(market=market, strategy_id=resolved_strategy)
         trained_profile = self.strategy.latest_profile(symbol=symbol, strategy_id=resolved_strategy, market=market)
         if isinstance(trained_profile, dict):
@@ -2823,7 +2990,7 @@ class DomesticDaytradeEngine:
 
         results = []
         executed_count = 0
-        candidate_rows = list(candidate_payload.get("candidates", []) or [])
+        candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload)
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
@@ -3031,6 +3198,9 @@ class DomesticDaytradeEngine:
         if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
             return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
                     'order_value': 0, 'message': f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 주문이 잠겨 있습니다.'}
+        if str(strategy_id) == 'paper_regime_trend' and (not _PAPER_MODE or market != 'KS'):
+            return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
+                    'message': '이 전략은 국내 모의투자에서만 검증할 수 있습니다.', 'order_value': 0}
         if str(strategy_id).startswith('paper_selective_'):
             if not _PAPER_MODE or market != 'KS' or getattr(self.struct.kis_api, 'is_real', None) is not False:
                 return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
@@ -3800,13 +3970,13 @@ class DomesticDaytradeEngine:
                         continue
                 close_window = self._is_market_close_approaching(market)
                 live_bar = {}
-                if strategy_id == "volume_breakout" or (close_window and strategy_id == "vrev"):
+                if strategy_id in ("volume_breakout", "paper_regime_trend") or (close_window and strategy_id == "vrev"):
                     try:
                         _session, live_bar = self._latest_snapshot(symbol, market=market)
                     except Exception:
                         live_bar = {}
                     live_bar = live_bar or {}
-                if strategy_id == "volume_breakout" and str(live_bar.get("price_source", "") or "").startswith("kis_"):
+                if strategy_id in ("volume_breakout", "paper_regime_trend") and str(live_bar.get("price_source", "") or "").startswith("kis_"):
                     # The balance price can be two minutes old; a 0.8% stop
                     # needs the quote the breakout exit already fetched.
                     current_price = self._safe_float(live_bar.get("close", 0), 0) or current_price
@@ -3818,6 +3988,8 @@ class DomesticDaytradeEngine:
                 user_stop_hit = bool(state.get("stop_loss_enabled", False)) and user_stop_price > 0 and current_price <= user_stop_price
                 auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
                 breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
+                if strategy_id == "paper_regime_trend" and str(symbol) in self._REGIME_TREND_ETFS:
+                    breakout_exit = self._regime_trend_exit(symbol, current_price, avg_price)
                 if pending_order_no:
                     if (user_stop_hit or auto_stop_hit) and self._pending_sell_is_reservation(state):
                         # The resting limit locks the shares: request the cancel
@@ -3851,6 +4023,9 @@ class DomesticDaytradeEngine:
                         risk_exit = True
                 elif close_window and strategy_id == "volume_breakout":
                     action, order_qty, reason = "SELL_FULL", position_qty, "거래량 돌파 장마감 평탄화 (오버나잇 미보유)"
+                    risk_exit = True
+                elif close_window and strategy_id == "paper_regime_trend":
+                    action, order_qty, reason = "SELL_FULL", position_qty, "방향 추세 장마감 평탄화 (오버나잇 미보유)"
                     risk_exit = True
                 elif strategy_id == "vrev" and jackpot_guard > 0 and current_price >= jackpot_guard and self._reservation_rearm_ready(state):
                     action, order_qty, reason = "PRE_SELL_JACKPOT", position_qty, f"잭팟가 ₩{round(jackpot_price):,} 근접 — 사전 지정가 예약 우선"
@@ -6672,6 +6847,8 @@ class DomesticDaytradeEngine:
     def _signal_from_state(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True, allow_buy=True, current_price_override=0):
         if str(strategy_id).startswith('paper_selective_'):
             return self._selective_paper_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
+        if str(strategy_id) == 'paper_regime_trend':
+            return self._regime_trend_signal(symbol, market, seed, name, strategy_id, sync_broker, allow_buy)
         strategy_id = self.strategy._normalize_strategy(strategy_id)
         profile = self._profile_for(symbol, strategy_id=strategy_id, market=market)
         if sync_broker:
