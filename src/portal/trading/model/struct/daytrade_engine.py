@@ -7324,7 +7324,13 @@ class DomesticDaytradeEngine:
                 })
 
         if not self._is_us_market(market) and signal["action"].startswith("BUY"):
-            if self._safe_int(bar.get("indicator_bar_count", 0), 0) < 20 or bar.get("intraday_unavailable"):
+            if str(session.get("date", "") or "")[:10] != self._now().strftime("%Y-%m-%d"):
+                # When the KIS minute fetch fails, the Yahoo fallback (about 20
+                # minutes late) can still end on yesterday's session early in
+                # the day: its ~380 bars passed the warm-up check and its anchor
+                # was the close from two days ago.
+                signal.update(action="HOLD", order_qty=0, reason="오늘 분봉 미수신: 신규 진입 대기")
+            elif self._safe_int(bar.get("indicator_bar_count", 0), 0) < 20 or bar.get("intraday_unavailable"):
                 signal.update(action="HOLD", order_qty=0, reason="지표 워밍업 대기: 실제 분봉 최소 20개 필요")
             elif prev_close <= 0 or session.get("prev_close_confirmed") is False:
                 signal.update(action="HOLD", order_qty=0, reason="전일 종가 미확인: 신규 진입 대기")

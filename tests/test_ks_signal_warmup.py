@@ -66,3 +66,28 @@ class WarmupTests(unittest.TestCase):
         self.assertEqual(result["signal"]["anchor_price"], 100)
         self.assertEqual(result["signal"]["action"], "HOLD")
         self.assertIn("20", result["signal"]["reason"])
+
+
+class TodaySessionTests(unittest.TestCase):
+    """A stale (yesterday's) session must not open a KS entry."""
+
+    def _signal(self, session_date):
+        engine, _ = _engine_with_state({}, [])
+        engine._profile_for = lambda *args, **kwargs: dict(LIVE_PROFILE)
+        engine._aggregate_ticks_to_candle = lambda *args: None
+        engine._market_buy_budget = lambda *args, **kwargs: {"budget_total": 1000000, "buy_budget": 1000000}
+        engine._append_runtime_log = lambda *args, **kwargs: None
+        engine._guardrails = lambda *args, **kwargs: {"issues": [], "warnings": []}
+        engine._latest_snapshot = lambda *args, **kwargs: (
+            {"date": session_date, "prev_close": 100, "prev_close_confirmed": True},
+            {"close": 99.8, "open": 100, "vwap": 99.9, "rsi14": 45, "indicator_bar_count": 380})
+        with patch.object(_StrategyStub, "_event_filter_snapshot", create=True, return_value={"blocked": False}):
+            return engine._signal_from_state("TEST", sync_broker=False)["signal"]
+
+    def test_todays_session_can_enter(self):
+        self.assertTrue(self._signal("2026-05-26")["action"].startswith("BUY"))
+
+    def test_yesterdays_session_holds(self):
+        signal = self._signal("2026-05-25")
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("오늘 분봉", signal["reason"])
