@@ -1128,6 +1128,17 @@ class DomesticDaytradeEngine:
                       "SPXU": "AMEX", "SOXS": "AMEX", "QLD": "AMEX", "SSO": "AMEX", "USD": "AMEX"}
         if normalized in known_etfs:
             return known_etfs[normalized]
+        # A mover leaves the scan within minutes; its exits keep the venue it
+        # was bought on (state), or the one any scan this process saw.
+        try:
+            held = (self._load_state_map() or {}).get(f"{normalized}.US", {}) or {}
+            if str(held.get("us_exchange", "")).upper() in ("NASD", "NYSE", "AMEX"):
+                return str(held["us_exchange"]).upper()
+        except Exception:
+            pass
+        booked = str(sys.__dict__.get("_stock8_us_exchange_book", {}).get(normalized, "")).upper()
+        if booked in ("NASD", "NYSE", "AMEX"):
+            return booked
         nyse_symbols = {"SPY", "GS", "JPM", "BAC", "WMT", "BRK", "XOM", "JNJ", "PG", "V", "MA"}
         sym = str(symbol or "").upper().split(".")[0]
         return "NYSE" if sym in nyse_symbols else "NASD"
@@ -3524,6 +3535,7 @@ class DomesticDaytradeEngine:
                             "order_value": 0,
                         }
                     exchange = self._us_exchange(symbol)
+                    state["us_exchange"] = exchange
                     buying_power = self._broker().get_buying_power_info(symbol=symbol, price=round(current_price, 2), exchange=exchange)
                     max_qty = max(0, self._safe_int(buying_power.get("executable_qty", buying_power.get("broker_qty", buying_power.get("qty", 0))), 0))
                     orderable_amount_usd = self._safe_float(buying_power.get("executable_amount", buying_power.get("broker_amount", buying_power.get("amount", 0))), 0)

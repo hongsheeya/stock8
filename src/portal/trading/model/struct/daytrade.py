@@ -41,7 +41,13 @@ class Daytrade:
     _DATASET_CACHE_TTL: int = 180
     _DYNAMIC_UNIVERSE_CACHE = {"ts": 0.0, "rows": [], "market_regime": {}}
     _DYNAMIC_UNIVERSE_TTL = 300
-    _US_DYNAMIC_CACHE = {}
+    # wiz.model() re-executes this module per engine instance; keep the US
+    # scan (and its 5-minute attempt throttle) for the whole process.
+    _US_DYNAMIC_CACHE = sys.__dict__.setdefault("_stock8_us_dynamic_cache", {})
+    # Order venue of every US symbol a scan has seen. A mover drops out of the
+    # scan within minutes, but its exits still need the right exchange code.
+    _US_EXCHANGE_BOOK = sys.__dict__.setdefault("_stock8_us_exchange_book", {})
+    _YAHOO_EXCHANGES = {"NMS": "NASD", "NGM": "NASD", "NCM": "NASD", "NYQ": "NYSE", "ASE": "AMEX", "PCX": "AMEX"}
     US_EXCLUDED_ETFS = {'TQQQ', 'SOXL', 'SPXL', 'UPRO', 'SPY', 'QQQ', 'IWM'}
     US_MAJOR_SYMBOLS = {'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'AVGO', 'TSLA', 'TSM'}
     STRATEGIES = {
@@ -749,6 +755,45 @@ class Daytrade:
                 'selection_reason': f'등락 {change:.1f}% · 5분 {momentum:.1f}% · 거래량 {volume:,.0f}주 · 거래대금 ${turnover:,.0f}',
                 'trade_ready': False}
 
+    def _yahoo_us_movers(self, limit=30):
+        """Today's US movers from Yahoo's screener, regular session only.
+
+        KIS's overseas ranking (HHDFS76260000) is not served on the paper
+        gateway, so PAPER always fell back to the fixed large-cap list and
+        evaluated the same three stocks every pass. The KIS filter is applied
+        to the returned quotes (outside the session the screen is stale).
+        """
+        import yfinance as yf
+        Q = yf.EquityQuery
+        query = Q("and", [Q("eq", ["region", "us"]), Q("gte", ["percentchange", 5]), Q("lte", ["percentchange", 45]),
+                          Q("gt", ["intradayprice", 2]), Q("gt", ["dayvolume", 300000])])
+        result = yf.screen(query, sortField="percentchange", sortAsc=False, size=100) or {}
+        rows = []
+        for quote in list(result.get("quotes", []) or []):
+            symbol = str(quote.get("symbol", "") or "").strip().upper()
+            name = str(quote.get("shortName") or quote.get("longName") or symbol)
+            exchange = self._YAHOO_EXCHANGES.get(str(quote.get("exchange", "") or "").upper())
+            price = self._safe_float(quote.get("regularMarketPrice"), 0)
+            volume = self._safe_float(quote.get("regularMarketVolume"), 0)
+            change = self._safe_float(quote.get("regularMarketChangePercent"), 0)
+            bid, ask = self._safe_float(quote.get("bid"), 0), self._safe_float(quote.get("ask"), 0)
+            turnover = price * volume
+            if (not symbol or not symbol.replace("-", "").isalnum() or exchange is None
+                    or str(quote.get("quoteType", "")).upper() != "EQUITY"
+                    or str(quote.get("marketState", "")).upper() != "REGULAR"
+                    or symbol in self.US_EXCLUDED_ETFS
+                    or any(word in name.upper() for word in ("ETF", "DIREXION", "PROSHARES", "ISHARES", "LEVERAG", "ETN"))):
+                continue
+            spread = (ask - bid) / bid * 100 if bid > 0 and ask >= bid else 0.0
+            if not (2 <= price <= 2000 and volume >= 300000 and turnover >= 2000000 and 5 <= change <= 45 and spread <= 0.8):
+                continue
+            rows.append({"symbol": symbol, "name": name, "market": "US", "exchange": exchange,
+                         "source": "yahoo_gainers", "price": price, "volume": volume, "turnover_usd": turnover,
+                         "change_pct": change, "momentum_5m_pct": 0.0, "spread_pct": round(spread, 3),
+                         "selection_reason": f"등락 {change:.1f}% · 거래량 {volume:,.0f}주 · 거래대금 ${turnover:,.0f} (Yahoo 급등)",
+                         "trade_ready": False})
+        return sorted(rows, key=lambda row: row["turnover_usd"], reverse=True)[:limit]
+
     def refresh_us_dynamic_candidate_universe(self, force=False):
         scope = self._us_scope()
         cached = self._US_DYNAMIC_CACHE.get(scope, {})
@@ -767,8 +812,17 @@ class Daytrade:
                         rows[item['symbol']] = item
             except Exception:
                 errors.append(exchange)
-        cached.update(ts=_time.monotonic(), errors=errors,
-                      rows=sorted(rows.values(), key=lambda x: (x['momentum_5m_pct'], x['turnover_usd']), reverse=True)[:30])
+        ranked = sorted(rows.values(), key=lambda x: (x['momentum_5m_pct'], x['turnover_usd']), reverse=True)[:30]
+        source = 'kis_momentum_rank'
+        if not ranked:
+            try:
+                ranked = self._yahoo_us_movers()
+                source = 'yahoo_gainers'
+            except Exception:
+                errors.append('YAHOO')
+        for item in ranked:
+            Daytrade._US_EXCHANGE_BOOK[item['symbol']] = item['exchange']
+        cached.update(ts=_time.monotonic(), errors=errors, rows=ranked, source=source if ranked else '')
         return self.us_candidate_universe()
 
     def us_candidate_universe_policy(self):
@@ -779,7 +833,8 @@ class Daytrade:
             'dynamic_ready': ready,
             'scan_age_seconds': round(age) if age is not None else None,
             'unavailable_exchanges': list(cache.get('errors', [])),
-            'source_label': 'KIS 급등 순위' if ready else '기본 목록 · 실시간 급등 후보 아님',
+            'source_label': (('Yahoo 급등 (KIS 순위 미지원 대체)' if cache.get('source') == 'yahoo_gainers' else 'KIS 급등 순위')
+                             if ready else '기본 목록 · 실시간 급등 후보 아님'),
             "mode": "kis_momentum_with_fallback",
             "summary": "추천 갱신 시 NASDAQ·NYSE·AMEX 급등 순위를 조회합니다. 조회 실패·조건 미달 시 기본 개별주 목록을 표시하며, 후보 선정만으로 주문하지 않습니다.",
             "selection_rules": [
