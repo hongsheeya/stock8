@@ -65,5 +65,35 @@ class OverviewLatencyTests(unittest.TestCase):
         builder_started.assert_not_called()
 
 
+class LastGoodReadTests(unittest.TestCase):
+    """PAPER dashboard KIS reads share a >=1.1 s gateway slot with the trading
+    worker and often time out; total assets then showed cash alone."""
+
+    def setUp(self):
+        import copy
+        import time
+        node = _function("_read_with_last_good")
+        self.clock = [1000.0]
+        self.scope = {"copy": copy, "time": SimpleNamespace(monotonic=lambda: self.clock[0])}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "<last-good>", "exec"), self.scope)
+        self.read_with_last_good = self.scope["_read_with_last_good"]
+
+    def test_timeout_reuses_the_last_good_result_while_recent(self):
+        store = {}
+        self.assertEqual(self.read_with_last_good(store, "k", lambda: {"total": 180}), ({"total": 180}, None))
+        self.clock[0] += 120
+
+        def timeout():
+            raise TimeoutError("KIS 프로세스 간 호출 대기 한도 초과")
+        self.assertEqual(self.read_with_last_good(store, "k", timeout), ({"total": 180}, 120))
+        self.clock[0] += 600
+        with self.assertRaises(TimeoutError):
+            self.read_with_last_good(store, "k", timeout)
+
+    def test_without_a_previous_success_the_failure_surfaces(self):
+        with self.assertRaises(RuntimeError):
+            self.read_with_last_good({}, "k", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+
+
 if __name__ == "__main__":
     unittest.main()

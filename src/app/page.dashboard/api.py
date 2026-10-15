@@ -167,6 +167,21 @@ def _session_user_id():
         return ""
 
 
+def _read_with_last_good(store, key, read, max_age_sec=600.0):
+    """Run read(); remember a success, and on failure reuse the last good
+    result while it is at most max_age_sec old. Returns (result, stale_age)
+    where stale_age is None for a fresh read."""
+    try:
+        result = read()
+    except Exception:
+        entry = store.get(key)
+        if entry and time.monotonic() - entry[0] <= max_age_sec:
+            return copy.deepcopy(entry[1]), round(time.monotonic() - entry[0])
+        raise
+    store[key] = (time.monotonic(), copy.deepcopy(result))
+    return result, None
+
+
 def _dashboard_cache_scope():
     user_id = _session_user_id()
     return f"user:{user_id}" if user_id else "anon"
@@ -1853,11 +1868,25 @@ def _build_overview_payload(force_refresh=False):
             # Dashboard reads must fail fast. Worker/order paths keep their
             # own retry policy, while this UI path performs at most one short
             # attempt per endpoint and falls back to cached/local state.
+            # In PAPER every KIS call shares a >=1.1 s gateway slot with the
+            # trading worker, so these reads often time out ("KIS 프로세스 간
+            # 호출 대기 한도 초과") and the dashboard showed cash alone as total
+            # assets. A timed-out read reuses its last good result (<= 10 min).
+            last_good = _DASHBOARD_SHARED.setdefault("kis_last_good", {})
+            scope = _dashboard_cache_scope()
+
             def _dashboard_kis_call(method_name, *args, **kwargs):
-                mark("before_kis")
-                try:
+                key = (scope, method_name, repr(args), repr(sorted(kwargs.items())))
+
+                def read():
                     with kis.request_options(timeout=3.0 if force_refresh else 2.6, retries=0):
                         return getattr(kis, method_name)(*args, **kwargs)
+                mark("before_kis")
+                try:
+                    result, stale_age = _read_with_last_good(last_good, key, read)
+                    if stale_age is not None:
+                        timings["stale." + method_name] = stale_age
+                    return result
                 finally:
                     mark("kis." + method_name)
 
