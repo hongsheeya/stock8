@@ -69,12 +69,15 @@ Copy-Item -Path (Join-Path $buildSourceRoot "*") -Destination $bundleSourceRoot 
 
 $version = Get-Date -Format "yyyyMMdd-HHmmss"
 $indexPath = Join-Path $bundleRoot "index.html"
-$html = Get-Content -Raw -LiteralPath $indexPath
+# Windows PowerShell 5.1 has no utf8NoBOM and reads BOM-less files as the ANSI
+# code page, so read and write index.html as UTF-8 through .NET directly.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$html = [System.IO.File]::ReadAllText($indexPath, $utf8NoBom)
 $html = [regex]::Replace($html, 'href="main\.css(?:\?v=[^"]*)?"', "href=`"main.css?v=$version`"")
 $html = [regex]::Replace($html, 'src="vendor\.js(?:\?v=[^"]*)?"', "src=`"vendor.js?v=$version`"")
 $html = [regex]::Replace($html, 'src="main\.js(?:\?v=[^"]*)?"', "src=`"main.js?v=$version`"")
 $html = [regex]::Replace($html, 'data-version="[^"]*"', "data-version=`"$version`"")
-Set-Content -LiteralPath $indexPath -Value $html -Encoding utf8NoBOM -NoNewline
+[System.IO.File]::WriteAllText($indexPath, $html, $utf8NoBom)
 
 if (-not (Test-Path -LiteralPath $bundleMain)) {
     throw "Frontend deploy did not create $bundleMain"
