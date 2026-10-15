@@ -2240,10 +2240,20 @@ class Struct:
             }
 
         try:
-            result = self.engine.sync_external_cycle_trades(lookback_days=7) or {}
+            if PAPER_MODE:
+                # The history check queries every day x symbol x exchange, both
+                # symbol and all-symbol views, three times. Reaching back to the
+                # cycle start (09-09) meant ~1,300 PAPER gateway calls per run
+                # every 10 minutes, starving the 09:00 KS session and failing on
+                # the call-wait limit. Recent fills are enough: older ones are
+                # booked, and LIVE's sync job already runs recent-only.
+                result = self.engine.sync_external_cycle_trades(lookback_days=3, recent_only=True) or {}
+            else:
+                result = self.engine.sync_external_cycle_trades(lookback_days=7) or {}
             if _external_cycle_sync_verified(result):
                 state["last_external_cycle_sync_bucket"] = bucket
                 state["last_external_cycle_sync_error_ts"] = 0.0
+                state["last_external_cycle_sync_verified_day"] = now.strftime("%Y-%m-%d")
             else:
                 state["last_external_cycle_sync_error_ts"] = time.time()
             state["last_external_cycle_sync_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -2344,6 +2354,8 @@ class Struct:
                     _external_cycle_sync_window_open(now_kst)
                     and str(state.get("last_external_cycle_sync_bucket", "") or "") != external_cycle_sync_bucket
                     and (now_ts - external_cycle_sync_last_error_ts) >= 60
+                    # US fills only arrive overnight: one verified PAPER sync a day is enough.
+                    and not (PAPER_MODE and state.get("last_external_cycle_sync_verified_day") == now_kst.strftime("%Y-%m-%d"))
                 )
                 loc_reservation_bucket = _loc_reservation_bucket(now_kst)
                 loc_reservation_retry_due = (
