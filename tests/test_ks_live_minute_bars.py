@@ -4,6 +4,7 @@ Yahoo's Korean minute data ran about 20 minutes behind (10-15 11:15: last
 bar 10:55 for 005930/069500/114800/036930), so live indicators lagged.
 """
 import datetime
+import importlib.util
 import os
 import sys
 import types
@@ -116,6 +117,22 @@ class LiveDatasetTests(unittest.TestCase):
     def test_live_uses_the_same_real_time_bars(self):
         with patch.dict(os.environ, {"TRADING_MODE": "LIVE"}):
             self.assertEqual(self.svc.prepare_live_dataset("005930", market="KS")[-1]["bars"][-1]["bar_source"], "kis_minute")
+
+
+class CacheSurvivesReloadTests(unittest.TestCase):
+    def test_wiz_reload_keeps_the_minute_and_suffix_caches(self):
+        # wiz.model() re-executes daytrade.py for every engine instance, so a
+        # plain class dict was empty again on every worker pass.
+        def load():
+            spec = importlib.util.spec_from_file_location("daytrade_reload", daytrade_module.__file__)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.Daytrade
+
+        first, second = load(), load()
+        self.assertIsNot(first, second)
+        self.assertIs(first._KS_LIVE_MINUTES, second._KS_LIVE_MINUTES)
+        self.assertIs(first._DOMESTIC_YF_SUFFIX, second._DOMESTIC_YF_SUFFIX)
 
 
 class SuffixQualityTests(unittest.TestCase):
