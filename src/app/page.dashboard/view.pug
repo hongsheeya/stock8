@@ -450,9 +450,6 @@ div(*ngIf="!legacyMode", class="dx-alerts")
     div(*ngIf="privacyLocked || setupRequired", class="dx-alert is-info")
         strong 개인정보 보호 잠금
         span {{setupMessage || '증권사 API 연결 전에는 자산, 수익, 보유 종목을 표시하지 않습니다.'}}
-    div(*ngIf="profitSyncMessage && !profitLoading", class="dx-alert is-warn")
-        strong 손익 집계 확인 필요
-        span {{profitSyncMessage}}
     div(*ngIf="!balanceSyncOk && balanceSyncMessage", class="dx-alert is-warn")
         strong 잔고 조회 실패
         span {{balanceSyncMessage}}
@@ -481,6 +478,7 @@ div(*ngIf="!legacyMode", class="dx-kpis")
         div(*ngIf="profitSnapshotReady", class="dx-kpi-sub")
             span([class]="profitChangeClass(profitData.total_return)") {{profitData.total_return > 0 ? '+' : ''}}{{profitData.total_return | number:'1.2-2'}}%
             |  · 실현 {{signedKRW(profitData.realized_profit || 0)}} · 미실현 {{signedKRW(profitData.unrealized_profit || 0)}}
+        div(*ngIf="profitSyncMessage && !profitLoading", class="dx-kpi-note") {{profitSyncMessage}}
     div(class="dx-kpi")
         div(class="dx-kpi-label") 주문가능
         div(class="dx-kpi-value") ₩{{formatKRW(buyingPower)}}
