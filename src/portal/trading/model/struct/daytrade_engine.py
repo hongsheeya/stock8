@@ -1117,6 +1117,21 @@ class DomesticDaytradeEngine:
         self._fs().write.json(f"{self._data_root()}/reconciliation.json", result)
         return result
 
+    def _final_day_order_status(self, matched, placed_at):
+        """Status of a domestic order, final once its trading day has closed.
+
+        KRX orders are day orders: in a past day's history the filled quantity
+        is final and any remainder expired, yet the query still reports it
+        OPEN/PARTIAL (rmn_qty > 0, only an explicit cancel zeroes it). Read
+        as-is, an order from a previous day stayed pending forever; for a
+        reservation that also kept the stop-loss suspended.
+        """
+        status = str(matched.get("status", "OPEN") or "OPEN").upper()
+        placed_day = str(placed_at or "")[:10]
+        if status in ("OPEN", "PARTIAL") and placed_day and placed_day < self._now().strftime("%Y-%m-%d"):
+            return "FILLED" if self._safe_int(matched.get("filled_qty", 0), 0) > 0 else "CANCELLED"
+        return status
+
     def _domestic_fills_for_pending(self, symbol, placed_at=""):
         placed_date = str(placed_at or "")[:10].replace("-", "")
         today = self._now().strftime("%Y%m%d")
@@ -1148,7 +1163,8 @@ class DomesticDaytradeEngine:
         matched = next((row for row in fills if self._same_order_no(row.get("order_no", ""), order_no)), None)
         if not matched:
             return "open"
-        status = str(matched.get("status", "OPEN") or "OPEN").upper()
+        status = self._final_day_order_status(matched, state.get("pending_buy_placed_at", ""))
+        matched = {**matched, "status": status}
         self._mark_state_order_fill(state, order_no, matched)
         if status in ("FILLED", "CANCELLED"):
             filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
@@ -1284,7 +1300,8 @@ class DomesticDaytradeEngine:
                 break
 
         if matched:
-            status = matched.get("status", "OPEN")
+            status = self._final_day_order_status(matched, state.get("pending_sell_placed_at", ""))
+            matched = {**matched, "status": status}
             # Preserve executed shares even if the remainder is cancelled.
             # History consumes cumulative broker fills, not requested quantity.
             self._mark_state_order_fill(state, order_no, matched)
