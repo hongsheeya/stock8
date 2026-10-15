@@ -464,8 +464,9 @@ div(*ngIf="!legacyMode", class="dx-alerts")
 div(*ngIf="!legacyMode", class="dx-kpis")
     div(class="dx-kpi")
         div(class="dx-kpi-label") 총자산
-        div(class="dx-kpi-value") ₩{{formatKRW(totalAsset)}}
-        div(class="dx-kpi-sub") {{totalAssetVerified ? '잔고 대조 완료' : '추정치 · 잔고 대조 전'}}
+        div(*ngIf="!totalAssetPending", class="dx-kpi-value") ₩{{formatKRW(totalAsset)}}
+        div(*ngIf="totalAssetPending", class="dx-kpi-value is-muted") 조회 중
+        div(class="dx-kpi-sub") {{totalAssetPending ? '보유 평가 반영 전 · 새로고침하면 확정' : (totalAssetVerified ? '잔고 대조 완료' : '추정치 · 잔고 대조 전')}}
     div(class="dx-kpi")
         div(class="dx-kpi-label")
             span 손익
@@ -487,7 +488,7 @@ div(*ngIf="!legacyMode", class="dx-kpis")
             span(*ngIf="!usdSyncOk") 달러 {{usdQueryDeferred ? '조회 대기' : '조회 실패'}}
     div(class="dx-kpi")
         div(class="dx-kpi-label") 주식 보유
-        div(class="dx-kpi-value") ₩{{formatKRW(portfolioValue)}}
+        div(class="dx-kpi-value") ₩{{formatKRW(displayStockValue)}}
         div(class="dx-kpi-sub") 단타 {{daytradePositionSummary.count || 0}}종목 · 무한매수 {{infiniteBuySummary.total || 0}}사이클
 
 //- Strategy seeds (shown when the server sends editable controls)
