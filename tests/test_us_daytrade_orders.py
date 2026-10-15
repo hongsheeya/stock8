@@ -145,6 +145,57 @@ class UsExitTests(unittest.TestCase):
         self.assertNotEqual(signal["action"], "PRE_SELL_JACKPOT")
 
 
+class UsExitLevelTests(unittest.TestCase):
+    """Live US exits use each strategy's backtest take-profit / stop-loss."""
+
+    def setUp(self):
+        self.addCleanup(daytrade_engine._USD_KRW_CACHE.clear)
+
+    def test_breakout_takes_profit_and_stops_at_its_backtest_levels(self):
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 104.1, MIDDAY)["action"], "SELL_FULL")
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 97.4, MIDDAY)["action"], "SELL_STOP_LOSS")
+        self.assertEqual(_us_signal(_us_state(100.0, strategy_id="us_breakout"), 103.0, MIDDAY)["action"], "HOLD")
+
+    def test_premarket_exits_fully_at_three_percent(self):
+        signal = _us_signal(_us_state(100.0, buy1_used=True), 103.1, MIDDAY)
+        self.assertEqual((signal["action"], signal["order_qty"]), ("SELL_FULL", 7))
+
+    def test_trained_levels_override_the_defaults(self):
+        profile = {**daytrade_module.Daytrade.US_DEFAULT_PROFILE, "breakout_take_profit_pct": 3.0}
+        signal = _us_signal(_us_state(100.0, strategy_id="us_pullback"), 103.1, MIDDAY,
+                            _profile_for=lambda *_a, **_k: dict(profile))
+        self.assertEqual(signal["action"], "SELL_FULL")
+
+    def test_floors_match_the_backtests(self):
+        engine, _ = _engine()
+        self.assertEqual(engine._us_exit_levels("us_vwap", {"breakout_take_profit_pct": 1.0,
+                                                            "breakout_stop_loss_pct": 0.5}), (2.5, 1.5))
+
+
+class BudgetFxTests(unittest.TestCase):
+    """PAPER 10-15: an active infinite-buy reserve with no balance FX rate
+    made the KS budget "reserve_unavailable" and the day-trade seed ₩0."""
+
+    def _budget(self, rate):
+        engine, _ = _engine()
+        engine.infinite_buy_daily_reserve = lambda **_k: {"reserve_usd": 1000, "ready": True}
+        engine._fetch_kis_balance_raw = lambda: {"withdrawable_krw": 1500000, "krw_balance": 1500000, "usd_krw": 0,
+                                                 "source": "test", "total_asset_krw": 10000000}
+        engine._usd_krw_rate = lambda cached_only=False: rate
+        engine.portfolio_usage = lambda **_k: {"active_entry_seed_krw": 0, "position_count": 0}
+        engine._dynamic_daytrade_allocation = lambda **k: {"target_seed_krw": k["total_asset_krw"] * .6}
+        return engine.shared_budget_status(requested_seed=1000000, market="KS")
+
+    def test_reserve_converts_with_the_shared_rate(self):
+        budget = self._budget(1000.0)
+        self.assertEqual(budget["budget_status"], "ready")
+        self.assertEqual(budget["applied_reserve_krw"], 1000000)
+        self.assertEqual(budget["remaining_seed_krw"], 300000)
+
+    def test_no_rate_anywhere_still_fails_closed(self):
+        self.assertEqual(self._budget(0.0)["budget_status"], "reserve_unavailable")
+
+
 class UsPricingTests(unittest.TestCase):
     def test_market_orders_are_marketable_limits(self):
         engine, _ = _engine()
