@@ -1219,7 +1219,7 @@ class DomesticDaytradeEngine:
                 prev_avg     = self._safe_float(state.get("avg_price", 0), 0)
                 prev_qty     = int(state.get("position_qty", 0) or 0)
                 realized = (filled_price - prev_avg) * filled_qty if filled_price > 0 and prev_avg > 0 else 0
-                state["realized_profit"] = round(self._safe_float(state.get("realized_profit", 0), 0) + realized, 2)
+                self._book_realized(state, realized)
                 state["position_qty"] = max(0, prev_qty - filled_qty)
                 if state["position_qty"] == 0:
                     state["avg_price"]   = 0.0
@@ -2519,9 +2519,36 @@ class DomesticDaytradeEngine:
             "position_count": len(rows),
         }
 
-    def daily_loss_status(self, requested_seed=0, use_live_price=True, use_cache_only=False):
+    def _pnl_day(self, market, moment=None):
+        """The trading day a P&L belongs to: KST date for KS, US session date for US."""
+        moment = moment or self._now()
+        return self._us_session_date(moment) if self._is_us_market(market) else moment.strftime("%Y-%m-%d")
+
+    def _book_realized(self, state, realized):
+        """Add a realized P&L (in the symbol's currency) to the lifetime and
+        today's totals. realized_profit is lifetime: the session rollover
+        carries it forward, so it cannot measure one day's loss."""
+        realized = self._safe_float(realized, 0)
+        state["realized_profit"] = round(self._safe_float(state.get("realized_profit", 0), 0) + realized, 2)
+        day = self._pnl_day(state.get("market", "KS"))
+        so_far = self._safe_float(state.get("daily_realized_profit", 0), 0) if state.get("daily_realized_date") == day else 0.0
+        state["daily_realized_profit"] = round(so_far + realized, 2)
+        state["daily_realized_date"] = day
+
+    def daily_loss_status(self, requested_seed=0, use_live_price=True, use_cache_only=False, market=None):
+        """Today's day-trade P&L in KRW against the daily loss limit.
+
+        Realized counts only today's bookings (daily_realized_profit). The
+        lifetime realized_profit made 9/3-10/1 losses on 069500/114800 count
+        as today's (-1.97M vs the 1M limit) and blocked every KS entry on
+        10-15 with no trade that day. US P&L is in USD and is converted. With
+        `market`, only that lane's symbols count (KS and US have their own
+        seeds); infinite-buy symbols never count.
+        """
         today = self._now().strftime("%Y-%m-%d")
         state_map = self._load_state_map()
+        want_us = None if market is None else self._is_us_market(market)
+        usd_krw = None
         realized_profit = 0.0
         unrealized_profit = 0.0
         tracked_symbols = []
@@ -2529,18 +2556,34 @@ class DomesticDaytradeEngine:
             state = state_map.get(key, {}) or {}
             qty = self._safe_int(state.get("position_qty", 0), 0)
             session_date = str(state.get("session_date", "") or "")
-            if qty <= 0 and session_date != today:
-                continue
             symbol = state.get("symbol", "")
             market = state.get("market", "KS")
+            is_us = self._is_us_market(market)
+            if want_us is not None and is_us != want_us:
+                continue
+            if self._is_infinite_buy_symbol(symbol, market="US" if is_us else market):
+                continue
+            pnl_day = self._pnl_day(market)
+            booked_today = state.get("daily_realized_date") == pnl_day
+            if qty <= 0 and session_date != today and not booked_today:
+                continue
             avg_price = self._safe_float(state.get("avg_price", 0), 0)
             fallback_price = self._safe_float(state.get("last_price", avg_price), avg_price)
-            if use_live_price:
+            if qty <= 0:
+                current_price = 0.0
+            elif use_live_price:
                 current_price = self._current_price(symbol, market=market, fallback=fallback_price or avg_price)
             else:
                 current_price = fallback_price if fallback_price > 0 else avg_price
-            realized = self._safe_float(state.get("realized_profit", 0), 0)
+            realized = self._safe_float(state.get("daily_realized_profit", 0), 0) if booked_today else 0.0
             unrealized = ((current_price - avg_price) * qty) if qty > 0 and avg_price > 0 else 0.0
+            if is_us and (realized or unrealized):
+                if usd_krw is None:
+                    usd_krw = self._usd_krw_rate(cached_only=use_cache_only)
+                    if usd_krw <= 0:
+                        usd_krw = self._safe_float(self._config("daytrade_usd_krw_fallback", "1400"), 1400.0)
+                realized *= usd_krw
+                unrealized *= usd_krw
             realized_profit += realized
             unrealized_profit += unrealized
             tracked_symbols.append({
@@ -2582,7 +2625,7 @@ class DomesticDaytradeEngine:
                 "executed": False,
                 "message": "단타 자동운용이 비활성 상태입니다.",
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="KS"),
                 "results": [],
                 "candidates": [],
             }
@@ -2595,7 +2638,7 @@ class DomesticDaytradeEngine:
                 # Outside the session, never block the whole loop on fresh KIS
                 # balance calls; the dashboard has its own explicit refresh.
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS", use_cache_only=True),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True, market="KS"),
                 "results": [],
                 "candidates": [],
             }
@@ -2622,7 +2665,7 @@ class DomesticDaytradeEngine:
                 "executed": False,
                 "message": "단타에 사용할 수 있는 여유 시드가 없습니다.",
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="KS"),
                 "results": [],
                 "candidates": candidate_payload.get("candidates", []),
                 "excluded_by_price": excluded_by_price,
@@ -2778,7 +2821,7 @@ class DomesticDaytradeEngine:
                     "remaining_seed_after": round(remaining_seed_krw, 2),
                 })
 
-        daily_loss = self.daily_loss_status(requested_seed=effective_seed)
+        daily_loss = self.daily_loss_status(requested_seed=effective_seed, market="KS")
         message = f"국내 주식 자동 점검 완료. 후보 {len(candidate_rows)}개를 점검했습니다."
         if executed_count > 0:
             message = f"국내 단타 자동순환으로 {executed_count}건의 주문을 실행했습니다."
@@ -2793,7 +2836,7 @@ class DomesticDaytradeEngine:
             "executed_count": executed_count,
             "message": message,
             "budget": self.shared_budget_status(requested_seed=requested_seed, market="KS"),
-            "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+            "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="KS"),
             "portfolio": self.portfolio_usage(market_filter="KS"),
             "results": results,
             "candidates": candidate_payload.get("candidates", []),
@@ -3288,7 +3331,7 @@ class DomesticDaytradeEngine:
                     }
                 sell_qty = min(prev_qty, exec_qty)
                 realized = (exec_price - prev_avg) * sell_qty if prev_avg > 0 else 0.0
-                state["realized_profit"] = round(self._safe_float(state.get("realized_profit", 0), 0) + realized, 2)
+                self._book_realized(state, realized)
                 new_qty = max(0, prev_qty - sell_qty)
                 state["position_qty"] = new_qty
                 state["last_exit_price"] = round(exec_price, 4) if exec_price > 0 else 0.0
@@ -3834,7 +3877,7 @@ class DomesticDaytradeEngine:
         prev_avg = self._safe_float(state.get("avg_price", 0), 0)
         new_qty = max(0, position_qty - sell_qty)
         realized = (exec_price - prev_avg) * sell_qty
-        state["realized_profit"] = round(self._safe_float(state.get("realized_profit", 0), 0) + realized, 2)
+        self._book_realized(state, realized)
         state["position_qty"] = new_qty
         if new_qty == 0:
             state["avg_price"] = 0.0
@@ -5643,7 +5686,7 @@ class DomesticDaytradeEngine:
                 "executed": False,
                 "message": "미국주식 단타 자동운용이 비활성 상태입니다.",
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="US"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="US"),
                 "results": [],
                 "candidates": [],
             }
@@ -5653,7 +5696,7 @@ class DomesticDaytradeEngine:
                 "executed": False,
                 "message": "미국 주식 시장(프리마켓/본장)이 열려있지 않습니다.",
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="US", use_cache_only=True),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, use_cache_only=True, market="US"),
                 "results": [],
                 "candidates": [],
             }
@@ -5679,7 +5722,7 @@ class DomesticDaytradeEngine:
                 "executed": False,
                 "message": "미장 단타에 사용할 수 있는 여유 시드가 없습니다.",
                 "budget": self.shared_budget_status(requested_seed=requested_seed, market="US"),
-                "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+                "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="US"),
                 "results": [],
                 "candidates": candidate_payload.get("candidates", []),
                 "excluded_by_price": excluded_by_price,
@@ -5823,7 +5866,7 @@ class DomesticDaytradeEngine:
                     "remaining_seed_after": round(remaining_seed_krw, 2),
                 })
 
-        daily_loss = self.daily_loss_status(requested_seed=effective_seed)
+        daily_loss = self.daily_loss_status(requested_seed=effective_seed, market="US")
         message = f"미국 주식 자동 점검 완료. 후보 {len(candidate_rows)}개를 점검했습니다."
         if executed_count > 0:
             message = f"미국 주식 자동순환으로 {executed_count}건의 주문을 실행했습니다."
@@ -5835,7 +5878,7 @@ class DomesticDaytradeEngine:
             "executed_count": executed_count,
             "message": message,
             "budget": self.shared_budget_status(requested_seed=requested_seed, market="US"),
-            "daily_loss": self.daily_loss_status(requested_seed=requested_seed),
+            "daily_loss": self.daily_loss_status(requested_seed=requested_seed, market="US"),
             "portfolio": self.portfolio_usage(market_filter="US"),
             "results": results,
             "candidates": candidate_payload.get("candidates", []),
@@ -6198,7 +6241,7 @@ class DomesticDaytradeEngine:
             self._safe_float(budget_snapshot.get("total_seed_krw", 0), 0),
             float(seed),
         )
-        daily_loss = self.daily_loss_status(requested_seed=seed, use_live_price=not operational_exit, use_cache_only=operational_exit)
+        daily_loss = self.daily_loss_status(requested_seed=seed, use_live_price=not operational_exit, use_cache_only=operational_exit, market=market)
         if is_buy and daily_loss.get("halt_new_buys"):
             issues.append(f"일일 손실 제한 도달: {daily_loss.get('total_pnl', 0):,.0f}원 / 제한 {daily_loss.get('daily_loss_limit_krw', 0):,.0f}원")
         elif is_buy and daily_loss.get("soft_limit_reached"):
@@ -7326,7 +7369,7 @@ class DomesticDaytradeEngine:
                     "recent_logs": self._load_runtime_logs()[-30:],
                     "connection": self.check_kis_connection(),
                     "portfolio": self.portfolio_usage(),
-                    "daily_loss": self.daily_loss_status(requested_seed=seed),
+                    "daily_loss": self.daily_loss_status(requested_seed=seed, market=market),
                     "exit_watch": self._exit_watch_payload(state, signal),
                 },
             }
