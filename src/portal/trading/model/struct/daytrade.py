@@ -1464,16 +1464,14 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
     def _ks_kis_minutes_enabled(self, market):
         if str(market or "").upper() not in ("KS", "KQ"):
             return False
-        paper = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER"
-        default = "true" if paper else "false"
-        return str(self._config("daytrade_ks_kis_minute_bars", default) or default).strip().lower() in ("1", "true", "yes", "on")
+        # LIVE and PAPER compute the same signals; set to false to fall back to Yahoo.
+        return str(self._config("daytrade_ks_kis_minute_bars", "true") or "true").strip().lower() in ("1", "true", "yes", "on")
 
     def prepare_live_dataset(self, symbol, market="KS", period="5d", interval="1m"):
         """Live sessions. KS: earlier days from Yahoo, today from KIS real-time
         minute bars (Yahoo's Korean minute data is about 20 minutes late, so
         live MA/RSI/VWAP lagged the quote by that much). Falls back to Yahoo
-        alone on any KIS failure. PAPER only until enabled for LIVE
-        (daytrade_ks_kis_minute_bars)."""
+        alone on any KIS failure; daytrade_ks_kis_minute_bars=false disables it."""
         sessions = self._prepare_dataset(symbol, market=market, period=period, interval=interval)
         if interval != "1m" or not self._ks_kis_minutes_enabled(market):
             return sessions

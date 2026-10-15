@@ -107,11 +107,15 @@ class LiveDatasetTests(unittest.TestCase):
         self.svc.struct.kis_api.get_domestic_minute_bars = broken
         self.assertIs(self.svc.prepare_live_dataset("005930", market="KS"), self.yahoo)
 
-    def test_live_and_us_keep_yahoo_until_enabled(self):
-        with patch.dict(os.environ, {"TRADING_MODE": "LIVE"}):
-            self.assertIs(self.svc.prepare_live_dataset("005930", market="KS"), self.yahoo)
+    def test_us_and_a_disabled_setting_keep_yahoo(self):
         self.assertIs(self.svc.prepare_live_dataset("TQQQ", market="US"), self.yahoo)
+        self.svc.struct.get_config = lambda key, default=None: "false" if key == "daytrade_ks_kis_minute_bars" else default
+        self.assertIs(self.svc.prepare_live_dataset("005930", market="KS"), self.yahoo)
         self.assertEqual(self.kis_calls, [])
+
+    def test_live_uses_the_same_real_time_bars(self):
+        with patch.dict(os.environ, {"TRADING_MODE": "LIVE"}):
+            self.assertEqual(self.svc.prepare_live_dataset("005930", market="KS")[-1]["bars"][-1]["bar_source"], "kis_minute")
 
 
 class SuffixQualityTests(unittest.TestCase):
