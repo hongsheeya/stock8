@@ -996,6 +996,31 @@ class KisApi:
             "raw": output,
         }
 
+    def search_realtime_hoga(self, symbol, market="KS"):
+        """Best ask/bid for a domestic stock (KIS 주식현재가 호가/예상체결).
+
+        The volume_breakout preflight's spread guard has called this since it
+        was written, but the method never existed, so the guard never ran.
+        Returns {} for non-domestic markets.
+        """
+        if str(market or "KS").upper() not in ("KS", "KQ", "KRX"):
+            return {}
+        tr_id = "FHKST01010200"
+        path = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": str(symbol)}
+        data = self._request("GET", path, tr_id, params=params, retries=1)
+        if not data or data.get("rt_cd") != "0":
+            msg = data.get("msg1", "Unknown error") if data else "No response"
+            raise Exception(f"국내 호가 조회 실패 [{symbol}]: {msg}")
+        output = data.get("output1", {}) or {}
+        return {
+            "askp1": float(output.get("askp1", 0) or 0),
+            "bidp1": float(output.get("bidp1", 0) or 0),
+            "askp_rsqn1": int(float(output.get("askp_rsqn1", 0) or 0)),
+            "bidp_rsqn1": int(float(output.get("bidp_rsqn1", 0) or 0)),
+            "raw": output,
+        }
+
     def get_domestic_minute_bars(self, symbol, since_hhmmss="090000", max_pages=14):
         """Today's domestic 1-minute bars, oldest first (KIS 주식당일분봉조회).
 
