@@ -1454,10 +1454,14 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
     # Live domestic state keeps every code under "KS", but Yahoo lists KOSDAQ
     # codes only as ".KQ" (079650.KS has no data; 079650.KQ does). Remember
     # which suffix answered so later reads go straight to it.
-    _DOMESTIC_YF_SUFFIX = {}
+    # wiz.model() re-executes this module for every engine instance (one per
+    # worker pass), so a plain class-level dict started empty on every pass:
+    # each pass re-fetched the whole day's KIS minute bars (about 10 pages per
+    # symbol by the afternoon). These live on sys to survive the re-execution.
+    _DOMESTIC_YF_SUFFIX = sys.__dict__.setdefault("_stock8_domestic_yf_suffix", {})
     _HEALTHY_MINUTE_ROWS = 60
     # Today's live KS minute bars from KIS, per symbol: {"day": ..., "bars": {...}}.
-    _KS_LIVE_MINUTES = {}
+    _KS_LIVE_MINUTES = sys.__dict__.setdefault("_stock8_ks_live_minutes", {})
     # Last outcome of the KIS minute fetch, for the engine's runtime log.
     _KS_LIVE_MINUTE_STATUS = {}
 
