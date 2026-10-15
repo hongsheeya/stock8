@@ -7,6 +7,8 @@ export class Component implements OnInit, OnDestroy {
     @Input() public market: 'KS' | 'US' | '' = '';
     @Input() public showLocks = false;
     @Input() public locksOnly = false;
+    // Dashboard: switches with a status dot, no explanatory text.
+    @Input() public compact = false;
     public state: any = null;
     public get showDaytrade(): boolean {
         return this.state?.daytrade_allowed === true && window.localStorage.getItem('admin_preview_user_mode') !== 'true';
@@ -39,6 +41,27 @@ export class Component implements OnInit, OnDestroy {
         const names: any = {checking: '점검 중', waiting: '다음 점검 대기', off: '중지', error: '오류 · 점검 필요', starting: '시작 중', account_changed: '계좌 변경으로 중지'};
         const stamp = worker.last_check ? String(worker.last_check).slice(11, 19) : '완료 기록 없음';
         return `${names[worker.status] || '상태 확인 필요'} · 마지막 완료 ${stamp}`;
+    }
+    public health(job: string): any {
+        if (this.state?.dispatcher_failed) return {level: 'error', label: '실행기 오류', detail: ''};
+        const worker = this.state?.workers?.[job];
+        if (!worker) return {level: 'warn', label: '확인 필요', detail: ''};
+        const stamp = worker.last_check ? String(worker.last_check).slice(11, 16) : '';
+        if (worker.status === 'error') return {level: 'error', label: '오류', detail: worker.error || worker.message || ''};
+        if (worker.status === 'off' || worker.status === 'account_changed') return {level: 'off', label: '중지', detail: ''};
+        if (worker.last_check && Date.now() - new Date(worker.last_check).getTime() > 120000) return {level: 'warn', label: '지연', detail: stamp};
+        return {level: 'ok', label: '정상', detail: stamp};
+    }
+    public laneHealth(lane: string): any {
+        if (!this.state?.[lane]) return {level: 'off', label: 'OFF', detail: ''};
+        if (lane === 'infinite_buy') {
+            if (this.state?.mode === 'PAPER') return {level: 'ok', label: '정상', detail: ''};
+            return this.health('loc');
+        }
+        const m = lane === 'daytrade_ks' ? 'ks' : 'us';
+        const entry = this.health('entry_' + m), exit = this.health('exit_' + m);
+        const rank: any = {error: 3, warn: 2, off: 1, ok: 0};
+        return rank[entry.level] >= rank[exit.level] ? entry : exit;
     }
     public symbolName(symbol: string): string {
         const rows = [...this.brokerPositions, ...(this.positions || [])];

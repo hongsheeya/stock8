@@ -1,37 +1,46 @@
-section(class="trading-controls", [class.daytrade-compact]="daytradeOnly", [class.locks-only]="locksOnly")
-    div(class="control-heading", *ngIf="!locksOnly")
+section(class="trading-controls", [class.daytrade-compact]="daytradeOnly", [class.locks-only]="locksOnly", [class.is-compact]="compact")
+    div(class="control-heading", *ngIf="!locksOnly && !compact")
         div
             span(class="eyebrow") {{state?.mode === 'PAPER' ? 'PAPER AUTOMATION' : 'LIVE AUTOMATION'}}
             h2 {{daytradeOnly ? '단타 자동매매' : '자동매매'}}
         span(class="account-badge") {{state?.mode === 'PAPER' ? '모의투자 계정' : '실투자 계정'}}
-    p(*ngIf="!daytradeOnly && !locksOnly") SOXL은 무한매수 ON/OFF와 사이클 운영 상태로 제어합니다. 단타에서는 거래하지 않습니다.
+    p(*ngIf="!daytradeOnly && !locksOnly && !compact") SOXL은 무한매수 ON/OFF와 사이클 운영 상태로 제어합니다. 단타에서는 거래하지 않습니다.
     div(*ngIf="error", role="alert") {{error}}
     button(*ngIf="!state", (click)="refresh()") 상태 다시 확인
     div(*ngIf="state")
         p(*ngIf="!state.configured") 먼저 설정에서 현재 투자 모드의 API와 계좌번호를 연결하세요.
-        p(*ngIf="!daytradeOnly && !locksOnly", role="status") {{locWorkerSummary}}
+        p(*ngIf="!daytradeOnly && !locksOnly && !compact", role="status") {{locWorkerSummary}}
         div(class="strategy-grid", *ngIf="!locksOnly")
             button(*ngIf="!daytradeOnly", class="strategy-card", (click)="toggle('infinite_buy')", [disabled]="busy || !state.configured", [class.enabled]="state.infinite_buy", role="switch", aria-label="무한매수 자동매매", [attr.aria-checked]="state.infinite_buy")
                 span(class="strategy-copy")
                     strong 무한매수
-                    small 분할 매수 · 목표 수익 청산
+                    small(*ngIf="!compact") 분할 매수 · 목표 수익 청산
+                    small(*ngIf="compact", class="lane-health", [attr.data-level]="laneHealth('infinite_buy').level", [attr.title]="laneHealth('infinite_buy').detail")
+                        i
+                        | {{laneHealth('infinite_buy').label}}{{laneHealth('infinite_buy').detail && laneHealth('infinite_buy').level !== 'error' ? ' · ' + laneHealth('infinite_buy').detail : ''}}
                 span(class="switch-state") {{state.infinite_buy ? 'ON' : 'OFF'}}
                 span(class="switch-track")
             button(*ngIf="showDaytrade && market !== 'US'", class="strategy-card", (click)="toggle('daytrade_ks')", [disabled]="busy || !state.configured", [class.enabled]="state.daytrade_ks", role="switch", aria-label="국장 단타 자동매매", [attr.aria-checked]="state.daytrade_ks")
                 span(class="strategy-copy")
                     strong 국장 단타
-                    small 국내 주식 매수 · 매도 감시
+                    small(*ngIf="!compact") 국내 주식 매수 · 매도 감시
+                    small(*ngIf="compact", class="lane-health", [attr.data-level]="laneHealth('daytrade_ks').level", [attr.title]="laneHealth('daytrade_ks').detail")
+                        i
+                        | {{laneHealth('daytrade_ks').label}}{{laneHealth('daytrade_ks').detail && laneHealth('daytrade_ks').level !== 'error' ? ' · ' + laneHealth('daytrade_ks').detail : ''}}
                 span(class="switch-state") {{state.daytrade_ks ? 'ON' : 'OFF'}}
                 span(class="switch-track")
             button(*ngIf="showDaytrade && market !== 'KS'", class="strategy-card", (click)="toggle('daytrade_us')", [disabled]="busy || !state.configured", [class.enabled]="state.daytrade_us", role="switch", aria-label="미장 단타 자동매매", [attr.aria-checked]="state.daytrade_us")
                 span(class="strategy-copy")
                     strong 미장 단타
-                    small 미국 주식 매수 · 매도 감시
+                    small(*ngIf="!compact") 미국 주식 매수 · 매도 감시
+                    small(*ngIf="compact", class="lane-health", [attr.data-level]="laneHealth('daytrade_us').level", [attr.title]="laneHealth('daytrade_us').detail")
+                        i
+                        | {{laneHealth('daytrade_us').label}}{{laneHealth('daytrade_us').detail && laneHealth('daytrade_us').level !== 'error' ? ' · ' + laneHealth('daytrade_us').detail : ''}}
                 span(class="switch-state") {{state.daytrade_us ? 'ON' : 'OFF'}}
                 span(class="switch-track")
-        p(*ngIf="!locksOnly && market !== 'US' && state.daytrade_ks") 국장 매수: {{workerSummary('entry_ks')}} / 매도: {{workerSummary('exit_ks')}}
-        p(*ngIf="!locksOnly && market !== 'KS' && state.daytrade_us") 미장 매수: {{workerSummary('entry_us')}} / 매도: {{workerSummary('exit_us')}}
-        p(*ngIf="!locksOnly") 잠금 또는 OFF는 이미 증권사에 접수된 주문을 취소하지 않습니다. 미체결 주문은 증권사에서 별도로 확인하세요.
+        p(*ngIf="!locksOnly && !compact && market !== 'US' && state.daytrade_ks") 국장 매수: {{workerSummary('entry_ks')}} / 매도: {{workerSummary('exit_ks')}}
+        p(*ngIf="!locksOnly && !compact && market !== 'KS' && state.daytrade_us") 미장 매수: {{workerSummary('entry_us')}} / 매도: {{workerSummary('exit_us')}}
+        p(*ngIf="!locksOnly && !compact") 잠금 또는 OFF는 이미 증권사에 접수된 주문을 취소하지 않습니다. 미체결 주문은 증권사에서 별도로 확인하세요.
         section(*ngIf="showLocks", class="holding-locks")
             div(class="holdings-heading")
                 h3 보유 종목 · 자동매매 잠금
