@@ -172,6 +172,30 @@ class UsExitLevelTests(unittest.TestCase):
                                                             "breakout_stop_loss_pct": 0.5}), (2.5, 1.5))
 
 
+class BudgetFxTests(unittest.TestCase):
+    """PAPER 10-15: an active infinite-buy reserve with no balance FX rate
+    made the KS budget "reserve_unavailable" and the day-trade seed ₩0."""
+
+    def _budget(self, rate):
+        engine, _ = _engine()
+        engine.infinite_buy_daily_reserve = lambda **_k: {"reserve_usd": 1000, "ready": True}
+        engine._fetch_kis_balance_raw = lambda: {"withdrawable_krw": 1500000, "krw_balance": 1500000, "usd_krw": 0,
+                                                 "source": "test", "total_asset_krw": 10000000}
+        engine._usd_krw_rate = lambda cached_only=False: rate
+        engine.portfolio_usage = lambda **_k: {"active_entry_seed_krw": 0, "position_count": 0}
+        engine._dynamic_daytrade_allocation = lambda **k: {"target_seed_krw": k["total_asset_krw"] * .6}
+        return engine.shared_budget_status(requested_seed=1000000, market="KS")
+
+    def test_reserve_converts_with_the_shared_rate(self):
+        budget = self._budget(1000.0)
+        self.assertEqual(budget["budget_status"], "ready")
+        self.assertEqual(budget["applied_reserve_krw"], 1000000)
+        self.assertEqual(budget["remaining_seed_krw"], 300000)
+
+    def test_no_rate_anywhere_still_fails_closed(self):
+        self.assertEqual(self._budget(0.0)["budget_status"], "reserve_unavailable")
+
+
 class UsPricingTests(unittest.TestCase):
     def test_market_orders_are_marketable_limits(self):
         engine, _ = _engine()

@@ -1470,11 +1470,13 @@ class DomesticDaytradeEngine:
         })
         return payload
 
-    def _usd_krw_rate(self):
+    def _usd_krw_rate(self, cached_only=False):
         """USD/KRW for US budgets: balance, KIS present balance, then yfinance (cached 10 min)."""
         cached = _USD_KRW_CACHE.get("rate")
-        if cached and _clock.time() - cached[0] < 600:
+        if cached and (cached_only or _clock.time() - cached[0] < 600):
             return cached[1]
+        if cached_only:
+            return 0.0
         rate = 0.0
         sources = (
             lambda: self._fetch_kis_balance_raw().get("usd_krw", 0),
@@ -2025,7 +2027,10 @@ class DomesticDaytradeEngine:
         withdrawable_krw = raw["withdrawable_krw"]
         krw_balance = raw["krw_balance"]
         deposit_krw = self._safe_float(raw.get("deposit_krw", krw_balance), 0)
-        usd_krw = raw["usd_krw"]
+        # PAPER's domestic balance carries no rate. With an active infinite-buy
+        # cycle the USD reserve then could not be converted, the budget failed
+        # closed ("reserve_unavailable") and KS day trading got a ₩0 seed.
+        usd_krw = self._safe_float(raw.get("usd_krw", 0), 0) or self._usd_krw_rate(cached_only=use_cache_only)
         same_day_sell_krw = self._safe_float(raw.get("same_day_sell_krw", 0), 0)
         same_day_buy_krw = self._safe_float(raw.get("same_day_buy_krw", 0), 0)
         domestic_eval_krw = self._safe_float(raw.get("domestic_eval_krw", 0), 0)
