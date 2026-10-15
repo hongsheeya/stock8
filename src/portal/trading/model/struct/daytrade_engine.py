@@ -1638,6 +1638,37 @@ class DomesticDaytradeEngine:
                 break
         return rate
 
+    def _entry_stop_pct(self, symbol, strategy_id, market):
+        """The hard stop the live exit enforces for this entry, in percent."""
+        try:
+            profile = self._profile_for(symbol, strategy_id=strategy_id, market=market)
+        except Exception:
+            profile = {}
+        if self._is_us_market(market) and strategy_id in self._US_EXIT_LEVELS:
+            return self._us_exit_levels(strategy_id, profile)[1]
+        default = 8.0 if self._is_us_market(market) else 1.5
+        return abs(self._safe_float((profile or {}).get("stop_loss_pct", default), default))
+
+    def _risk_sized_entry_seed_krw(self, symbol, strategy_id, market, total_seed_krw, remaining_seed_krw):
+        """Equal risk per entry: daytrade_risk_per_trade_pct of the seed at the stop.
+
+        Tight stops get more capital and wide stops less, bounded to
+        daytrade_min/max_position_pct of the seed and to what remains, so
+        several positions fit and none dominates. It replaces "the first
+        signal takes the whole seed" (KS) and "one share" (US).
+        """
+        total = max(0.0, self._safe_float(total_seed_krw, 0))
+        remaining = max(0.0, self._safe_float(remaining_seed_krw, 0))
+        if total <= 0 or remaining <= 0:
+            return 0.0
+        risk_pct = min(5.0, max(0.05, self._safe_float(self._config("daytrade_risk_per_trade_pct", "0.5"), 0.5)))
+        max_pct = min(100.0, max(5.0, self._safe_float(self._config("daytrade_max_position_pct", "40"), 40)))
+        min_pct = min(max_pct, max(1.0, self._safe_float(self._config("daytrade_min_position_pct", "10"), 10)))
+        stop_pct = self._entry_stop_pct(symbol, strategy_id, market)
+        size = total * risk_pct / stop_pct if stop_pct > 0 else total * min_pct / 100
+        size = min(max(size, total * min_pct / 100), total * max_pct / 100)
+        return round(min(size, remaining), 2)
+
     def _minimum_entry_seed_krw(self, price, market="US"):
         """The one-share US minimum entry, in the KRW the seed plumbing expects.
 
@@ -5431,18 +5462,13 @@ class DomesticDaytradeEngine:
                 "source": "paper_exploration" if item.get("paper_exploration") else "leaderboard",
                 "paper_exploration": bool(item.get("paper_exploration", False)),
                 "entry_seed_krw": (
-                    round(self._minimum_entry_seed_krw(last_price, market=item_market), 2)
-                    if is_new_entry and self._is_us_market(item_market)
-                    else round(min(remaining_seed_krw, slot_seed_limit_krw), 2) if is_new_entry else 0.0
+                    self._risk_sized_entry_seed_krw(symbol, strategy_id, item_market, total_seed_krw, remaining_seed_krw)
+                    if is_new_entry else 0.0
                 ),
                 "decision_reason": (
-                    "미장은 요청 시드와 무관하게 최소 1주 진입 가능 수량으로 실시간 진입을 검토합니다."
-                    if self._is_us_market(item_market)
-                    else (
-                        f"PAPER 전진검증: 실시간 시세·진입 신호·근거 검증을 통과하면 슬롯당 ₩{slot_seed_limit_krw:,.0f} 내에서 진입합니다."
-                        if item.get("paper_exploration")
-                        else f"점수와 조건이 맞으면 슬롯당 시드 한도 ₩{slot_seed_limit_krw:,.0f} 내에서 신규 진입을 검토합니다."
-                    )
+                    f"PAPER 전진검증: 신호가 확인되면 손절폭 기준 위험 균등 금액(최대 슬롯 ₩{slot_seed_limit_krw:,.0f})으로 진입합니다."
+                    if item.get("paper_exploration")
+                    else f"신호가 확인되면 손절폭 기준 위험 균등 금액(최대 슬롯 ₩{slot_seed_limit_krw:,.0f})으로 진입합니다."
                 ),
             })
             if len(rows) >= max(paper_exploration_cap if paper_exploration else max_symbols, len(active_positions)):
