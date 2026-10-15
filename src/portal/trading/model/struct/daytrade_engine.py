@@ -654,6 +654,105 @@ class DomesticDaytradeEngine:
         "us_opening_reclaim": ("breakout_take_profit_pct", 3.8, 2.5, "breakout_stop_loss_pct", 1.8, 1.2),
     }
 
+    _US_RULE_STRATEGIES = ("us_breakout", "us_pullback", "us_vwap", "us_opening_reclaim")
+
+    @staticmethod
+    def _us_session_date(moment):
+        # Same grouping as Daytrade._rows_to_sessions: KST before 13:00 is the
+        # previous US session.
+        return (moment - datetime.timedelta(days=1) if moment.hour < 13 else moment).strftime("%Y-%m-%d")
+
+    def _us_rule_replay(self, strategy_id, profile, session):
+        """Replay today's closed bars through the backtest's own entry rule.
+
+        Mirrors _simulate_single_position_session_advanced while flat: bars
+        without a price only advance prev_bar. The minute still forming is not
+        a closed bar, and bars older than five minutes are stale.
+        """
+        builder = getattr(self.strategy, "_us_session_rules", None)
+        rules = builder(strategy_id, profile) if callable(builder) else None
+        bars = list((session or {}).get("bars", []) or [])
+        now = self._now()
+        if bars and str(bars[-1].get("timestamp", ""))[:16] == now.strftime("%Y-%m-%d %H:%M"):
+            bars = bars[:-1]
+        if not rules or not bars:
+            return None
+        entry_rule, exit_rule = rules
+        state, prev, fired, fired_at = {}, None, False, -1
+        for index, row in enumerate(bars):
+            if self._safe_float(row.get("close", 0), 0) <= 0:
+                prev = row
+                continue
+            fired = bool(entry_rule(row, prev, index, session, profile, state))
+            fired_at = index
+            prev = row
+        last_time = str(bars[-1].get("timestamp", ""))[:16]
+        try:
+            age = (now - datetime.datetime.strptime(last_time, "%Y-%m-%d %H:%M")).total_seconds()
+        except Exception:
+            age = None
+        return {"fired": fired and fired_at == len(bars) - 1, "state": state, "exit_rule": exit_rule,
+                "last_bar": bars[-1], "prev_bar": bars[-2] if len(bars) > 1 else None,
+                "index": len(bars) - 1, "bars": len(bars), "last_time": last_time,
+                "session_date": str((session or {}).get("date", "") or ""),
+                "stale": age is None or age > 300}
+
+    def _patch_state(self, symbol, market, **fields):
+        """Persist a few tracking fields without rewriting the whole state."""
+        with self._global_lock("state_io"):
+            state_map = self._load_state_map()
+            key = self._state_key(symbol, market)
+            if key in state_map:
+                state_map[key].update(fields)
+                self._save_state_map(state_map)
+
+    def _us_rule_exit(self, strategy_id, profile, session, state, avg_price, current_price):
+        """The backtest exit rule, or "" to hold.
+
+        With today's bars it sees the latest closed bar's VWAP/MA/RSI/MACD at
+        the current price. The exit-only check has no bars: VWAP/MA/RSI terms
+        then read as unknown, while the trailing stop and the opening low use
+        stored values (the breakout trailing stop needs the high since entry).
+        """
+        if strategy_id not in self._US_RULE_STRATEGIES or avg_price <= 0 or current_price <= 0:
+            return ""
+        same_position = abs(self._safe_float(state.get("us_tracking_avg", 0), 0) - avg_price) < 1e-9
+        prior_high = self._safe_float(state.get("us_highest_since_entry", 0), 0) if same_position else 0.0
+        highest = max(prior_high, avg_price, current_price)
+        replay = self._us_rule_replay(strategy_id, profile, session)
+        updates = {}
+        if replay is not None and not replay["stale"]:
+            exit_rule, prev_bar, index = replay["exit_rule"], replay["prev_bar"], replay["index"]
+            rule_state = {**replay["state"], "highest_since_entry": highest}
+            now_bar = {**replay["last_bar"], "close": current_price}
+            opening_low = self._safe_float(replay["state"].get("opening_low", 0), 0)
+            if opening_low > 0:
+                updates.update(us_opening_low=opening_low, us_opening_low_session=replay["session_date"])
+        else:
+            builder = getattr(self.strategy, "_us_session_rules", None)
+            rules = builder(strategy_id, profile) if callable(builder) else None
+            if not rules:
+                return ""
+            exit_rule, prev_bar, index = rules[1], None, 0
+            opening_low = 0.0
+            if state.get("us_opening_low_session") == self._us_session_date(self._now()):
+                opening_low = self._safe_float(state.get("us_opening_low", 0), 0)
+            rule_state = {"opening_low": opening_low, "highest_since_entry": highest}
+            now_bar = {"close": current_price}
+        if highest != prior_high or not same_position:
+            updates.update(us_highest_since_entry=highest, us_tracking_avg=avg_price)
+        if updates:
+            state.update(updates)
+            self._patch_state(state.get("symbol", ""), state.get("market", "US"), **updates)
+        if not exit_rule(now_bar, prev_bar, index, session or {}, profile, rule_state, avg_price):
+            return ""
+        take_profit, stop_loss = self._us_exit_levels(strategy_id, profile)
+        if current_price >= avg_price * (1 + take_profit / 100):
+            return f"목표 +{take_profit:g}% 달성 전량 청산 (백테스트 규칙)"
+        if current_price <= avg_price * (1 - stop_loss / 100):
+            return f"손절 -{stop_loss:g}% (백테스트 규칙)"
+        return "추세 이탈 청산 (백테스트 규칙: VWAP·시가 저점·트레일링)"
+
     def _us_exit_levels(self, strategy_id, profile):
         tp_key, tp_default, tp_floor, sl_key, sl_default, sl_floor = self._US_EXIT_LEVELS[strategy_id]
         take_profit = max(tp_floor, self._safe_float((profile or {}).get(tp_key, tp_default), tp_default))
@@ -5893,7 +5992,7 @@ class DomesticDaytradeEngine:
                     return cached["session"], dict(cached["bar"])
         try:
             sessions = self.strategy._prepare_dataset(symbol, market=market,
-                                                       period="1d" if self._is_us_market(market) else "5d", interval="1m")
+                                                       period="5d", interval="1m")
             if len(sessions) == 0:
                 raise Exception("라이브 시그널에 사용할 분봉 데이터가 없습니다.")
             session = sessions[-1]
@@ -6655,78 +6754,28 @@ class DomesticDaytradeEngine:
                     })
 
         # ── US 개장 돌파 전략 ────────────────────────────────────────────────
-        elif strategy_id == "us_breakout" and position_qty == 0:
-            breakout_volume_ratio = self._safe_float(profile.get("breakout_volume_ratio", 3.0), 3.0)
-            min_change_pct = self._safe_float(profile.get("min_change_pct", 5.0), 5.0)
-            prev_high = self._safe_float(bar.get("prev_high", 0), 0) or self._safe_float(bar.get("high", 0), 0)
-            avg_volume = self._safe_int(bar.get("avg_volume", 0), 0) or 1
-            cur_volume = self._safe_int(bar.get("volume", 0), 0)
-            volume_ratio = cur_volume / avg_volume if avg_volume > 0 else 0
-            change_pct = (current_price - prev_close) / prev_close * 100 if prev_close > 0 else 0
+        # ── US 백테스트 규칙 전략 (breakout / pullback / vwap / opening_reclaim) ──
+        # Entries replay today's closed bars through the entry rule the backtest
+        # (what training validated) uses. The hand-written live rules read bar
+        # fields nothing produced (prev_high, avg_volume): us_breakout could
+        # never buy and us_pullback's volume test compared raw volume with 2.
+        elif strategy_id in self._US_RULE_STRATEGIES and position_qty == 0:
+            replay = self._us_rule_replay(strategy_id, profile, session)
             shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
-            us_meta = {
-                "change_pct": round(change_pct, 4),
-                "prev_high": round(prev_high, 4),
-                "volume_ratio": round(volume_ratio, 2),
-                "breakout_volume_ratio": breakout_volume_ratio,
-            }
-            if change_pct < min_change_pct:
-                signal.update({"action": "HOLD", "reason": f"상승률 {change_pct:.2f}% < 최소 {min_change_pct:.1f}%", "us_meta": us_meta})
-            elif volume_ratio < breakout_volume_ratio:
-                signal.update({"action": "HOLD", "reason": f"거래량 비율 {volume_ratio:.1f}x < 기준 {breakout_volume_ratio:.1f}x", "us_meta": us_meta})
-            elif prev_high > 0 and current_price <= prev_high:
-                signal.update({"action": "HOLD", "reason": f"전일 고가 ${prev_high:.2f} 미돌파", "us_meta": us_meta})
+            us_meta = {"rule_source": "backtest", "bars": (replay or {}).get("bars", 0),
+                       "last_bar": (replay or {}).get("last_time", "")}
+            if replay is None:
+                signal.update({"action": "HOLD", "reason": "백테스트 진입 규칙을 평가할 분봉이 없습니다.", "us_meta": us_meta})
+            elif replay["stale"]:
+                signal.update({"action": "HOLD", "reason": f"분봉 지연 ({replay['last_time']}) — 진입 보류", "us_meta": us_meta})
+            elif not replay["fired"]:
+                signal.update({"action": "HOLD", "reason": f"{strategy_id} 진입 조건 미충족 (백테스트 규칙, {replay['bars']}번째 분봉)", "us_meta": us_meta})
             elif shadow_mode:
                 us_meta["mock_trade"] = {"price": current_price, "qty": self._buy_qty(buy_budget, current_price)}
-                signal.update({"action": "HOLD", "reason": f"us_breakout shadow mode — 상승 {change_pct:.1f}% / 거래량 {volume_ratio:.1f}x", "us_meta": us_meta})
+                signal.update({"action": "HOLD", "reason": f"{strategy_id} shadow mode — 백테스트 진입 규칙 충족", "us_meta": us_meta})
             else:
-                signal.update({"action": "BUY", "reason": f"개장 전고 돌파 진입 (상승 {change_pct:.1f}%, 거래량 {volume_ratio:.1f}x)", "order_qty": self._buy_qty(buy_budget, current_price), "us_meta": us_meta})
-
-        # ── US 눌림목 반등 전략 ──────────────────────────────────────────────
-        elif strategy_id == "us_pullback" and position_qty == 0:
-            min_prior_surge_pct = self._safe_float(profile.get("min_prior_surge_pct", 10.0), 10.0)
-            avg_volume = self._safe_int(bar.get("avg_volume", 0), 0) or 1
-            cur_volume = self._safe_int(bar.get("volume", 0), 0)
-            volume_ratio = cur_volume / avg_volume if avg_volume > 0 else 0
-            surge_pct = ((self._safe_float(bar.get("high", current_price), current_price)) - prev_close) / prev_close * 100 if prev_close > 0 else 0
-            drawdown_from_high = (self._safe_float(bar.get("high", current_price), current_price) - current_price) / self._safe_float(bar.get("high", current_price), current_price) * 100 if self._safe_float(bar.get("high", current_price), current_price) > 0 else 0
-            vwap = self._safe_float(bar.get("vwap", 0), 0)
-            now_hour_et = (self._now() - datetime.timedelta(hours=9)).hour  # KST - 9h ≈ ET
-            shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
-            us_meta = {"surge_pct": round(surge_pct, 2), "drawdown_from_high": round(drawdown_from_high, 2), "volume_ratio": round(volume_ratio, 2), "vwap": round(vwap, 4)}
-            if now_hour_et >= 11 and now_hour_et < 14:
-                signal.update({"action": "HOLD", "reason": f"ET {now_hour_et}시 횡보구간 진입 금지", "us_meta": us_meta})
-            elif surge_pct < min_prior_surge_pct:
-                signal.update({"action": "HOLD", "reason": f"선행 급등 {surge_pct:.1f}% < 최소 {min_prior_surge_pct:.1f}%", "us_meta": us_meta})
-            elif volume_ratio > 2.0:
-                signal.update({"action": "HOLD", "reason": f"눌림목 아님: 거래량 급증 {volume_ratio:.1f}x", "us_meta": us_meta})
-            elif drawdown_from_high < 2.0:
-                signal.update({"action": "HOLD", "reason": f"고점 대비 되밀림 {drawdown_from_high:.1f}% 부족 (최소 2%)", "us_meta": us_meta})
-            elif shadow_mode:
-                us_meta["mock_trade"] = {"price": current_price, "qty": self._buy_qty(buy_budget, current_price)}
-                signal.update({"action": "HOLD", "reason": f"us_pullback shadow mode — 급등 {surge_pct:.1f}% / 되밀림 {drawdown_from_high:.1f}%", "us_meta": us_meta})
-            else:
-                signal.update({"action": "BUY", "reason": f"급등 후 눌림목 진입 (선행급등 {surge_pct:.1f}%, 되밀림 {drawdown_from_high:.1f}%)", "order_qty": self._buy_qty(buy_budget, current_price), "us_meta": us_meta})
-
-        # ── US VWAP 밴드 전략 ────────────────────────────────────────────────
-        elif strategy_id == "us_vwap" and position_qty == 0:
-            vwap = self._safe_float(bar.get("vwap", 0), 0)
-            avg_volume = self._safe_int(bar.get("avg_volume", 0), 0) or 1
-            cur_volume = self._safe_int(bar.get("volume", 0), 0)
-            volume_ratio = cur_volume / avg_volume if avg_volume > 0 else 0
-            shadow_mode = False if _PAPER_MODE else profile.get("shadow_mode", True)
-            us_meta = {"vwap": round(vwap, 4), "volume_ratio": round(volume_ratio, 2), "current_price": round(current_price, 4)}
-            if vwap <= 0:
-                signal.update({"action": "HOLD", "reason": "VWAP 데이터 없음", "us_meta": us_meta})
-            elif current_price < vwap:
-                signal.update({"action": "HOLD", "reason": f"현재가 ${current_price:.2f} < VWAP ${vwap:.2f}", "us_meta": us_meta})
-            elif volume_ratio < 2.0:
-                signal.update({"action": "HOLD", "reason": f"거래량 비율 {volume_ratio:.1f}x < 기준 2.0x", "us_meta": us_meta})
-            elif shadow_mode:
-                us_meta["mock_trade"] = {"price": current_price, "qty": self._buy_qty(buy_budget, current_price)}
-                signal.update({"action": "HOLD", "reason": f"us_vwap shadow mode — 현재가 ${current_price:.2f} / VWAP ${vwap:.2f}", "us_meta": us_meta})
-            else:
-                signal.update({"action": "BUY", "reason": f"VWAP 상단 유지 진입 (현재 ${current_price:.2f} > VWAP ${vwap:.2f}, 거래량 {volume_ratio:.1f}x)", "order_qty": self._buy_qty(buy_budget, current_price), "us_meta": us_meta})
+                signal.update({"action": "BUY", "reason": f"{strategy_id} 백테스트 진입 규칙 충족 ({replay['bars']}번째 분봉)",
+                               "order_qty": self._buy_qty(buy_budget, current_price), "us_meta": us_meta})
 
         # 보유 포지션 청산 로직
         elif position_qty > 0 and avg_price > 0:
@@ -6930,11 +6979,12 @@ class DomesticDaytradeEngine:
                     us_high_stop_pct = self._safe_float(profile.get("high_stop_pct", 20.0), 20.0)
                     intraday_high = self._safe_float(bar.get("high", current_price), current_price)
                     high_stop_price = intraday_high * (1 - us_high_stop_pct / 100) if intraday_high > 0 else 0
-                    vwap = self._safe_float(bar.get("vwap", 0), 0)
                     stop_price = self._round_usd_price(avg_price * (1 - sl_pct / 100))
+                    rule_exit = self._us_rule_exit(strategy_id, profile, session, state, avg_price, current_price)
 
-                    if strategy_id == "us_vwap" and vwap > 0 and current_price < vwap * 0.997:
-                        signal.update({"action": "SELL_STOP_LOSS", "reason": f"VWAP 하단 이탈 손절 (현재 ${current_price:.2f} < VWAP ${vwap:.2f})", "order_qty": position_qty})
+                    if rule_exit:
+                        signal.update({"action": "SELL_STOP_LOSS" if current_price < avg_price else "SELL_FULL",
+                                       "reason": rule_exit, "order_qty": position_qty})
                     elif stop_price > 0 and current_price <= stop_price:
                         signal.update({"action": "SELL_STOP_LOSS", "reason": f"손절 -{sl_pct:g}% (${stop_price:.2f})", "order_qty": position_qty})
                     elif high_stop_price > 0 and current_price <= high_stop_price:

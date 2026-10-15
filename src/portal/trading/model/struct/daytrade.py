@@ -2201,7 +2201,18 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
             equity_curve.append(round(seed + realized, 2))
         return self._summarize_session(session, seed, trades, realized, equity_curve, strategy_id, self._event_filter_snapshot("", "US"), holding_minutes=holding_minutes)
 
-    def _simulate_us_breakout_session(self, session, seed, profile):
+    def _us_session_rules(self, strategy_id, profile):
+        """(entry_rule, exit_rule) the backtest uses, for the live engine to
+        replay on today's bars; None for strategies without them."""
+        builder = {
+            "us_breakout": self._us_breakout_rules,
+            "us_pullback": self._us_pullback_rules,
+            "us_vwap": self._us_vwap_rules,
+            "us_opening_reclaim": self._us_opening_reclaim_rules,
+        }.get(str(strategy_id or ""))
+        return builder(profile or {}) if builder else None
+
+    def _us_breakout_rules(self, profile):
         tp_pct = self._safe_float(profile.get("breakout_take_profit_pct", 4.0), 4.0)
         sl_pct = self._safe_float(profile.get("breakout_stop_loss_pct", 2.5), 2.5)
         trail_pct = max(2.5, self._safe_float(profile.get("high_stop_pct", 20.0), 20.0) * 0.25)
@@ -2247,9 +2258,13 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 or trail_drawdown >= trail_pct
             )
 
+        return entry_rule, exit_rule
+
+    def _simulate_us_breakout_session(self, session, seed, profile):
+        entry_rule, exit_rule = self._us_breakout_rules(profile)
         return self._simulate_single_position_session_advanced(session, seed, "us_breakout", profile, entry_rule, exit_rule)
 
-    def _simulate_us_pullback_session(self, session, seed, profile):
+    def _us_pullback_rules(self, profile):
         tp_pct = max(2.5, self._safe_float(profile.get("breakout_take_profit_pct", 3.5), 3.5))
         sl_pct = max(1.5, self._safe_float(profile.get("breakout_stop_loss_pct", 2.2), 2.2))
         min_surge_pct = self._safe_float(profile.get("min_prior_surge_pct", 8.0), 8.0)
@@ -2300,9 +2315,13 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 or rsi14 >= 78
             )
 
+        return entry_rule, exit_rule
+
+    def _simulate_us_pullback_session(self, session, seed, profile):
+        entry_rule, exit_rule = self._us_pullback_rules(profile)
         return self._simulate_single_position_session_advanced(session, seed, "us_pullback", profile, entry_rule, exit_rule)
 
-    def _simulate_us_vwap_session(self, session, seed, profile):
+    def _us_vwap_rules(self, profile):
         tp_pct = max(2.5, self._safe_float(profile.get("breakout_take_profit_pct", 3.5), 3.5))
         sl_pct = max(1.5, self._safe_float(profile.get("breakout_stop_loss_pct", 2.0), 2.0))
         vol_thr = max(1.4, self._safe_float(profile.get("breakout_volume_ratio", 2.0), 2.0) * 0.55)
@@ -2335,9 +2354,13 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 or (self._safe_float(bar.get("macd_hist", 0), 0) < -0.03 and self._safe_float(bar.get("vwap_gap_pct", 0), 0) < 0)
             )
 
+        return entry_rule, exit_rule
+
+    def _simulate_us_vwap_session(self, session, seed, profile):
+        entry_rule, exit_rule = self._us_vwap_rules(profile)
         return self._simulate_single_position_session_advanced(session, seed, "us_vwap", profile, entry_rule, exit_rule)
 
-    def _simulate_us_opening_reclaim_session(self, session, seed, profile):
+    def _us_opening_reclaim_rules(self, profile):
         tp_pct = max(2.5, self._safe_float(profile.get("breakout_take_profit_pct", 3.8), 3.8))
         sl_pct = max(1.2, self._safe_float(profile.get("breakout_stop_loss_pct", 1.8), 1.8))
         vol_thr = max(1.4, self._safe_float(profile.get("breakout_volume_ratio", 1.8), 1.8))
@@ -2389,6 +2412,10 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
                 or (opening_low > 0 and close < opening_low * 0.999)
             )
 
+        return entry_rule, exit_rule
+
+    def _simulate_us_opening_reclaim_session(self, session, seed, profile):
+        entry_rule, exit_rule = self._us_opening_reclaim_rules(profile)
         return self._simulate_single_position_session_advanced(session, seed, "us_opening_reclaim", profile, entry_rule, exit_rule)
 
     def _simulate_us_premarket_session(self, session, seed, profile):
