@@ -17,6 +17,9 @@ class _Frame:
         self._rows = rows
         self.empty = not rows
 
+    def __len__(self):
+        return len(self._rows)
+
     def iterrows(self):
         return iter(self._rows)
 
@@ -40,9 +43,10 @@ def _yfinance(listed):
             calls.append(self.symbol)
             if self.symbol not in listed:
                 return _Frame([])
-            return _Frame([(_Stamp(f"2026-10-14 09:{minute:02d}"),
+            # A healthy listing: 90 one-minute bars (above _HEALTHY_MINUTE_ROWS).
+            return _Frame([(_Stamp(f"2026-10-14 {9 + minute // 60:02d}:{minute % 60:02d}"),
                             {"Open": 9000, "High": 9010, "Low": 8990, "Close": 9000, "Volume": 100})
-                           for minute in range(25)])
+                           for minute in range(90)])
 
     return types.SimpleNamespace(Ticker=Ticker), calls
 
@@ -64,7 +68,7 @@ class DomesticSuffixTests(unittest.TestCase):
             sessions = self.strategy._prepare_dataset("079650", market="KS", period="5d", interval="1m")
             module.Daytrade._DATASET_CACHE.clear()
             self.strategy._prepare_dataset("079650", market="KS", period="5d", interval="1m")
-        self.assertEqual(len(sessions[-1]["bars"]), 25)
+        self.assertEqual(len(sessions[-1]["bars"]), 90)
         self.assertEqual(calls, ["079650.KS", "079650.KQ", "079650.KQ"])
         self.assertEqual(module.Daytrade._DOMESTIC_YF_SUFFIX["079650"], "KQ")
 

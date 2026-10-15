@@ -5989,8 +5989,15 @@ class DomesticDaytradeEngine:
                 except Exception:
                     return cached["session"], dict(cached["bar"])
         try:
-            sessions = self.strategy._prepare_dataset(symbol, market=market,
-                                                       period="5d", interval="1m")
+            strategy = self.strategy
+            prepare = getattr(strategy, "prepare_live_dataset", None) or strategy._prepare_dataset
+            sessions = prepare(symbol, market=market, period="5d", interval="1m")
+            minute_status = getattr(type(strategy), "_KS_LIVE_MINUTE_STATUS", None)
+            if isinstance(minute_status, dict) and minute_status.get("symbol") == str(symbol):
+                if minute_status.get("state") == "error":
+                    self._append_runtime_log("warning", f"KS 실시간 분봉(KIS) 조회 실패 — Yahoo 분봉(약 20분 지연)으로 대체: {minute_status.get('message', '')}", symbol=symbol, dedup_sec=1800)
+                elif minute_status.get("state") == "ok":
+                    self._append_runtime_log("info", "KS 오늘 분봉을 KIS 실시간 분봉으로 계산합니다 (Yahoo 약 20분 지연 대체).", dedup_sec=21600)
             if len(sessions) == 0:
                 raise Exception("라이브 시그널에 사용할 분봉 데이터가 없습니다.")
             session = sessions[-1]

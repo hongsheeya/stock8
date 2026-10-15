@@ -1455,6 +1455,62 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
     # codes only as ".KQ" (079650.KS has no data; 079650.KQ does). Remember
     # which suffix answered so later reads go straight to it.
     _DOMESTIC_YF_SUFFIX = {}
+    _HEALTHY_MINUTE_ROWS = 60
+    # Today's live KS minute bars from KIS, per symbol: {"day": ..., "bars": {...}}.
+    _KS_LIVE_MINUTES = {}
+    # Last outcome of the KIS minute fetch, for the engine's runtime log.
+    _KS_LIVE_MINUTE_STATUS = {}
+
+    def _ks_kis_minutes_enabled(self, market):
+        if str(market or "").upper() not in ("KS", "KQ"):
+            return False
+        paper = str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER"
+        default = "true" if paper else "false"
+        return str(self._config("daytrade_ks_kis_minute_bars", default) or default).strip().lower() in ("1", "true", "yes", "on")
+
+    def prepare_live_dataset(self, symbol, market="KS", period="5d", interval="1m"):
+        """Live sessions. KS: earlier days from Yahoo, today from KIS real-time
+        minute bars (Yahoo's Korean minute data is about 20 minutes late, so
+        live MA/RSI/VWAP lagged the quote by that much). Falls back to Yahoo
+        alone on any KIS failure. PAPER only until enabled for LIVE
+        (daytrade_ks_kis_minute_bars)."""
+        sessions = self._prepare_dataset(symbol, market=market, period=period, interval=interval)
+        if interval != "1m" or not self._ks_kis_minutes_enabled(market):
+            return sessions
+        try:
+            today_rows = self._kis_today_minute_rows(symbol)
+        except Exception as exc:
+            Daytrade._KS_LIVE_MINUTE_STATUS = {"state": "error", "symbol": str(symbol), "message": str(exc)[:160]}
+            return sessions
+        if not today_rows:
+            return sessions
+        Daytrade._KS_LIVE_MINUTE_STATUS = {"state": "ok", "symbol": str(symbol), "bars": len(today_rows)}
+        today = today_rows[0]["date"]
+        fields = ("timestamp", "date", "time", "open", "high", "low", "close", "volume")
+        rows = [{key: bar.get(key) for key in fields}
+                for session in sessions if str(session.get("date", "")) < today
+                for bar in session.get("bars", [])]
+        rows.extend(dict(row) for row in today_rows)
+        live = self._rows_to_sessions(rows, market=market)
+        for bar in live[-1].get("bars", []) if live else []:
+            bar["bar_source"] = "kis_minute"
+        return live
+
+    def _kis_today_minute_rows(self, symbol):
+        """Cached per symbol and day; a refresh fetches back to the last bar."""
+        today = self._now().strftime("%Y-%m-%d")  # KST, like the KIS bars
+        cache = Daytrade._KS_LIVE_MINUTES.get(str(symbol))
+        if not cache or cache.get("day") != today:
+            cache = {"day": today, "bars": {}}
+        since = "090000"
+        if cache["bars"]:
+            last = max(cache["bars"])
+            since = last[11:13] + last[14:16] + "00"
+        for row in self.struct.kis_api.get_domestic_minute_bars(symbol, since_hhmmss=since):
+            if row.get("date") == today:
+                cache["bars"][row["timestamp"]] = row
+        Daytrade._KS_LIVE_MINUTES[str(symbol)] = cache
+        return [cache["bars"][key] for key in sorted(cache["bars"])]
 
     def _domestic_yf_candidates(self, symbol, market, yf_symbol):
         code = str(symbol or "").strip().upper()
@@ -1482,18 +1538,28 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         yf_symbol = self._normalize_symbol(symbol, market)
         hist = None
         try:
-            for candidate in self._domestic_yf_candidates(symbol, market, yf_symbol):
+            best = None
+            candidates = self._domestic_yf_candidates(symbol, market, yf_symbol)
+            for candidate in candidates:
                 try:
-                    hist = yf.Ticker(candidate).history(period=period, interval=interval, auto_adjust=True, prepost=use_prepost)
+                    found = yf.Ticker(candidate).history(period=period, interval=interval, auto_adjust=True, prepost=use_prepost)
                 except ModuleNotFoundError:
                     raise
                 except Exception:
-                    hist = None
-                if hist is not None and not hist.empty:
-                    yf_symbol = candidate
-                    if candidate[-3:] in (".KS", ".KQ"):
-                        Daytrade._DOMESTIC_YF_SUFFIX[candidate[:-3]] = candidate[-2:]
+                    found = None
+                if found is None or found.empty:
+                    continue
+                if best is None or len(found) > len(best[1]):
+                    best = (candidate, found)
+                # A stale listing can answer with a few junk rows (250030.KS:
+                # 4 rows, 250030.KQ: a full day), so a thin answer from one
+                # domestic suffix does not end the search.
+                if len(candidates) == 1 or len(found) >= self._HEALTHY_MINUTE_ROWS:
                     break
+            if best is not None:
+                yf_symbol, hist = best
+                if yf_symbol[-3:] in (".KS", ".KQ"):
+                    Daytrade._DOMESTIC_YF_SUFFIX[yf_symbol[:-3]] = yf_symbol[-2:]
             if hist is None or hist.empty:
                 raise Exception(f"{yf_symbol}의 분봉 데이터를 찾을 수 없습니다.")
             for idx, row in hist.iterrows():

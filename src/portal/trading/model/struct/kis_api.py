@@ -996,6 +996,56 @@ class KisApi:
             "raw": output,
         }
 
+    def get_domestic_minute_bars(self, symbol, since_hhmmss="090000", max_pages=14):
+        """Today's domestic 1-minute bars, oldest first (KIS 주식당일분봉조회).
+
+        Real time, unlike Yahoo's Korean minute data (about 20 minutes late).
+        Each page holds up to 30 bars, newest first; pages walk back until
+        `since_hhmmss`. The newest bar may still be forming.
+        """
+        import datetime as _dt
+        tr_id = "FHKST03010200"
+        path = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        now = _TIME.now()
+        today = now.strftime("%Y%m%d")
+        cursor = now.strftime("%H%M%S")
+        bars = {}
+        for _ in range(max(1, int(max_pages))):
+            params = {
+                "FID_ETC_CLS_CODE": "",
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": str(symbol),
+                "FID_INPUT_HOUR_1": cursor,
+                "FID_PW_DATA_INCU_YN": "Y",
+            }
+            data = self._request("GET", path, tr_id, params=params, retries=1)
+            if not data or data.get("rt_cd") != "0":
+                msg = data.get("msg1", "Unknown error") if data else "No response"
+                raise Exception(f"국내 분봉 조회 실패 [{symbol}]: {msg}")
+            oldest = None
+            for row in data.get("output2") or []:
+                day = str(row.get("stck_bsop_date", "") or "")
+                hhmmss = str(row.get("stck_cntg_hour", "") or "").zfill(6)
+                close = float(row.get("stck_prpr", 0) or 0)
+                if day != today or len(hhmmss) != 6 or close <= 0:
+                    continue
+                stamp = f"{day[:4]}-{day[4:6]}-{day[6:]} {hhmmss[:2]}:{hhmmss[2:4]}"
+                bars[stamp] = {
+                    "timestamp": stamp,
+                    "date": stamp[:10],
+                    "time": stamp[11:],
+                    "open": float(row.get("stck_oprc", 0) or 0) or close,
+                    "high": float(row.get("stck_hgpr", 0) or 0) or close,
+                    "low": float(row.get("stck_lwpr", 0) or 0) or close,
+                    "close": close,
+                    "volume": int(float(row.get("cntg_vol", 0) or 0)),
+                }
+                oldest = hhmmss if oldest is None or hhmmss < oldest else oldest
+            if oldest is None or oldest <= since_hhmmss:
+                break
+            cursor = (_dt.datetime.strptime(oldest, "%H%M%S") - _dt.timedelta(minutes=1)).strftime("%H%M%S")
+        return [bars[key] for key in sorted(bars)]
+
     # =========================================================================
     # 해외주식 기간별 시세 (일봉)
     # =========================================================================
