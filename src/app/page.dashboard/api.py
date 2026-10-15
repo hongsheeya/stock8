@@ -1781,6 +1781,15 @@ def _generate_mock_cycle_detail(cycle_id):
 
 
 def _build_overview_payload(force_refresh=False):
+    # Per-step wall time (ms), returned to the dashboard's admin details.
+    timings = {}
+    clock = [time.perf_counter()]
+
+    def mark(label):
+        now = time.perf_counter()
+        timings[label] = timings.get(label, 0) + round((now - clock[0]) * 1000)
+        clock[0] = now
+
     trading = _require_trading()
     setup_state = _broker_setup_state(trading, require_connection=False)
     if setup_state.get("allowed") is not True:
@@ -1789,7 +1798,9 @@ def _build_overview_payload(force_refresh=False):
         payload["broker_configured"] = setup_state.get("configured", False)
         payload["broker_connected"] = False
         return payload
+    mark("setup")
     fire_gate_bridge, authoritative_symbols = _firegate_overview_scope(trading, force_refresh=force_refresh)
+    mark("firegate_scope")
 
     api_connected = False
     connection_result = {}
@@ -1843,8 +1854,12 @@ def _build_overview_payload(force_refresh=False):
             # own retry policy, while this UI path performs at most one short
             # attempt per endpoint and falls back to cached/local state.
             def _dashboard_kis_call(method_name, *args, **kwargs):
-                with kis.request_options(timeout=3.0 if force_refresh else 2.6, retries=0):
-                    return getattr(kis, method_name)(*args, **kwargs)
+                mark("before_kis")
+                try:
+                    with kis.request_options(timeout=3.0 if force_refresh else 2.6, retries=0):
+                        return getattr(kis, method_name)(*args, **kwargs)
+                finally:
+                    mark("kis." + method_name)
 
             try:
                 present = _dashboard_kis_call("get_present_balance")
@@ -1955,7 +1970,9 @@ def _build_overview_payload(force_refresh=False):
                 _log("warning", f"get_domestic_buying_power_info failed: {e}")
 
             if balance:
+                mark("before_us_prices")
                 holdings_data = _apply_live_us_prices_to_holdings(trading, balance.get("holdings", []), refresh=force_refresh)
+                mark("us_live_prices")
                 try:
                     usd_cash_balance = float(balance.get("cash_balance", 0) or 0)
                 except Exception:
@@ -2040,13 +2057,16 @@ def _build_overview_payload(force_refresh=False):
         "deferred": True,
         "message": "백그라운드 워커에서 동기화",
     }
+    mark("balances_and_status")
     cycles = _safe_active_cycles(trading)
     if len(authoritative_symbols) > 0:
         cycles = _filter_rows_by_symbols(cycles, authoritative_symbols)
         engine_status = _scoped_engine_status(engine_status, cycles)
     if force_refresh:
         cycles = _refresh_cycle_prices_for_display(trading, cycles, refresh=True)
+    mark("cycles")
     cycles, infinite_buy_summary = _attach_loc_buy_status(trading, cycles, with_summary=True, live_refresh=force_refresh)
+    mark("loc_status")
 
     holdings = []
     holdings_source = "broker"
@@ -2155,6 +2175,7 @@ def _build_overview_payload(force_refresh=False):
                 cash_asset_source = "derived(daytrade_engine.total_asset_krw-portfolio)"
         except Exception:
             pass
+    mark("totals")
     asset_reconciliation = _reconcile_broker_assets(domestic_balance, present)
     if asset_reconciliation['verified']:
         total_asset = asset_reconciliation['total']
@@ -2197,6 +2218,7 @@ def _build_overview_payload(force_refresh=False):
 
     daytrade_positions = []
     daytrade_position_summary = {"count": 0, "eval_amount_krw": 0.0, "cost_amount_krw": 0.0, "pnl_krw": 0.0}
+    mark("logs_watchlist")
     try:
         positions = trading.daytrade_engine.active_positions(sync_broker=bool(force_refresh)) or []
     except Exception:
@@ -2302,6 +2324,7 @@ def _build_overview_payload(force_refresh=False):
         "infinite_buy_summary": infinite_buy_summary,
         "holdings": holdings,
         "daytrade_positions": daytrade_positions,
+        "timings_ms": timings,
         "daytrade_position_summary": {
             "count": int(daytrade_position_summary.get("count", 0) or 0),
             "eval_amount_krw": round(float(daytrade_position_summary.get("eval_amount_krw", 0) or 0), 2),
