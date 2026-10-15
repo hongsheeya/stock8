@@ -1768,6 +1768,19 @@ class DomesticDaytradeEngine:
                 break
         return rate
 
+    def _strategy_stop_pct(self, strategy_id, profile, market="KS"):
+        """The stop-loss the backtest uses for a KS strategy, in percent.
+
+        volume_breakout trains its own breakout_stop_loss_pct (grid 0.6-1.0,
+        default 0.8). The live exits read the generic stop_loss_pct (1.5), so a
+        breakout slot could lose about twice what its backtest allowed and was
+        sized for a 1.5% stop.
+        """
+        profile = profile or {}
+        if strategy_id == "volume_breakout" and not self._is_us_market(market):
+            return abs(self._safe_float(profile.get("breakout_stop_loss_pct", 0.8), 0.8))
+        return abs(self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5))
+
     def _entry_stop_pct(self, symbol, strategy_id, market):
         """The hard stop the live exit enforces for this entry, in percent."""
         try:
@@ -1776,8 +1789,9 @@ class DomesticDaytradeEngine:
             profile = {}
         if self._is_us_market(market) and strategy_id in self._US_EXIT_LEVELS:
             return self._us_exit_levels(strategy_id, profile)[1]
-        default = 8.0 if self._is_us_market(market) else 1.5
-        return abs(self._safe_float((profile or {}).get("stop_loss_pct", default), default))
+        if self._is_us_market(market):
+            return abs(self._safe_float((profile or {}).get("stop_loss_pct", 8.0), 8.0))
+        return self._strategy_stop_pct(strategy_id, profile, market)
 
     def _risk_sized_entry_seed_krw(self, symbol, strategy_id, market, total_seed_krw, remaining_seed_krw):
         """Equal risk per entry: daytrade_risk_per_trade_pct of the seed at the stop.
@@ -3728,13 +3742,6 @@ class DomesticDaytradeEngine:
                             "watch_active": False,
                         })
                         continue
-                stop_loss_pct = abs(self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5))
-                jackpot_pct = max(0.0, self._safe_float(profile.get("jackpot_take_profit_pct", 2.0), 2.0))
-                jackpot_price = avg_price * (1 + jackpot_pct / 100) if avg_price > 0 else 0
-                jackpot_guard = jackpot_price * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
-                user_stop_price = self._safe_float(state.get("stop_loss_price", 0), 0)
-                user_stop_hit = bool(state.get("stop_loss_enabled", False)) and user_stop_price > 0 and current_price <= user_stop_price
-                auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
                 close_window = self._is_market_close_approaching(market)
                 live_bar = {}
                 if strategy_id == "volume_breakout" or (close_window and strategy_id == "vrev"):
@@ -3743,6 +3750,17 @@ class DomesticDaytradeEngine:
                     except Exception:
                         live_bar = {}
                     live_bar = live_bar or {}
+                if strategy_id == "volume_breakout" and str(live_bar.get("price_source", "") or "").startswith("kis_"):
+                    # The balance price can be two minutes old; a 0.8% stop
+                    # needs the quote the breakout exit already fetched.
+                    current_price = self._safe_float(live_bar.get("close", 0), 0) or current_price
+                stop_loss_pct = self._strategy_stop_pct(strategy_id, profile, market)
+                jackpot_pct = max(0.0, self._safe_float(profile.get("jackpot_take_profit_pct", 2.0), 2.0))
+                jackpot_price = avg_price * (1 + jackpot_pct / 100) if avg_price > 0 else 0
+                jackpot_guard = jackpot_price * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
+                user_stop_price = self._safe_float(state.get("stop_loss_price", 0), 0)
+                user_stop_hit = bool(state.get("stop_loss_enabled", False)) and user_stop_price > 0 and current_price <= user_stop_price
+                auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
                 breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
                 if pending_order_no:
                     if (user_stop_hit or auto_stop_hit) and self._pending_sell_is_reservation(state):
@@ -6783,7 +6801,7 @@ class DomesticDaytradeEngine:
 
         sell_priority_hit = False
         if position_qty > 0 and avg_price > 0:
-            _stop_loss_pct_val = self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5)
+            _stop_loss_pct_val = self._strategy_stop_pct(strategy_id, profile, market)
             _auto_stop_price = self._auto_stop_level(avg_price, _stop_loss_pct_val, market)
             _jackpot_pct_val = float(profile.get("jackpot_take_profit_pct", 2.0))
             _jackpot = avg_price * (1 + _jackpot_pct_val / 100)
@@ -6994,7 +7012,7 @@ class DomesticDaytradeEngine:
             jackpot_soft_exit_guard = jackpot * self._safe_float(profile.get("jackpot_soft_exit_guard_ratio", 0.995), 0.995)
             recent_target = anchor * (1 + float(profile.get("recent_lot_take_profit_pct", 0.6)) / 100)
             rescue_target = avg_price * (1 + float(profile.get("rescue_take_profit_pct", 0.5)) / 100)
-            stop_loss_pct_val = self._safe_float(profile.get("stop_loss_pct", 1.5), 1.5)
+            stop_loss_pct_val = self._strategy_stop_pct(strategy_id, profile, market)
             auto_stop_price = self._auto_stop_level(avg_price, stop_loss_pct_val, market)
             break_even_price = self._break_even_price(avg_price)
             bb_upper_live = self._safe_float(bar.get("bb_upper", 0), 0)
