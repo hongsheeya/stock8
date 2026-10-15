@@ -111,60 +111,108 @@ class DomesticDaytradeEngine:
             return
         try:
             db = self.struct.db("trade_log")
-            existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
+            query = dict(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000)
+
+            def load_rows():
+                scoped = db.rows(**query) or []
+                # rows() sees only the current user's rows. Duplicates are
+                # judged across every user: the scoped view let the backfill
+                # insert orders the engine had already logged under ''.
+                raw_rows = getattr(db, "_raw_rows", None)
+                return scoped, ((raw_rows(**query) if callable(raw_rows) else None) or scoped)
+
+            existing_rows, all_rows = load_rows()
             corrected = 0
             restored = 0
-            # A previous compatibility backfill treated every legacy order
-            # number as a fill. Those rows are only broker acceptances unless
-            # the saved state contains explicit fill evidence.
-            for row in existing_rows:
+            deduped = 0
+
+            def backfill_payload(row):
                 try:
                     raw = json.loads(row.get("raw_response", "") or "{}")
                 except Exception:
                     raw = {}
                 runtime = raw.get("runtime", {}) if isinstance(raw, dict) else {}
                 if not isinstance(runtime, dict) or runtime.get("history_backfill") is not True:
+                    return None, None
+                return raw, runtime
+
+            # One fill per order number: the engine's own log first, else the
+            # earliest backfill row whose saved order carries fill evidence.
+            ranked = []
+            for row in all_rows:
+                order_no = str(row.get("order_no", "") or "").strip()
+                if not order_no:
                     continue
+                raw, _runtime = backfill_payload(row)
+                if raw is None:
+                    if self._safe_int(row.get("filled_qty", 0), 0) <= 0:
+                        continue
+                    rank = 0
+                elif self._explicit_state_fill(raw.get("order")) is not None:
+                    rank = 1
+                else:
+                    continue
+                ranked.append((rank, str(row.get("created", "") or ""), str(row.get("id", "") or ""), order_no))
+            fill_holder = {}
+            for _rank, _created, row_id, order_no in sorted(ranked):
+                fill_holder.setdefault(order_no, row_id)
+
+            # A previous compatibility backfill treated every legacy order
+            # number as a fill. Those rows are only broker acceptances unless
+            # the saved state contains explicit fill evidence.
+            for row in existing_rows:
+                raw, runtime = backfill_payload(row)
+                if raw is None:
+                    continue
+                row_id = str(row.get("id", "") or "")
                 order = raw.get("order") if isinstance(raw.get("order"), dict) else {}
                 fill = self._explicit_state_fill(order)
-                if fill is not None:
-                    # The evidence check above was missing, so every restart
-                    # turned the backfill's own verified fills (96 PAPER rows,
-                    # 76 KIS-verified) into PENDING with qty 0. Restore them.
-                    if str(row.get("action", "") or "").upper() == "PENDING":
-                        qty, price = fill
-                        action_detail = str(order.get("action", "") or raw.get("action", "") or "").upper().replace("_PENDING", "")
-                        reason = str(runtime.get("reason", "") or order.get("reason", "") or "상태 파일에서 복구한 PAPER 체결")
-                        raw["execution_status"] = "FILLED"
-                        raw["action"] = action_detail
-                        raw["message"] = reason
-                        db.update({
-                            "action": self._normalize_trade_action(action_detail),
-                            "filled_price": price,
-                            "filled_qty": qty,
-                            "message": reason,
-                            "raw_response": self._safe_json_dumps(raw),
-                        }, id=row.get("id"))
-                        restored += 1
+                pending = str(row.get("action", "") or "").upper() == "PENDING"
+                holder = fill_holder.get(str(row.get("order_no", "") or "").strip(), row_id)
+                try:
+                    if fill is not None and holder == row_id:
+                        # The evidence check was missing, so every restart
+                        # turned the backfill's own verified fills into
+                        # PENDING with qty 0. Restore the one holding the fill.
+                        if pending:
+                            qty, price = fill
+                            action_detail = str(order.get("action", "") or raw.get("action", "") or "").upper().replace("_PENDING", "")
+                            reason = str(runtime.get("reason", "") or order.get("reason", "") or "상태 파일에서 복구한 PAPER 체결")
+                            raw["execution_status"] = "FILLED"
+                            raw["action"] = action_detail
+                            raw["message"] = reason
+                            db.update({
+                                "action": self._normalize_trade_action(action_detail),
+                                "filled_price": price,
+                                "filled_qty": qty,
+                                "message": reason,
+                                "raw_response": self._safe_json_dumps(raw),
+                            }, id=row.get("id"))
+                            restored += 1
+                        continue
+                    if pending and raw.get("execution_status") == "ACCEPTED_UNVERIFIED":
+                        continue
+                    raw["execution_status"] = "ACCEPTED_UNVERIFIED"
+                    raw["action"] = f"{str(raw.get('action', row.get('action', 'ORDER')) or 'ORDER').replace('_PENDING', '')}_PENDING"
+                    raw["message"] = "기존 주문 접수 기록 · KIS 체결 미확인" if fill is None else "같은 주문의 체결은 다른 기록에 반영됨"
+                    db.update({
+                        "action": "PENDING",
+                        "filled_price": 0,
+                        "filled_qty": 0,
+                        "message": raw["message"],
+                        "raw_response": self._safe_json_dumps(raw),
+                    }, id=row.get("id"))
+                    if fill is None:
+                        corrected += 1
+                    else:
+                        deduped += 1
+                except Exception:
                     continue
-                if str(row.get("action", "") or "").upper() == "PENDING" and raw.get("execution_status") == "ACCEPTED_UNVERIFIED":
-                    continue
-                raw["execution_status"] = "ACCEPTED_UNVERIFIED"
-                raw["action"] = f"{str(raw.get('action', row.get('action', 'ORDER')) or 'ORDER').replace('_PENDING', '')}_PENDING"
-                raw["message"] = "기존 주문 접수 기록 · KIS 체결 미확인"
-                db.update({
-                    "action": "PENDING",
-                    "filled_price": 0,
-                    "filled_qty": 0,
-                    "message": raw["message"],
-                    "raw_response": self._safe_json_dumps(raw),
-                }, id=row.get("id"))
-                corrected += 1
-            if corrected or restored:
-                existing_rows = db.rows(event_type__startswith="DT_", orderby="created", order="DESC", dump=5000) or []
+            if corrected or restored or deduped:
+                existing_rows, all_rows = load_rows()
             existing_order_nos = {
                 str(row.get("order_no", "") or "").strip()
-                for row in existing_rows
+                for row in all_rows
                 if str(row.get("order_no", "") or "").strip()
             }
             inserted = 0
@@ -220,6 +268,8 @@ class DomesticDaytradeEngine:
                 self._append_runtime_log("warning", f"체결 근거가 없던 과거 주문 {corrected}건을 접수·확인대기로 정정했습니다.", market="KS")
             if restored:
                 self._append_runtime_log("info", f"체결 근거가 있는 과거 주문 {restored}건의 체결 기록을 복원했습니다.", market="KS")
+            if deduped:
+                self._append_runtime_log("warning", f"같은 주문의 중복 체결 기록 {deduped}건을 접수 기록으로 정정했습니다.", market="KS")
         except Exception:
             # Startup must remain available even if a legacy state file is malformed.
             return
