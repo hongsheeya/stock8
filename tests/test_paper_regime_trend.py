@@ -6,7 +6,7 @@ inverse (leverage) ETF while its index trends down (up) past VWAP.
 """
 import datetime
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
 
 from test_daytrade_engine_regressions import _StrategyStub, _engine_with_state, daytrade_engine
 from test_daytrade_p0_exit_fixes import _state, _watch_engine
@@ -123,7 +123,7 @@ class RegimeTrendExitWatchTests(unittest.TestCase):
         engine, _saved, _broker, decisions = _watch_engine(
             [_state("114800", 1000, strategy_id=STRATEGY)], {"114800": 1005},
             now=now, bars={"114800": {"close": 1005, "vwap": 1000, "price_source": "kis_domestic_quote"}})
-        engine._regime_trend_view = lambda symbol: view
+        engine._regime_trend_view = lambda symbol, **_k: view
         engine.kr_execute_exit_watch(requested_seed=10_000_000)
         return decisions["114800"]
 
@@ -137,6 +137,86 @@ class RegimeTrendExitWatchTests(unittest.TestCase):
     def test_fast_watch_flattens_before_the_close(self):
         decision = self._run({"ok": True, "reversed": False}, now=datetime.datetime(2026, 5, 26, 15, 12))
         self.assertEqual(decision["action"], "SELL_FULL")
+
+
+class RegimeTrendOrderPathTests(unittest.TestCase):
+    """Signal -> execute_live -> broker order, end to end. The KS strategy as
+    first merged (#26) never set price_source, so execute_live's evidence gate
+    refused every buy ("가격 출처: 없음") although the signal said BUY1."""
+
+    def setUp(self):
+        for patcher in (patch.object(daytrade_engine, "_PAPER_MODE", True),
+                        patch.object(daytrade_engine, "_PAPER_CONTINUOUS", False),
+                        patch.object(_StrategyStub, "_default_profile_for_market", create=True,
+                                     new=lambda self, **_k: {}),
+                        patch.object(_StrategyStub, "daytrade_entry_issue", create=True,
+                                     new=lambda self, symbol: "")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _engine(self, snaps, now):
+        engine, _ = _engine_with_state({}, [], configs={"daytrade_auto_enabled": "true"})
+        engine._now = lambda: now
+        engine._timestamp = lambda: now.strftime("%Y-%m-%d %H:%M:%S")
+        engine._latest_snapshot = lambda symbol, market="KS": snaps[symbol]
+        engine._hard_locked = lambda: False
+        engine._daytrade_market_open = lambda market="KS": True
+        engine._us_market_open = lambda: True
+        engine._is_infinite_buy_symbol = lambda *a, **k: False
+        engine._guardrails = lambda *a, **k: {"issues": [], "warnings": [], "risk_status": "SAFE"}
+        engine._compact_runtime_meta = lambda *a, **k: {}
+        engine._invalidate_kis_cache = lambda: None
+        for name in ("_log_order_pending", "_log_order_failure", "_log_execution", "_append_runtime_log"):
+            setattr(engine, name, Mock())
+        engine._usd_krw_rate = lambda *a, **k: 1400.0
+        engine._load_runtime_logs = lambda *a, **k: []
+        engine._sync_broker_positions = lambda *a, **k: None
+        broker = MagicMock()
+        broker.buy_domestic_order.return_value = {"order_no": "0000123"}
+        broker.buy_order.return_value = {"order_no": "0000456"}
+        broker.get_domestic_fills_today.return_value = []
+        broker.get_overseas_order_history.return_value = []
+        broker.get_buying_power_info.return_value = {"ok": True, "executable_qty": 10_000, "executable_amount": 1_000_000,
+                                                     "amount": 1_000_000, "qty": 10_000}
+        engine._broker = lambda: broker
+        engine._resolve_domestic_fill = lambda *a, **k: {"status": "UNKNOWN", "filled_qty": 0, "filled_price": 0}
+        return engine, broker
+
+    def test_ks_inverse_buy_reaches_the_broker(self):
+        engine, broker = self._engine({"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)},
+                                      datetime.datetime(2026, 5, 26, 10, 0))
+        result = engine.execute_live("114800", market="KS", seed=10_000_000, strategy_id=STRATEGY, sync_broker=False)
+        self.assertFalse(result.get("evidence_blocked"), result.get("message"))
+        broker.buy_domestic_order.assert_called_once()
+
+    def test_us_inverse_buy_reaches_the_broker_on_amex(self):
+        # 23:30 KST = 10:30 ET (May, DST): the US session dated 05-26.
+        us = lambda o, c, v: ({"date": TODAY, "bars": [{"open": o, "close": o}]},
+                              {"close": c, "vwap": v, "price_source": "kis_overseas_quote"})
+        engine, broker = self._engine({"SOXX": us(200, 196, 198), "SOXS": us(20, 20.6, 20.3)},
+                                      datetime.datetime(2026, 5, 26, 23, 30))
+        result = engine.execute_live("SOXS", market="US", seed=10_000_000, strategy_id=STRATEGY, sync_broker=False)
+        self.assertFalse(result.get("evidence_blocked"), result.get("message"))
+        broker.buy_order.assert_called_once()
+        self.assertEqual(broker.buy_order.call_args.kwargs.get("exchange"), "AMEX")
+
+    def test_us_waits_for_ten_am_eastern(self):
+        us = lambda o, c, v: ({"date": TODAY, "bars": [{"open": o, "close": o}]},
+                              {"close": c, "vwap": v, "price_source": "kis_overseas_quote"})
+        engine, broker = self._engine({"SOXX": us(200, 196, 198), "SOXS": us(20, 20.6, 20.3)},
+                                      datetime.datetime(2026, 5, 26, 22, 50))  # 09:50 ET
+        signal = engine._signal_from_state("SOXS", market="US", seed=10_000_000, strategy_id=STRATEGY, sync_broker=False)["signal"]
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("ET", signal["reason"])
+
+    def test_us_candidates_are_the_us_etfs(self):
+        engine, _ = self._engine({}, datetime.datetime(2026, 5, 26, 23, 30))
+        engine._risk_sized_entry_seed_krw = lambda *a, **k: 3_000_000
+        rows = engine._with_regime_trend_candidates([{"symbol": "CRWD", "strategy_id": "us_premarket"}],
+                                                    {"total_seed_krw": 1, "remaining_seed_krw": 1}, market="US")
+        self.assertEqual([r["symbol"] for r in rows],
+                         ["SQQQ", "PSQ", "SH", "SPXU", "SOXS", "QLD", "SSO", "USD", "CRWD"])
+        self.assertTrue(all(r["market"] == "US" for r in rows[:-1]))
 
 
 if __name__ == "__main__":
