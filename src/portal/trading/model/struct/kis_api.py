@@ -850,10 +850,20 @@ class KisApi:
     # 해외주식 현재가 조회
     # =========================================================================
 
+    # Order APIs take NASD/NYSE/AMEX; the price API takes NAS/NYS/AMS.
+    _PRICE_EXCHANGE_CODES = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}
+
     def _price_exchange_candidates(self, exchange=None):
+        """Price-API exchange codes to try, the given one first.
+
+        The day-trade engine passes its order codes (NASD/NYSE/AMEX). The
+        price API rejects them, so every US quote first failed and retried
+        before falling back; on 10-16 one USD quote held the worker loop for
+        3 minutes while US exits went unwatched."""
         candidates = []
         if exchange:
-            candidates.append(exchange)
+            code = str(exchange).strip().upper()
+            candidates.append(self._PRICE_EXCHANGE_CODES.get(code, code))
 
         for item in self.PRICE_EXCHANGE_CANDIDATES:
             if item not in candidates:
