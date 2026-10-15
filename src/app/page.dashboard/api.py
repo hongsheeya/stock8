@@ -2052,7 +2052,11 @@ def _build_overview_payload(force_refresh=False):
     except Exception:
         pass
 
-    external_cycle_sync = _sync_external_cycle_trades_if_due(trading, force=True) if force_refresh else {
+    # The worker runs this sync on its own schedule. Inline, a manual refresh
+    # scanned 7 days of overseas order history three times per symbol behind
+    # the KIS rate limiter: minutes, during which every other dashboard
+    # request waited 8 s and got 503 (10-16).
+    external_cycle_sync = {
         "executed": False,
         "deferred": True,
         "message": "백그라운드 워커에서 동기화",
@@ -2387,7 +2391,19 @@ def overview():
                 return fallback_payload
             wiz.response.status(503, message="계좌 조회 지연 — 마지막 확인값을 유지합니다. 잠시 후 다시 조회해주세요.")
 
-    payload, is_leader = _singleflight(f"dashboard:overview:{cache_key}", _builder, timeout_sec=8.0)
+    flight_key = f"dashboard:overview:{cache_key}"
+    with _CACHE_LOCK:
+        building = flight_key in _SINGLEFLIGHT_EVENTS
+    if building:
+        # Another request is already building: answer at once with the last
+        # payload (up to 10 minutes old) instead of waiting up to 8 s.
+        stale_payload, stale_age = _cache_get(_OVERVIEW_CACHE, cache_key, 600.0)
+        if isinstance(stale_payload, dict):
+            stale_payload["cached"] = True
+            stale_payload["cache_age_sec"] = stale_age
+            stale_payload["refreshing"] = True
+            wiz.response.status(200, **stale_payload)
+    payload, is_leader = _singleflight(flight_key, _builder, timeout_sec=8.0)
     if is_leader is False:
         cached_payload, cache_age = _cache_get(_OVERVIEW_CACHE, cache_key, _OVERVIEW_TTL_SEC)
         if isinstance(cached_payload, dict):
