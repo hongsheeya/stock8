@@ -888,6 +888,35 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         self.assertFalse(result["recommendation"]["live_quality_guard"]["block_new_entries"])
         self.assertTrue(result["recommendation"]["live_quality_guard"]["paper_exploration"])
 
+    def test_paper_exploration_checks_more_than_the_next_slot(self):
+        symbols = [f"{100000 + i}" for i in range(10)]
+
+        def run(configs):
+            engine, _state = _engine_with_state({}, [], configs={"daytrade_auto_max_symbols": "5", **configs})
+
+            class _WideStrategy(_StrategyStub):
+                def candidate_universe(self, market="KS"):
+                    return [{"symbol": s, "name": s, "market": "KS", "strategy_id": "vrev"} for s in symbols]
+
+            engine._Daytrade = _WideStrategy
+            _WideStrategy.recommendation_payload = {
+                "leaderboard": [],
+                "quality_guard": {"block_new_entries": True, "issues": ["no training data"]},
+            }
+            engine.shared_budget_status = lambda **kwargs: {
+                "effective_daytrade_seed": 5000000.0, "total_seed_krw": 5000000.0, "used_seed_krw": 0.0,
+                "remaining_seed_krw": 5000000.0, "slot_target_count": 1, "available_slot_count": 5,
+                "max_symbols": 5, "slot_seed_limit_krw": 5000000.0,
+            }
+            engine.portfolio_usage = lambda **kwargs: {"active_positions": [], "active_entry_seed_krw": 0.0, "active_cost_krw": 0.0}
+            engine._append_runtime_log = lambda *args, **kwargs: None
+            engine.auto_enabled = lambda market="KS": True
+            with patch.object(daytrade_engine, "_PAPER_MODE", True):
+                return engine.auto_candidates(requested_seed=5000000, market="KS")["candidates"]
+
+        self.assertEqual(len(run({})), 8)
+        self.assertEqual(len(run({"daytrade_paper_exploration_candidates": "3"})), 3)
+
     def test_us_exit_watch_skips_slow_broker_checks_while_market_is_closed(self):
         engine, _state = _engine_with_state({}, [], configs={"daytrade_us_auto_enabled": "true"})
         engine._us_market_open = lambda: False
