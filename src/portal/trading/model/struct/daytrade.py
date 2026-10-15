@@ -31,6 +31,10 @@ class Daytrade:
         'paper_selective_pullback': {'id': 'paper_selective_pullback', 'name': '모의 검증 · 눌림목 재진입',
             'summary': 'EMA20 재돌파, 하루 1회, 손절·목표·시간 청산', 'market': 'KS',
             'live_supported': False, 'paper_only': True},
+        'paper_regime_trend': {'id': 'paper_regime_trend', 'name': '모의 검증 · 시장 방향 추세 (인버스/레버리지)',
+            'summary': '지수가 VWAP 아래로 1% 이상 밀리면 인버스, 위로 1% 이상 오르면 레버리지 ETF를 보유하고 '
+                       '지수가 VWAP을 되찾거나 -1.5% 손절·장마감에 청산', 'market': 'KS',
+            'live_supported': False, 'paper_only': True},
     }
     # 클래스 레벨 TTL 캐시: (symbol, period, interval) → (ts, data)
     _DATASET_CACHE: dict = {}
