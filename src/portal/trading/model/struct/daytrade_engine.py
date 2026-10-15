@@ -3051,6 +3051,15 @@ class DomesticDaytradeEngine:
                     "action": "WAIT_MARKET", "order_value": 0,
                     "message": "모의투자 정규장 시작 대기 — 주문은 전송하지 않습니다.",
                     "status": precomputed_status or {}}
+        # LIVE US matches PAPER: the US strategies are backtested on regular
+        # hours and the live bars carry no premarket data, so a signal from
+        # 04:00 ET on was judged on yesterday's bars. A forced order (manual
+        # liquidation) remains the user's call.
+        if not _PAPER_MODE and not force and str(market or "").upper() == "US" and not self._us_market_open():
+            return {"executed": False, "submitted": False, "market_closed": True,
+                    "action": "WAIT_MARKET", "order_value": 0,
+                    "message": "미국 정규장(ET 09:30~16:00) 외 시간 — 자동 주문은 전송하지 않습니다.",
+                    "status": precomputed_status or {}}
         if self._hard_locked():
             return {
                 "executed": False,
