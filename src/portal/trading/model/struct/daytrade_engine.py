@@ -5220,12 +5220,15 @@ class DomesticDaytradeEngine:
         # automatic cycle with zero symbols forever. Fill only the PAPER
         # leaderboard from the bounded KIS liquidity universe; LIVE keeps the
         # validation gate unchanged.
+        # PAPER forward testing looks wider than the open slots (see below).
+        paper_exploration_cap = max(1, min(12, self._safe_int(
+            self._config("daytrade_paper_exploration_candidates", "8"), 8)))
         if _PAPER_MODE:
             recommendation = self._expand_recommendation_with_candidate_universe(
                 recommendation,
                 market=market,
                 target_count=target_slot_count,
-                max_count=max_symbols,
+                max_count=max(max_symbols, paper_exploration_cap),
             )
         
         leaderboard = recommendation.get("leaderboard", []) if recommendation else []
@@ -5292,16 +5295,11 @@ class DomesticDaytradeEngine:
             # permanently unable to evaluate an entry. Keep the normal live
             # signal/evidence/budget/regime guardrails and only bypass the
             # missing-backtest gate for a small, auditable candidate set.
-            exploration_limit = max(
-                1,
-                min(
-                    3,
-                    self._safe_int(
-                        self._config("daytrade_paper_exploration_candidates", str(max(1, target_slot_count))),
-                        max(1, target_slot_count),
-                    ),
-                ),
-            )
+            # Forward testing needs signals to look at. The cap used to follow
+            # the slot target (positions + 1), so with one KS seed slot only 1-3
+            # candidates were checked per cycle. Seed, slot and per-symbol
+            # limits still bound the entries; this only widens the search.
+            exploration_limit = paper_exploration_cap
             valid = [
                 {**item, "paper_exploration": True}
                 for item in valid[:exploration_limit]
@@ -5447,7 +5445,7 @@ class DomesticDaytradeEngine:
                     )
                 ),
             })
-            if len(rows) >= max(max_symbols, len(active_positions)):
+            if len(rows) >= max(paper_exploration_cap if paper_exploration else max_symbols, len(active_positions)):
                 break
         
         return {
