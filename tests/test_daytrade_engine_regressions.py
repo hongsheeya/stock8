@@ -467,6 +467,8 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
                 "position_qty": 0,
                 "avg_price": 0,
                 "realized_profit": -60000,
+                "daily_realized_profit": -60000,
+                "daily_realized_date": "2026-05-26",
             },
         }, [], configs={"daytrade_daily_loss_limit_krw": "50000"})
 
