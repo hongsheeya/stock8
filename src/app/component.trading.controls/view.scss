@@ -60,3 +60,16 @@ button.strategy-card.enabled { background:var(--bn-elevated); color:var(--bn-bod
 .strategy-card:hover:not(:disabled) { border-color:var(--bn-primary); }
 button:focus-visible, input:focus-visible { outline:2px solid var(--bn-primary); outline-offset:3px; }
 .investment-risk { color:var(--bn-down); background:color-mix(in srgb,var(--bn-down) 8%,var(--bn-card)); }
+
+// Dashboard compact mode: three switches with a status dot.
+.is-compact { background:transparent; border:0; padding:0; margin-bottom:16px; }
+.is-compact .strategy-grid { grid-template-columns:repeat(3,minmax(0,1fr)); margin:0; gap:12px; }
+.is-compact .strategy-card { padding:14px 16px; background:var(--bn-card); }
+.is-compact .strategy-copy strong { font-size:15px; }
+.lane-health { display:inline-flex; align-items:center; gap:6px; font-size:12px; }
+.lane-health i { width:7px; height:7px; border-radius:50%; background:var(--bn-muted); display:inline-block; }
+.lane-health[data-level="ok"] i { background:var(--bn-up); }
+.lane-health[data-level="warn"] i { background:#f59e0b; }
+.lane-health[data-level="error"] { color:var(--bn-down); }
+.lane-health[data-level="error"] i { background:var(--bn-down); }
+@media(max-width:760px) { .is-compact .strategy-grid { grid-template-columns:1fr; } }

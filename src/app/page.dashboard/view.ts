@@ -135,7 +135,8 @@ export class Component implements OnInit {
     public detailTradeFilter: string = 'ALL';
 
     // ─── Profit Summary State ───
-    public profitPeriod: string = '1W';
+    // Today first: the dashboard answers "how is it going now".
+    public profitPeriod: string = '1D';
     public profitLoading: boolean = false;
     public profitSnapshotReady: boolean = false;
     public profitData: any = {
@@ -830,6 +831,34 @@ export class Component implements OnInit {
         }
         const count = Number(this.daytradePositionSummary?.count) || 0;
         return count > 0 ? `보유 포지션 ${count}건 평가손익` : '현재 보유 단타 포지션 없음';
+    }
+
+    // The 10s auto refresh is the server's fast mode, which can report the
+    // stock value as 0 while positions are held; total assets then equal cash.
+    public get holdingsEvalKrw(): number {
+        const daytrade = Number(this.daytradePositionSummary?.eval_amount_krw || 0);
+        const rate = Number(this.exchangeRate || 0);
+        const cycles = rate > 0 ? (this.infiniteBuyCycles || []).reduce((sum: number, c: any) =>
+            sum + Number(c.total_qty || 0) * Number(c.current_price || 0), 0) * rate : 0;
+        return daytrade + cycles;
+    }
+    public get displayStockValue(): number {
+        return this.portfolioValue > 0 ? this.portfolioValue : this.holdingsEvalKrw;
+    }
+    public get totalAssetPending(): boolean {
+        const held = (this.daytradePositionSummary?.count || 0) > 0 || (this.infiniteBuyCycles || []).length > 0;
+        return this.portfolioValue <= 0 && held;
+    }
+
+    public strategyLabel(position: any): string {
+        const labels: any = {
+            vrev: '눌림 반등', volume_breakout: '거래량 돌파', paper_regime_trend: '방향 추세',
+            paper_momentum_ride: '급등주 편승', us_premarket: '갭업 하따', us_breakout: '돌파',
+            us_pullback: '눌림', us_vwap: 'VWAP', us_opening_reclaim: '시가 회복',
+            paper_selective_breakout: '선택 돌파', paper_selective_pullback: '선택 눌림',
+        };
+        const id = String(position?.strategy_id || '').trim();
+        return labels[id] || position?.strategy_name || id || '-';
     }
 
     public marketLabel(market: string): string {
