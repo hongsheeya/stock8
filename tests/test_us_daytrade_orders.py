@@ -242,6 +242,30 @@ class UsPremarketGapTests(unittest.TestCase):
                                                strategy_id="us_premarket", sync_broker=False)["signal"]
         self.assertAlmostEqual(signal["us_meta"]["gap_pct"], 10.0, places=2)
 
+    def test_volume_floor_uses_the_session_dollar_volume(self):
+        # 60 minutes of $100k each = $6M traded today; the last bar alone
+        # ($100k) used to fail the $2M floor.
+        engine, _ = _engine_with_state({}, [])
+        daytrade_engine._USD_KRW_CACHE.clear()
+        self.addCleanup(daytrade_engine._USD_KRW_CACHE.clear)
+        engine._now = lambda: MIDDAY
+        engine._profile_for = lambda *_a, **_k: dict(daytrade_module.Daytrade.US_DEFAULT_PROFILE)
+        engine._aggregate_ticks_to_candle = lambda *_a: None
+        engine._market_buy_budget = lambda *_a, **_k: {"budget_total": 1000.0, "buy_budget": 1000.0}
+        engine._append_runtime_log = lambda *_a, **_k: None
+        engine._guardrails = lambda *_a, **_k: {"issues": [], "warnings": []}
+        bars = [{"close": 100.0, "volume": 1000} for _ in range(60)]
+        engine._latest_snapshot = lambda *_a, **_k: (
+            {"date": "2026-05-26", "prev_close": 110.0, "prev_close_confirmed": True, "bars": bars},
+            {"close": 104.0, "open": 110.0, "high": 112.0, "low": 103.0, "volume": 1000,
+             "quote_prev_close": 100.0, "indicator_bar_count": 60})
+        with patch.object(_StrategyStub, "_event_filter_snapshot", create=True,
+                          new=lambda *_a, **_k: {"blocked": False}):
+            signal = engine._signal_from_state("TEST", market="US", seed=1000000,
+                                               strategy_id="us_premarket", sync_broker=False)["signal"]
+        self.assertEqual(signal["us_meta"]["estimated_volume_usd"], 6_000_000)
+        self.assertNotIn("거래대금", signal["reason"])
+
 
 class UsSellFillTests(unittest.TestCase):
     def _state(self):

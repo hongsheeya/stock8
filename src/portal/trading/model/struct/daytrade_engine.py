@@ -6547,8 +6547,13 @@ class DomesticDaytradeEngine:
             gap_pct = (day_open - prev_close) / prev_close * 100 if prev_close > 0 else 0
             intraday_high = self._safe_float(bar.get("high", current_price), current_price)
             drawdown_from_high_pct = (intraday_high - current_price) / intraday_high * 100 if intraday_high > 0 else 0
-            # 대략적인 거래대금 판단: close * volume (USD)
-            estimated_volume_usd = self._safe_float(bar.get("close", 0), 0) * self._safe_int(bar.get("volume", 0), 0)
+            # 거래대금 = 당일 누적 close * volume (USD). One 1-minute bar's
+            # dollar volume almost never reaches the $2M floor, which quietly
+            # blocked nearly every entry.
+            estimated_volume_usd = sum(
+                self._safe_float(row.get("close", 0), 0) * self._safe_int(row.get("volume", 0), 0)
+                for row in list((session or {}).get("bars", []) or [])
+            ) or self._safe_float(bar.get("close", 0), 0) * self._safe_int(bar.get("volume", 0), 0)
             us_meta = {
                 "gap_pct": round(gap_pct, 4),
                 "drawdown_from_high_pct": round(drawdown_from_high_pct, 4),
