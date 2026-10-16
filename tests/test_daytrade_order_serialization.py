@@ -18,7 +18,8 @@ class OrderSerializationTests(TestCase):
         path = Path(__file__).resolve().parents[1] / 'src/portal/trading/model/struct/daytrade_engine.py'
         tree = ast.parse(path.read_text(encoding='utf-8-sig'))
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
-        scope = {'_PAPER_MODE':False, '_PAPER_CONTINUOUS':False}
+        import time as _clock
+        scope = {'_PAPER_MODE':False, '_PAPER_CONTINUOUS':False, '_clock':_clock}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), 'exec'), scope)
         return scope[name]
 
