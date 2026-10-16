@@ -3,26 +3,25 @@
 //- ============================================================
 
 //- Header
-div(class="flex items-center justify-between mb-6")
-    div
-        h1(class="text-lg font-semibold text-white") {{t('sim.title')}}
-        p(class="text-xs text-slate-500 mt-0.5") {{t('sim.subtitle')}}
-    div(class="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-400/20")
-        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5 text-amber-400")
-            path(stroke-linecap="round", stroke-linejoin="round", d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z")
-        span(class="text-xs font-medium text-amber-300") {{t('sim.admin_only')}}
+div(class="dx-head")
+    div(class="dx-title")
+        h1 {{t('sim.title')}}
+        span(class="dx-chip is-warn") {{t('sim.admin_only')}}
+    div(class="dx-tools")
+        span(class="dx-updated") {{t('sim.subtitle')}}
 
 //- Config Form
-div(class="glass-card p-6 mb-6")
-    h2(class="text-sm font-semibold text-white mb-4") {{t('sim.settings')}}
+div(class="dx-card")
+    div(class="dx-card-head")
+        h2 {{t('sim.settings')}}
 
     div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
         //- Symbol
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.symbol')}}
+            label(class="sim-label") {{t('sim.symbol')}}
             select([(ngModel)]="symbol",
                 (ngModelChange)="onSymbolChange($event)",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
                 option(value="", disabled="") {{t('sim.select_symbol')}}
                 option(*ngFor="let w of watchlist", [value]="w.symbol") {{w.symbol}} — {{w.name || ''}}
                 option(value="__custom__") {{t('sim.custom_symbol')}}
@@ -32,7 +31,7 @@ div(class="glass-card p-6 mb-6")
                         type="text",
                         [placeholder]="t('sim.custom_placeholder')",
                         (keyup.enter)="validateCustomSymbol()",
-                        class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                        class="dx-input flex-1")
                     button((click)="validateCustomSymbol()",
                         [disabled]="symbolValidating || !customSymbol",
                         class="px-3 py-2 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-medium hover:bg-indigo-500/30 disabled:opacity-30 transition-colors whitespace-nowrap")
@@ -48,60 +47,60 @@ div(class="glass-card p-6 mb-6")
 
         //- Start Date
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.start_date')}}
+            label(class="sim-label") {{t('sim.start_date')}}
             input([(ngModel)]="startDate",
                 type="date",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
         //- End Date
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.end_date')}}
+            label(class="sim-label") {{t('sim.end_date')}}
             input([(ngModel)]="endDate",
                 type="date",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
     div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
         //- Investment
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.initial_inv')}}
+            label(class="sim-label") {{t('sim.initial_inv')}}
             input([(ngModel)]="investment",
                 type="number", min="100",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
         //- Division
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.division_count')}}
+            label(class="sim-label") {{t('sim.division_count')}}
             input([(ngModel)]="divisionCount",
                 type="number", min="10", max="80",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
         //- Target Profit
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.target_profit')}}
+            label(class="sim-label") {{t('sim.target_profit')}}
             input([(ngModel)]="targetProfit",
                 type="number", min="1", max="50",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
     //- Commission & Tax Row
     div(class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4")
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.buy_commission')}}
+            label(class="sim-label") {{t('sim.buy_commission')}}
             input([(ngModel)]="buyCommissionRate",
                 type="number", step="0.01", min="0", max="5",
                 placeholder="0.25",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.sell_commission')}}
+            label(class="sim-label") {{t('sim.sell_commission')}}
             input([(ngModel)]="sellCommissionRate",
                 type="number", step="0.01", min="0", max="5",
                 placeholder="0.25",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
         div
-            label(class="block text-xs font-medium text-slate-400 mb-1") {{t('sim.sell_tax')}}
+            label(class="sim-label") {{t('sim.sell_tax')}}
             input([(ngModel)]="taxRate",
                 type="number", step="0.01", min="0", max="5",
                 placeholder="0",
-                class="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-[13px] text-slate-200 focus:outline-none focus:border-indigo-400/50")
+                class="dx-input w-full")
 
     //- Extension Option + My Strategy Toggle + Run Button
     div(class="flex items-center justify-between mb-0")
@@ -143,7 +142,7 @@ div(class="glass-card p-6 mb-6")
                 | {{t('sim.compare')}}
             button((click)="runSimulation()",
                 [disabled]="running",
-                class="px-6 py-2.5 rounded-lg bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-[13px] font-medium hover:bg-indigo-500/30 transition-colors disabled:opacity-50")
+                class="dx-tool is-primary")
                 span(*ngIf="!running")
                     svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
                         class="size-4 inline-block mr-1.5 -mt-0.5")
@@ -153,7 +152,7 @@ div(class="glass-card p-6 mb-6")
 
 //- My Strategy Info Badge
 div(*ngIf="useMyStrategy && myStrategyLoaded",
-    class="glass-card p-4 mb-6 border border-cyan-400/20 bg-cyan-500/5")
+    class="dx-alert is-info")
     div(class="flex items-center gap-2")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
             class="size-4 text-cyan-400 shrink-0")
@@ -163,7 +162,7 @@ div(*ngIf="useMyStrategy && myStrategyLoaded",
         span(class="text-[13px] text-cyan-200 ml-1") {{strategyLabel()}}
 
 //- Strategy Comparison Panel
-div(*ngIf="showComparison", class="glass-card p-6 mb-6 border border-violet-400/10")
+div(*ngIf="showComparison", class="dx-card")
     h2(class="text-sm font-semibold text-violet-300 mb-4 flex items-center gap-2")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5m.75-9 3-3 2.148 2.148A12.061 12.061 0 0 1 16.5 7.605")
@@ -223,7 +222,7 @@ div(*ngIf="showComparison", class="glass-card p-6 mb-6 border border-violet-400/
     div(class="flex justify-end")
         button((click)="runComparison()",
             [disabled]="comparing",
-            class="px-4 py-2 rounded-lg bg-violet-500/20 border border-violet-400/30 text-violet-300 text-[13px] font-medium hover:bg-violet-500/30 transition-colors disabled:opacity-50")
+            class="dx-tool is-primary")
             span(*ngIf="!comparing") {{t('sim.compare')}}
             span(*ngIf="comparing") {{t('sim.running')}}
 
@@ -297,7 +296,7 @@ div(*ngIf="showComparison", class="glass-card p-6 mb-6 border border-violet-400/
                         | ${{formatUSD((comparisonResult.partial_sell?.final_asset || 0) - (comparisonResult.full_sell?.final_asset || 0))}}
 
 //- Error Message
-div(*ngIf="errorMessage", class="glass-card p-4 mb-6 border border-red-500/30 bg-red-500/5")
+div(*ngIf="errorMessage", class="dx-alert is-danger")
     div(class="flex items-center gap-2")
         svg(xmlns="http://www.w3.org/2000/svg", viewBox="0 0 20 20", fill="currentColor", class="size-5 text-red-400 shrink-0")
             path(fill-rule="evenodd", d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", clip-rule="evenodd")
@@ -307,7 +306,7 @@ div(*ngIf="errorMessage", class="glass-card p-4 mb-6 border border-red-500/30 bg
 div(*ngIf="hasResult")
     //- Strategy Applied Info
     div(*ngIf="summary.use_my_strategy && summary.sell_strategy === 'partial'",
-        class="glass-card p-3 mb-4 border border-cyan-400/10 bg-cyan-500/5")
+        class="dx-alert is-info")
         div(class="flex items-center gap-2 text-[12px]")
             svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
                 class="size-3.5 text-cyan-400 shrink-0")
@@ -315,32 +314,32 @@ div(*ngIf="hasResult")
             span(class="text-cyan-300") {{t('sim.my_strategy_applied')}}
 
     //- Summary Cards
-    div(class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6")
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_cycles')}}
-            div(class="text-xl font-bold text-white") {{summary.total_cycles || 0}}
-            div(class="text-[10px] text-slate-500 mt-0.5") {{t('sim.completed')}}: {{summary.completed_cycles || 0}}
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_return')}}
-            div(class="text-xl font-bold", [class]="profitClass(summary.total_return || 0)")
+    div(class="dx-kpis sim-kpis")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.total_cycles')}}
+            div(class="dx-kpi-value") {{summary.total_cycles || 0}}
+            div(class="dx-kpi-sub") {{t('sim.completed')}}: {{summary.completed_cycles || 0}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.total_return')}}
+            div(class="dx-kpi-value", [class]="profitClass(summary.total_return || 0)")
                 | {{summary.total_return > 0 ? '+' : ''}}{{summary.total_return | number:'1.2-2'}}%
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.win_rate')}}
-            div(class="text-xl font-bold", [class]="(summary.win_rate || 0) >= 50 ? 'text-emerald-400' : 'text-amber-400'")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.win_rate')}}
+            div(class="dx-kpi-value", [class]="(summary.win_rate || 0) >= 50 ? 'text-emerald-400' : 'text-amber-400'")
                 | {{summary.win_rate | number:'1.1-1'}}%
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.avg_days')}}
-            div(class="text-xl font-bold text-white") {{summary.avg_cycle_days | number:'1.0-0'}}
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.max_drawdown')}}
-            div(class="text-xl font-bold text-red-400") {{summary.max_drawdown | number:'1.2-2'}}%
-        div(class="glass-card p-4 text-center")
-            div(class="text-[10px] text-slate-500 uppercase mb-1") {{t('sim.total_fees')}}
-            div(class="text-xl font-bold text-amber-400") ${{formatUSD(summary.total_commission || 0)}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.avg_days')}}
+            div(class="dx-kpi-value") {{summary.avg_cycle_days | number:'1.0-0'}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.max_drawdown')}}
+            div(class="dx-kpi-value dx-down") {{summary.max_drawdown | number:'1.2-2'}}%
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{t('sim.total_fees')}}
+            div(class="dx-kpi-value") ${{formatUSD(summary.total_commission || 0)}}
 
     //- Extension Info (if used)
     div(*ngIf="summary.allow_extension && summary.extension_count > 0",
-        class="glass-card p-4 mb-6 border border-orange-400/20 bg-orange-500/5")
+        class="dx-alert is-warn")
         div(class="flex items-center gap-2")
             svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
                 class="size-4 text-orange-400 shrink-0")
@@ -349,7 +348,7 @@ div(*ngIf="hasResult")
                 | {{t('sim.auto_extend')}} — {{summary.extension_count}} extension(s)
 
     //- Final Asset + Period Info
-    div(class="glass-card p-4 mb-6")
+    div(class="dx-card")
         div(class="flex items-center justify-between")
             div
                 div(class="text-xs text-slate-500 uppercase") {{t('sim.initial')}}
@@ -363,44 +362,45 @@ div(*ngIf="hasResult")
                     | ${{formatUSD(summary.final_asset || 0)}}
 
     //- Cycle Summary Table
-    div(*ngIf="cycles.length > 0", class="glass-card p-5 mb-6")
-        h2(class="text-sm font-semibold text-white mb-4")
-            | {{t('sim.cycle_summary')}} ({{cycles.length}})
+    div(*ngIf="cycles.length > 0", class="dx-card")
+        div(class="dx-card-head")
+            h2 {{t('sim.cycle_summary')}}
+                span(class="dx-count") {{cycles.length}}
 
         div(class="overflow-x-auto")
-            table(class="w-full text-left")
+            table(class="dx-table")
                 thead
-                    tr(class="border-b border-white/5")
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") #
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.start')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.end')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.rounds')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.div')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.invested')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.sell_amt')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.fees')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.return')}}
+                    tr
+                        th #
+                        th {{t('sim.start')}}
+                        th {{t('sim.end')}}
+                        th(class="num") {{t('sim.rounds')}}
+                        th(class="num") {{t('sim.div')}}
+                        th(class="num") {{t('sim.invested')}}
+                        th(class="num") {{t('sim.sell_amt')}}
+                        th(class="num") {{t('sim.fees')}}
+                        th(class="num") {{t('sim.return')}}
                 tbody
                     tr(*ngFor="let c of cycles; let i = index",
-                        class="border-b border-white/3 hover:bg-white/3 transition-colors")
-                        td(class="py-2 text-[13px] text-slate-400") {{c.cycle_num || i + 1}}
-                        td(class="py-2 text-[13px] text-slate-300") {{c.start_date}}
-                        td(class="py-2 text-[13px] text-slate-300") {{c.end_date}}
-                        td(class="py-2 text-[13px] text-slate-300 text-right") {{c.rounds}}
-                        td(class="py-2 text-[13px] text-right",
+                        class="sim-row")
+                        td {{c.cycle_num || i + 1}}
+                        td {{c.start_date}}
+                        td {{c.end_date}}
+                        td(class="num") {{c.rounds}}
+                        td(class="num",
                             [class]="c.division_count > divisionCount ? 'text-orange-400' : 'text-slate-300'")
                             | {{c.division_count || divisionCount}}
-                        td(class="py-2 text-[13px] text-slate-300 text-right") ${{c.total_spent | number:'1.2-2'}}
-                        td(class="py-2 text-[13px] text-slate-300 text-right") ${{c.sell_amount | number:'1.2-2'}}
-                        td(class="py-2 text-[13px] text-amber-400 text-right") ${{c.commission | number:'1.2-2'}}
-                        td(class="py-2 text-[13px] font-medium text-right", [class]="profitClass(c.return_rate)")
+                        td(class="num") ${{c.total_spent | number:'1.2-2'}}
+                        td(class="num") ${{c.sell_amount | number:'1.2-2'}}
+                        td(class="num dx-muted") ${{c.commission | number:'1.2-2'}}
+                        td(class="num dx-strong", [class]="profitClass(c.return_rate)")
                             | {{c.return_rate > 0 ? '+' : ''}}{{c.return_rate | number:'1.2-2'}}%
 
     //- Trade Detail Table
-    div(*ngIf="trades.length > 0", class="glass-card p-5")
-        div(class="flex items-center justify-between mb-4")
-            h2(class="text-sm font-semibold text-white")
-                | {{t('sim.trade_details')}} ({{filteredTrades.length}})
+    div(*ngIf="trades.length > 0", class="dx-card")
+        div(class="dx-card-head")
+            h2 {{t('sim.trade_details')}}
+                span(class="dx-count") {{filteredTrades.length}}
             //- Filter buttons
             div(class="flex items-center gap-1")
                 button(*ngFor="let f of ['ALL','BUY','SELL','SKIP','EXTEND','PARTIAL_SELL','CRASH_BUY']",
@@ -410,29 +410,29 @@ div(*ngIf="hasResult")
                     | {{f}}
 
         div(class="overflow-x-auto max-h-96 overflow-y-auto trading-scroll")
-            table(class="w-full text-left")
-                thead(class="sticky top-0 bg-slate-900/90 backdrop-blur-sm")
-                    tr(class="border-b border-white/5")
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.cycle')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.date')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.rounds')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase") {{t('sim.action')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.price')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.qty')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.amount')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.fee')}}
-                        th(class="pb-2 text-xs font-medium text-slate-500 uppercase text-right") {{t('sim.avg_price')}}
+            table(class="dx-table")
+                thead(class="sim-sticky")
+                    tr
+                        th {{t('sim.cycle')}}
+                        th {{t('sim.date')}}
+                        th {{t('sim.rounds')}}
+                        th {{t('sim.action')}}
+                        th(class="num") {{t('sim.price')}}
+                        th(class="num") {{t('sim.qty')}}
+                        th(class="num") {{t('sim.amount')}}
+                        th(class="num") {{t('sim.fee')}}
+                        th(class="num") {{t('sim.avg_price')}}
                 tbody
                     tr(*ngFor="let t of filteredTrades",
-                        class="border-b border-white/3 hover:bg-white/3 transition-colors")
-                        td(class="py-1.5 text-[12px] text-slate-500") {{t.cycle_num}}
-                        td(class="py-1.5 text-[12px] text-slate-300") {{t.date}}
-                        td(class="py-1.5 text-[12px] text-slate-300") {{t.round}}
-                        td(class="py-1.5 text-[12px] font-medium",
+                        class="sim-row")
+                        td {{t.cycle_num}}
+                        td {{t.date}}
+                        td {{t.round}}
+                        td(class="dx-strong",
                             [class]="t.action === 'BUY' ? 'text-indigo-300' : t.action === 'SELL' ? 'text-emerald-300' : t.action === 'EXTEND' ? 'text-orange-300' : t.action === 'CRASH_BUY' ? 'text-amber-300' : t.action === 'PARTIAL_SELL' ? 'text-violet-300' : 'text-slate-500'")
                             | {{t.action}}
-                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.price | number:'1.2-2'}}
-                        td(class="py-1.5 text-[12px] text-slate-300 text-right") {{t.qty}}
-                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.amount | number:'1.2-2'}}
-                        td(class="py-1.5 text-[12px] text-amber-400 text-right") ${{t.commission | number:'1.2-2'}}
-                        td(class="py-1.5 text-[12px] text-slate-300 text-right") ${{t.avg_price | number:'1.4-4'}}
+                        td(class="num") ${{t.price | number:'1.2-2'}}
+                        td(class="num") {{t.qty}}
+                        td(class="num") ${{t.amount | number:'1.2-2'}}
+                        td(class="num dx-muted") ${{t.commission | number:'1.2-2'}}
+                        td(class="num") ${{t.avg_price | number:'1.4-4'}}

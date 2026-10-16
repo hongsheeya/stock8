@@ -2,8 +2,20 @@
 //- Settings Page (API / Risk / Watchlist / Strategy)
 //- ============================================================
 
+div(class="dx-head")
+    div(class="dx-title")
+        h1 설정
+        span(*ngIf="accountContext", class="dx-chip", [class.is-live]="!isMock") {{isMock ? '모의투자' : '실계좌'}}
+        span(*ngIf="paperReady", class="dx-chip is-on")
+            i
+            | KIS 연결됨
+    div(class="dx-tools")
+        a(*ngIf="!isMock", class="dx-tool", routerLink="/settings/live") 실투자 주문 허용
+
 //- Tab Navigation
-div(*ngIf="!accountContext", role="status", class="mb-4") {{loadError || '투자 계정을 확인하고 있습니다…'}}
+div(*ngIf="!accountContext", role="status", class="dx-alert is-info mb-4")
+    strong 확인 중
+    span {{loadError || '투자 계정을 확인하고 있습니다…'}}
 section(*ngIf="accountContext?.paper_subscribed && !isInfiniteBuyMode()", class="account-switcher")
     div
         h2 투자 계정
@@ -17,7 +29,7 @@ section(*ngIf="accountContext && !accountContext.paper_subscribed && !isInfinite
     h2 모의투자 구독
     p 실투자와 분리된 테스트 계정을 신청할 수 있습니다. 신청만으로 자동매매가 시작되지는 않습니다.
     button((click)="subscribePaper()", [disabled]="loading") 모의투자 신청하기
-div(class="settings-tabs flex flex-nowrap items-center justify-center gap-2 mb-6 overflow-x-auto pb-1")
+nav(class="dx-tabs settings-tabs")
     button(*ngIf="!isInfiniteBuyMode()", (click)="switchTab('api')", [class]="tabClass('api')")
         svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
             path(stroke-linecap="round", stroke-linejoin="round", d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z")
@@ -45,15 +57,9 @@ div(*ngIf="tab === 'api' && accountContext")
         p 개인 KIS API를 저장하고 연결을 확인한 뒤, 본인의 FireGate 계정을 연결하세요.
         a(routerLink="/infinite-buy", class="inline-flex mt-3 px-4 py-2 rounded-lg bg-indigo-600 text-white") FireGate 연결 · 사이클 동기화
         p(class="mt-3 text-sm") 연결 후 사이클·예산·종목 잠금을 확인하고 대시보드에서 무한매수를 켜세요. 연결만으로 주문되지는 않습니다.
-    section(class="settings-hero max-w-4xl")
-        div(class="settings-hero-copy")
-            span(class="settings-eyebrow") {{isMock ? 'STOCK8 · PAPER LAB' : 'STOCK8 · LIVE ACCOUNT'}}
-            h1 안전하게 연결하고, 무한매수를 시작하세요.
-            p API 키와 계좌번호는 현재 투자 계정에만 저장됩니다. 연결 확인만으로 실투자 주문이 활성화되지 않습니다.
-        div(class="settings-hero-mark", aria-hidden="true") ∞
-        div(class="settings-safety-pill")
-            span(class="settings-safety-dot")
-            span {{paperReady ? 'KIS PAPER READY' : isMock ? 'PAPER SETUP' : 'LIVE · 주문 별도 허용'}}
+    div(class="dx-alert is-info settings-safety max-w-4xl")
+        strong {{paperReady ? 'KIS 연결 준비됨' : (isMock ? '모의투자 설정' : '실계좌 · 주문은 별도 허용')}}
+        span API 키와 계좌번호는 현재 투자 계정에만 저장됩니다. 연결 확인만으로 실투자 주문이 켜지지 않습니다.
 
     div(class="glass-card settings-api-card p-6 max-w-4xl")
         div(*ngIf="loadError", class="mb-5 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-[12px] text-red-200") {{loadError}}

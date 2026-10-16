@@ -11,24 +11,28 @@
     margin: -8px;
 }
 
-.firegate-toolbar {
-    display: flex;
-    min-height: 54px;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    background: rgba(15, 23, 42, 0.88);
-    padding: 8px 12px;
+.firegate-page > .dx-head { margin-bottom: 0; }
+
+.ib-cycles { display: flex; gap: 8px; flex-wrap: wrap; }
+.ib-cycle {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
+    color: var(--bn-muted-strong); background: var(--bn-card); border: 1px solid var(--bn-hairline);
+    font-variant-numeric: tabular-nums; text-decoration: none;
 }
+.ib-cycle:hover { border-color: var(--bn-primary); }
+.ib-cycle strong { color: var(--bn-body); font-size: 13px; }
+.ib-cycle small { color: var(--bn-muted); }
+.ib-cycle b { font-weight: 700; }
+.ib-progress { width: 56px; height: 5px; border-radius: 999px; background: var(--bn-elevated); overflow: hidden; }
+.ib-progress i { display: block; height: 100%; background: var(--bn-primary); border-radius: 999px; }
+.ib-tools { margin-bottom: 0; }
 
 .firegate-shell {
     flex: 1 1 auto;
     min-height: calc(100vh - 92px);
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
+    border: 1px solid var(--bn-hairline, rgba(255, 255, 255, 0.12));
+    border-radius: 12px;
     background: #fff;
 }
 
@@ -44,11 +48,6 @@
 @media (max-width: 768px) {
     .firegate-page {
         margin: -12px;
-    }
-
-    .firegate-toolbar {
-        align-items: flex-start;
-        flex-direction: column;
     }
 
     .firegate-frame,

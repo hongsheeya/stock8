@@ -294,6 +294,17 @@ button.dx-tag:disabled { opacity: .5; cursor: not-allowed; }
 .dx-input:focus, .dx-select:focus { outline: none; border-color: var(--bn-primary); }
 .dx-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 
+.dx-tabs {
+    display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--bn-hairline); overflow-x: auto;
+}
+.dx-tabs > button, .dx-tabs > a {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; font-size: 14px; font-weight: 650; white-space: nowrap;
+    color: var(--bn-muted-strong); background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.dx-tabs > button:hover, .dx-tabs > a:hover { color: var(--bn-body); }
+.dx-tabs > .is-active { color: var(--bn-body); border-bottom-color: var(--bn-primary); }
+
 .dx-details { padding: 0; }
 .dx-details > summary {
     display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none;
@@ -317,6 +328,25 @@ button.dx-tag:disabled { opacity: .5; cursor: not-allowed; }
 .dx-switch.is-on { background: #10b981; }
 .dx-switch.is-on::after { transform: translateX(16px); }
 .dx-switch:disabled { opacity: .5; }
+
+// Older pages were written for the dark theme with Tailwind's fixed colors
+// (white text, white/5 panels). In the light theme those turned invisible.
+.trading-bg.theme-light {
+    .text-white:not([class*="-500"]):not([class*="-600"]) { color: var(--bn-body); }
+    .text-slate-100, .text-slate-200, .text-slate-300 { color: #334155; }
+    .text-slate-400 { color: #52627a; }
+    .text-slate-500, .text-slate-600 { color: #6b778c; }
+    .bg-white\/5, .bg-white\/3, .bg-black\/20, .bg-black\/10, .bg-slate-900\/90, .bg-slate-900\/70 { background-color: var(--bn-elevated); }
+    .border-white\/5, .border-white\/10, .border-white\/3 { border-color: var(--bn-hairline); }
+    .text-emerald-300, .text-emerald-400 { color: #047857; }
+    .text-indigo-300, .text-indigo-400, .text-indigo-200 { color: #4338ca; }
+    .text-blue-200, .text-blue-300 { color: #1d4ed8; }
+    .text-violet-300, .text-violet-200 { color: #6d28d9; }
+    .text-amber-300, .text-amber-400 { color: #b45309; }
+    .text-orange-300, .text-orange-400 { color: #c2410c; }
+    .text-cyan-300, .text-cyan-200 { color: #0e7490; }
+    .text-red-300, .text-red-400 { color: #b91c1c; }
+}
 
 @media (max-width: 1100px) { .dx-kpis, .dx-kpis.is-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .dx-grid-2 { grid-template-columns: 1fr; } }

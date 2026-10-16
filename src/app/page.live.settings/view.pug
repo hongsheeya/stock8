@@ -1,5 +1,9 @@
-main(class="live-settings")
-    nav
-        a(routerLink="/dashboard") 현재 계정 대시보드
-        a(routerLink="/settings") 전체 설정
+main(class="dx-page live-settings")
+    div(class="dx-head")
+        div(class="dx-title")
+            h1 실투자 거래 설정
+            span(class="dx-chip is-live") LIVE · 실투자
+        div(class="dx-tools")
+            a(class="dx-tool", routerLink="/dashboard") 현재 계정 대시보드
+            a(class="dx-tool", routerLink="/settings") 전체 설정
     wiz-component-trading-controls()

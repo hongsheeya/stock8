@@ -195,10 +195,7 @@ export class Component implements OnInit {
     }
 
     public tabClass(t: string): string {
-        if (this.tab === t) {
-            return "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-white/10 border border-white/10";
-        }
-        return "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer";
+        return this.tab === t ? 'is-active' : '';
     }
 
     // ─── Load Settings ───
