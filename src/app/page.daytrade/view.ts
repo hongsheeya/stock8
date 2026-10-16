@@ -180,7 +180,8 @@ export class Component implements OnInit, OnDestroy {
         }, 0);
         // The journal reads broker fills (~3 s); start it after the first
         // requests so it does not crowd out the permission check.
-        setTimeout(() => { if (!this.dailyLog) void this.loadDailyLog(); }, 2500);
+        // Skip it while auto trading is off (LIVE): it reads broker history.
+        setTimeout(() => { if (this.autoEnabled && !this.dailyLog) void this.loadDailyLog(); }, 2500);
     }
 
     private startActivePositionPolling() {

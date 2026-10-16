@@ -48,7 +48,7 @@ div(*ngIf="!loading", class="dx-page")
         div(class="dx-kpi")
             div(class="dx-kpi-label") 오늘 실현손익
             div(*ngIf="dailyLog", class="dx-kpi-value", [class]="tone(dailyLog.realized_profit_net)") {{signedKrw(dailyLog.realized_profit_net)}}
-            div(*ngIf="!dailyLog", class="dx-kpi-value is-muted") {{dailyLogLoading ? '불러오는 중' : '-'}}
+            div(*ngIf="!dailyLog", class="dx-kpi-value is-muted") {{dailyLogLoading ? '불러오는 중' : (autoEnabled ? '-' : '오늘 일지에서 확인')}}
             div(class="dx-kpi-sub") 수수료·세금 차감 · 매도 {{dailyLog?.sell_count || 0}}건
         div(class="dx-kpi")
             div(class="dx-kpi-label") 남은 시드
