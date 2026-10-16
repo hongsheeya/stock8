@@ -40,7 +40,8 @@
 .settings-safety-pill { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; padding: 7px 10px; border: 1px solid rgba(110,231,183,.25); border-radius: 999px; background: rgba(6,78,59,.28); color: #a7f3d0; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
 .settings-safety-dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 5px rgba(52,211,153,.12); }
 
-.settings-api-card { margin-left: auto; margin-right: auto; border-radius: 22px; }
+.settings-api-card { margin-left: auto; margin-right: auto; border-radius: 12px; }
+.settings-safety { margin: 0 auto 12px; }
 .setup-progress { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 24px; }
 .setup-step { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 14px; background: rgba(15,23,42,.22); opacity: .58; }
 .setup-step-index { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border-radius: 9px; background: rgba(148,163,184,.12); color: #94a3b8; font-size: 11px; font-weight: 800; }

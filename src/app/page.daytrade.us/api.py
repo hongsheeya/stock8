@@ -391,14 +391,14 @@ def _select_us_ranking_candidates(candidates, max_symbols, focus_symbol=""):
     return selected[:max_symbols]
 
 
-def _load_daily_trade_summary(target_date="", include_valuation=False):
+def _load_daily_trade_summary(target_date="", include_valuation=False, sync_broker=True):
     session_date = _date_compact(target_date) or _session_date_9am()
     engine = _engine()
     try:
         return engine.period_trade_summary(
             date_from=session_date,
             date_to=session_date,
-            sync_broker=True,
+            sync_broker=sync_broker,
             broker_lookback_days=_BROKER_SYNC_LOOKBACK_DAYS,
             include_valuation=include_valuation,
         )
@@ -410,12 +410,12 @@ def _load_daily_trade_summary(target_date="", include_valuation=False):
         )
 
 
-def _build_us_daily_payload(target_date=""):
+def _build_us_daily_payload(target_date="", sync_broker=True):
     session_date = _date_compact(target_date) or _session_date_9am()
     cached_payload, _ = _cache_get(_US_DAILY_LOG_CACHE, session_date, _US_DAILY_LOG_TTL_SEC)
     if isinstance(cached_payload, dict):
         return cached_payload
-    summary = _load_daily_trade_summary(target_date=session_date, include_valuation=False)
+    summary = _load_daily_trade_summary(target_date=session_date, include_valuation=False, sync_broker=sync_broker)
     if isinstance(summary, dict):
         us_trades = [t for t in (summary.get("trades", []) or []) if str(t.get("market", "KS")).upper() in ("US", "NASD", "NYSE")]
         us_positions = [p for p in (summary.get("remaining_positions", []) or []) if str(p.get("market", "KS")).upper() in ("US", "NASD", "NYSE")]
@@ -522,7 +522,7 @@ def _build_us_auto_status_payload(engine=None, trading=None):
     return payload
 
 
-def _enrich_budget_status(engine, budget_status, market="US"):
+def _enrich_budget_status(engine, budget_status, market="US", live=True):
     budget = dict(budget_status or {})
     portfolio = budget.get("portfolio", {}) or {}
     existing_used = float(budget.get("used_seed_krw", 0) or 0)
@@ -532,7 +532,7 @@ def _enrich_budget_status(engine, budget_status, market="US"):
         cross_market_used = market_used
         if str(market or "").upper() == "US":
             try:
-                shared_portfolio = engine.portfolio_usage(use_live_price=True) or {}
+                shared_portfolio = engine.portfolio_usage(use_live_price=live, sync_broker=live) or {}
                 cross_market_used = float(shared_portfolio.get("active_entry_seed_krw", shared_portfolio.get("active_cost_krw", market_used)) or market_used)
             except Exception:
                 cross_market_used = market_used
@@ -568,10 +568,10 @@ def _build_us_verify_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_DE
     if isinstance(live_payload, dict):
         status = live_payload.get("status", {})
     else:
-        status = engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy)
+        status = engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh, view_only=not force_refresh)
         _cache_set(_US_LIVE_STATUS_CACHE, f"{symbol}:{strategy}:{round(seed, 2)}", {"status": status, "cached": False})
 
-    daily_payload = daily_payload or _build_us_daily_payload(target_date=target_date)
+    daily_payload = daily_payload or _build_us_daily_payload(target_date=target_date, sync_broker=force_refresh)
     summary = daily_payload.get("summary", {}) if isinstance(daily_payload, dict) else {}
     us_trades = summary.get("trades", []) or []
     us_positions = summary.get("remaining_positions", []) or []
@@ -580,7 +580,10 @@ def _build_us_verify_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_DE
     total_decision = wins + losses
     win_rate = round((wins / total_decision) * 100, 2) if total_decision > 0 else 0.0
     us_candidates = us_candidates if isinstance(us_candidates, list) else (service.us_candidate_universe() or [])
-    budget = _enrich_budget_status(engine, engine.shared_budget_status(requested_seed=seed, market="US"), market="US")
+    # 10-16: a page load ran every KIS read in series (balance, fills, quotes)
+    # behind the PAPER limiter and took 40 s; the page gave up after 8 s.
+    budget = _enrich_budget_status(engine, engine.shared_budget_status(requested_seed=seed, market="US", use_cache_only=not force_refresh),
+                                   market="US", live=force_refresh)
     tradable_cash = float(budget.get("actual_orderable_seed_krw", budget.get("available_for_daytrade", 0)) or 0)
     tradable_usd = float(budget.get("us_combined_orderable_amount_usd", budget.get("us_orderable_amount_usd", 0)) or 0)
     executable_usd = float(budget.get("us_orderable_amount_usd", 0) or 0)
@@ -660,7 +663,7 @@ def _build_us_snapshot_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_
         resolved_service = service or _daytrade()
         resolved_trading = trading or _get_struct().trading
         auto_payload = _build_us_auto_status_payload(engine=resolved_engine, trading=resolved_trading)
-        daily_payload = _build_us_daily_payload()
+        daily_payload = _build_us_daily_payload(sync_broker=force_refresh)
         verify_payload = _build_us_verify_payload(
             symbol=symbol,
             strategy=strategy,
@@ -677,7 +680,7 @@ def _build_us_snapshot_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_
         if isinstance(live_payload, dict):
             status_payload = live_payload
         else:
-            status_payload = {"status": resolved_engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy), "cached": False}
+            status_payload = {"status": resolved_engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh, view_only=not force_refresh), "cached": False}
             _cache_set(_US_LIVE_STATUS_CACHE, cache_key, status_payload)
 
         payload = {
@@ -848,7 +851,7 @@ def us_verify_runtime():
         cached_payload["cache_age_sec"] = cache_age
         wiz.response.status(200, **cached_payload)
     try:
-        payload = _build_us_verify_payload(symbol=symbol, strategy=strategy, seed=seed)
+        payload = _build_us_verify_payload(symbol=symbol, strategy=strategy, seed=seed, force_refresh=True)
     except Exception as e:
         if isinstance(cached_payload, dict):
             cached_payload["cached"] = True

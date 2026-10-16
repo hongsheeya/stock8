@@ -158,5 +158,205 @@ th.text-right {
     }
 }
 
+// ── dx: the dashboard's layout primitives, shared by every trading page ──
+// 국내 관례: 이익 빨강, 손실 파랑.
+.trading-bg { --dx-up: #f6465d; --dx-down: #4f8cff; }
+.trading-bg.theme-light { --dx-up: #dc2626; --dx-down: #2563eb; }
+.dx-up { color: var(--dx-up, #f6465d) !important; }
+.dx-down { color: var(--dx-down, #4f8cff) !important; }
+.dx-flat { color: var(--bn-muted-strong); }
+
+.dx-page { display: block; }
+.dx-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 12px;
+}
+.dx-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dx-title h1 { font-size: 20px; font-weight: 750; color: var(--bn-body); margin-right: 4px; }
+.dx-chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; color: var(--bn-muted-strong);
+    background: var(--bn-elevated); border: 1px solid var(--bn-hairline); white-space: nowrap;
+}
+.dx-chip.is-on { color: #10b981; border-color: color-mix(in srgb, #10b981 40%, transparent); }
+.dx-chip.is-off { color: var(--bn-muted); }
+.dx-chip.is-warn { color: #d97706; border-color: color-mix(in srgb, #f59e0b 45%, transparent); }
+.dx-chip.is-live { color: var(--dx-up); border-color: color-mix(in srgb, var(--dx-up) 45%, transparent); }
+.dx-chip i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
+.dx-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dx-tool {
+    padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    color: var(--bn-muted-strong); background: var(--bn-card); border: 1px solid var(--bn-hairline);
+}
+.dx-tool:hover:not(:disabled) { border-color: var(--bn-primary); color: var(--bn-body); }
+.dx-tool:disabled { opacity: .5; cursor: not-allowed; }
+.dx-tool.is-on { color: var(--bn-primary); border-color: color-mix(in srgb, var(--bn-primary) 45%, transparent); }
+.dx-tool.is-primary { color: #fff; background: var(--bn-primary); border-color: var(--bn-primary); }
+.trading-bg:not(.theme-light) .dx-tool.is-primary { color: #181a20; }
+.dx-tool.is-danger { color: var(--dx-up); border-color: color-mix(in srgb, var(--dx-up) 40%, transparent); }
+.dx-count { margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--bn-muted); font-variant-numeric: tabular-nums; }
+.dx-updated { font-size: 12px; color: var(--bn-muted); font-variant-numeric: tabular-nums; }
+
+.dx-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.dx-alerts:empty { display: none; }
+.dx-alert {
+    display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border-radius: 10px;
+    font-size: 13px; border: 1px solid var(--bn-hairline); background: var(--bn-card); color: var(--bn-body);
+}
+.dx-alert span { color: var(--bn-muted-strong); flex: 1; min-width: 0; }
+.dx-alert button { margin-left: auto; color: var(--bn-muted); background: none; border: 0; }
+.dx-alert.is-warn { border-color: #f59e0b66; background: color-mix(in srgb, #f59e0b 8%, var(--bn-card)); }
+.dx-alert.is-danger { border-color: color-mix(in srgb, var(--dx-up) 50%, transparent); background: color-mix(in srgb, var(--dx-up) 8%, var(--bn-card)); }
+.dx-alert.is-ok { border-color: color-mix(in srgb, #10b981 45%, transparent); background: color-mix(in srgb, #10b981 7%, var(--bn-card)); }
+.dx-alert.is-info { border-color: color-mix(in srgb, var(--bn-primary) 40%, transparent); }
+
+.dx-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.dx-kpis.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dx-kpi {
+    background: var(--bn-card); border: 1px solid var(--bn-hairline); border-radius: 12px;
+    padding: 14px 16px; min-width: 0;
+}
+.dx-kpi-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--bn-muted-strong); }
+.dx-kpi-value {
+    margin-top: 6px; font-size: 22px; font-weight: 750; line-height: 1.25; color: var(--bn-body);
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dx-kpi-value.is-muted { color: var(--bn-muted); font-size: 17px; }
+.dx-kpi-sub { margin-top: 4px; font-size: 12px; color: var(--bn-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.dx-card {
+    background: var(--bn-card); border: 1px solid var(--bn-hairline); border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 12px; min-width: 0;
+}
+.dx-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.dx-card-head h2 { display: flex; align-items: baseline; font-size: 15px; font-weight: 750; color: var(--bn-body); }
+.dx-card-head small { font-size: 12px; color: var(--bn-muted); }
+.dx-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dx-grid-2 > .dx-card { margin-bottom: 0; }
+.dx-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.dx-pills span {
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: var(--bn-elevated); color: var(--bn-muted-strong); font-variant-numeric: tabular-nums;
+}
+.dx-empty { padding: 18px; text-align: center; font-size: 13px; color: var(--bn-muted); }
+
+.dx-table-wrap { overflow-x: auto; margin: 0 -8px; }
+.dx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dx-table th {
+    padding: 8px; text-align: left; font-size: 12px; font-weight: 600; color: var(--bn-muted);
+    border-bottom: 1px solid var(--bn-hairline); white-space: nowrap;
+}
+.dx-table td { padding: 10px 8px; color: var(--bn-body); border-bottom: 1px solid var(--bn-hairline); vertical-align: middle; }
+.dx-table tbody tr:last-child td { border-bottom: 0; }
+.dx-table tbody tr:hover td { background: color-mix(in srgb, var(--bn-elevated) 55%, transparent); }
+.dx-table tr.is-selected td { background: color-mix(in srgb, var(--bn-primary) 9%, transparent); }
+.dx-table tr.is-click { cursor: pointer; }
+.dx-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dx-table small { display: block; font-size: 11px; margin-top: 2px; color: var(--bn-muted); }
+.dx-strong { font-weight: 700; }
+.dx-muted { color: var(--bn-muted); font-size: 12px; }
+.dx-ellipsis { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-wrap { white-space: normal; word-break: keep-all; line-height: 1.5; }
+
+.dx-sym { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dx-sym strong { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.dx-sym small { display: inline; margin: 0; color: var(--bn-muted); }
+.dx-strategy {
+    display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    background: var(--bn-elevated); color: var(--bn-muted-strong);
+}
+.dx-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 650; white-space: nowrap;
+    color: var(--bn-muted-strong); background: var(--bn-elevated);
+}
+button.dx-tag { border: 0; cursor: pointer; }
+button.dx-tag:disabled { opacity: .5; cursor: not-allowed; }
+.dx-tag.is-buy { color: var(--dx-up); background: color-mix(in srgb, var(--dx-up) 12%, transparent); }
+.dx-tag.is-sell { color: var(--dx-down); background: color-mix(in srgb, var(--dx-down) 12%, transparent); }
+.dx-tag.is-ok { color: #10b981; background: color-mix(in srgb, #10b981 14%, transparent); }
+.dx-tag.is-warn { color: #d97706; background: color-mix(in srgb, #f59e0b 16%, transparent); }
+.dx-tag.is-danger { color: var(--dx-up); background: color-mix(in srgb, var(--dx-up) 12%, transparent); }
+
+.dx-seg {
+    display: inline-flex; padding: 2px; border-radius: 9px; gap: 2px;
+    background: var(--bn-card); border: 1px solid var(--bn-hairline);
+}
+.dx-seg button {
+    padding: 5px 11px; border-radius: 7px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    color: var(--bn-muted-strong); background: none; border: 0;
+}
+.dx-seg button:hover { color: var(--bn-body); }
+.dx-seg button.is-on { color: var(--bn-body); background: var(--bn-elevated); }
+.dx-input, .dx-select {
+    padding: 6px 10px; font-size: 12px; border-radius: 8px;
+    background: var(--bn-canvas); border: 1px solid var(--bn-hairline); color: var(--bn-body);
+}
+.dx-input:focus, .dx-select:focus { outline: none; border-color: var(--bn-primary); }
+.dx-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+
+.dx-tabs {
+    display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--bn-hairline); overflow-x: auto;
+}
+.dx-tabs > button, .dx-tabs > a {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; font-size: 14px; font-weight: 650; white-space: nowrap;
+    color: var(--bn-muted-strong); background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.dx-tabs > button:hover, .dx-tabs > a:hover { color: var(--bn-body); }
+.dx-tabs > .is-active { color: var(--bn-body); border-bottom-color: var(--bn-primary); }
+
+.dx-details { padding: 0; }
+.dx-details > summary {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none;
+    padding: 14px 20px; font-size: 14px; font-weight: 700; color: var(--bn-body);
+}
+.dx-details > summary::-webkit-details-marker { display: none; }
+.dx-details > summary::after { content: '펼치기 ▾'; font-size: 12px; font-weight: 600; color: var(--bn-muted); }
+.dx-details[open] > summary::after { content: '접기 ▴'; }
+.dx-details > summary small { font-size: 12px; font-weight: 500; color: var(--bn-muted); margin-left: 8px; }
+.dx-details-body { padding: 0 20px 18px; }
+.dx-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.dx-detail {
+    display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 8px;
+    background: var(--bn-elevated); font-size: 12px; color: var(--bn-muted-strong); min-width: 0;
+}
+.dx-detail strong { font-size: 14px; color: var(--bn-body); font-variant-numeric: tabular-nums; }
+.dx-detail small { color: var(--bn-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dx-switch { position: relative; width: 38px; height: 22px; border-radius: 999px; border: 0; background: var(--bn-elevated); flex: 0 0 auto; }
+.dx-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s ease; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.dx-switch.is-on { background: #10b981; }
+.dx-switch.is-on::after { transform: translateX(16px); }
+.dx-switch:disabled { opacity: .5; }
+
+// Older pages were written for the dark theme with Tailwind's fixed colors
+// (white text, white/5 panels). In the light theme those turned invisible.
+.trading-bg.theme-light {
+    .text-white:not([class*="-500"]):not([class*="-600"]) { color: var(--bn-body); }
+    .text-slate-100, .text-slate-200, .text-slate-300 { color: #334155; }
+    .text-slate-400 { color: #52627a; }
+    .text-slate-500, .text-slate-600 { color: #6b778c; }
+    .bg-white\/5, .bg-white\/3, .bg-black\/20, .bg-black\/10, .bg-slate-900\/90, .bg-slate-900\/70 { background-color: var(--bn-elevated); }
+    .border-white\/5, .border-white\/10, .border-white\/3 { border-color: var(--bn-hairline); }
+    .text-emerald-300, .text-emerald-400 { color: #047857; }
+    .text-indigo-300, .text-indigo-400, .text-indigo-200 { color: #4338ca; }
+    .text-blue-200, .text-blue-300 { color: #1d4ed8; }
+    .text-violet-300, .text-violet-200 { color: #6d28d9; }
+    .text-amber-300, .text-amber-400 { color: #b45309; }
+    .text-orange-300, .text-orange-400 { color: #c2410c; }
+    .text-cyan-300, .text-cyan-200 { color: #0e7490; }
+    .text-red-300, .text-red-400 { color: #b91c1c; }
+}
+
+@media (max-width: 1100px) { .dx-kpis, .dx-kpis.is-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 860px) { .dx-grid-2 { grid-template-columns: 1fr; } }
+@media (max-width: 560px) {
+    .dx-kpis, .dx-kpis.is-3 { grid-template-columns: 1fr; }
+    .dx-kpi-value { font-size: 20px; }
+    .dx-card { padding: 14px; }
+    .dx-details > summary { padding: 12px 14px; }
+    .dx-details-body { padding: 0 14px 14px; }
+}
+
 @import "portal/dizest/workflow";
 @import "portal/dizest/markdown";

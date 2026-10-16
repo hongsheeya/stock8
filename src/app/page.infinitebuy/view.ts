@@ -15,6 +15,7 @@ export class Component implements OnInit {
     public loginWindow: Window | null = null;
     public showBridgeTools: boolean = false;
     public showFireGateFrame: boolean = true;
+    public activeCycles: any[] = [];
 
     private destroyed: boolean = false;
     private bridgeAutoLogin: boolean = false;
@@ -52,6 +53,7 @@ export class Component implements OnInit {
         await this.loadBridgeStatus(false);
         this.loading = false;
         await this.renderIfAlive();
+        void this.loadActiveCycles();
         // Download Firebase after first paint so opening this page and the
         // first click on "FireGate 연결" do not pay the SDK startup serially.
         setTimeout(() => this.loadFirebase().then(async firebase => {
@@ -317,6 +319,26 @@ export class Component implements OnInit {
         } catch (e: any) {
             this.error = e?.message || 'FireGate 초기 자동동기화 실패';
         }
+    }
+
+    // Active cycles from the history page (same data as 거래이력 > 무한매수 사이클).
+    public async loadActiveCycles() {
+        try {
+            const res = await fetch('/wiz/api/page.history/cycles?status=ACTIVE').then(r => r.json());
+            if (res?.code === 200) this.activeCycles = res.data?.rows || [];
+        } catch (e) {
+        }
+        await this.renderIfAlive();
+    }
+
+    public cycleProgress(cycle: any): number {
+        const total = Number(cycle?.division_count || 0);
+        return total > 0 ? Math.min(100, Math.round(Number(cycle?.current_round || 0) / total * 100)) : 0;
+    }
+
+    public tone(value: any): string {
+        const n = Number(value || 0);
+        return n > 0 ? 'dx-up' : (n < 0 ? 'dx-down' : 'dx-flat');
     }
 
     public async loadBridgeStatus(check: boolean = false) {

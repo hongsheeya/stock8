@@ -2,3 +2,11 @@
     display: block;
     height: 100%;
 }
+
+.sim-label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--bn-muted-strong); }
+.dx-kpis.sim-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.sim-sticky th { position: sticky; top: 0; z-index: 1; background: var(--bn-card); }
+.sim-row td { padding-top: 7px; padding-bottom: 7px; }
+
+@media (max-width: 1100px) { .dx-kpis.sim-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .dx-kpis.sim-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

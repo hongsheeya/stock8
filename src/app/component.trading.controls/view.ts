@@ -77,6 +77,8 @@ export class Component implements OnInit, OnDestroy {
         return this.symbols.filter(symbol => !query || `${symbol} ${this.symbolName(symbol)}`.toLocaleLowerCase().includes(query));
     }
     private timer: any;
+    private retryTimer: any;
+    private retries = 0;
     constructor(public service: Service) {}
     public async ngOnInit() {
         await this.service.init(this);
@@ -84,16 +86,26 @@ export class Component implements OnInit, OnDestroy {
         if (this.showLocks && this.state) void this.loadHoldings();
         this.timer = setInterval(() => { if (!this.busy && !this.pending) void this.refresh(); }, 30000);
     }
-    public ngOnDestroy() { if (this.timer) clearInterval(this.timer); }
+    public ngOnDestroy() {
+        if (this.timer) clearInterval(this.timer);
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+    }
     public async refresh() {
         this.error = '';
         try {
             const res = await wiz.call('status', {}, {timeout: 8000});
             if (res.code !== 200) throw new Error(res.data?.message || '자동매매 권한 조회 실패. 다시 확인해주세요.');
             this.state = res.data;
+            this.retries = 0;
         } catch (e: any) {
             this.state = null;
             this.error = e?.message || '자동매매 권한 조회 지연. 다시 확인해주세요.';
+            // Page loads fire several heavy requests at once and this check
+            // can miss its 8 s window; try again soon instead of in 30 s.
+            if (this.retries < 3 && !this.retryTimer) {
+                this.retries += 1;
+                this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.refresh(); }, 3000 * this.retries);
+            }
         }
         await this.service.render();
     }

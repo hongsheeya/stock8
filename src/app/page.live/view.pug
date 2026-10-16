@@ -1,16 +1,38 @@
-main(class="live-console")
-    a(routerLink="/dashboard") ← 모의투자 대시보드
-    p(class="eyebrow") LIVE · 실투자
-    h1 실투자 관리
-    section(class="lock-notice")
-        h2 {{status.orders_enabled ? '실주문 허용 설정 ON' : '실주문 비활성화'}}
-        p 화면 전환은 거래 활성화가 아닙니다. 실주문은 실투자 서버에서 설정을 켠 경우에만 허용됩니다.
-        p 이 화면에는 모의투자 잔고나 수익을 실투자 데이터로 표시하지 않습니다.
-    section(class="details")
-        h2 계좌 및 기록
-        p API 설정: {{status.credentials_configured ? '실투자 전용 설정 보관됨' : '미등록'}}
-        p 실계좌 잔고: 조회되지 않음
-        p 실현손익: 실계좌 체결 원장 미조회
-        p 모의투자 초기화 및 주문 기록은 실투자 영역에 반영되지 않습니다.
-    p(*ngIf="error", role="alert") {{error}}
-    a(routerLink="/settings/live") 실투자 거래 설정 →
+main(class="dx-page live-page")
+    div(class="dx-head")
+        div(class="dx-title")
+            h1 실투자 관리
+            span(class="dx-chip is-live") LIVE · 실투자
+            span(class="dx-chip", [class.is-on]="status.orders_enabled", [class.is-off]="!status.orders_enabled")
+                i
+                | 실주문 {{status.orders_enabled ? '허용' : '차단'}}
+        div(class="dx-tools")
+            a(class="dx-tool", routerLink="/dashboard") ← 모의투자 대시보드
+            a(class="dx-tool is-primary", routerLink="/settings/live") 실투자 거래 설정
+
+    div(class="dx-alerts")
+        div(*ngIf="error", class="dx-alert is-danger", role="alert")
+            strong 확인 필요
+            span {{error}}
+        div(class="dx-alert", [class.is-ok]="status.orders_enabled", [class.is-warn]="!status.orders_enabled")
+            strong {{status.orders_enabled ? '실주문 허용 설정 ON' : '실주문 비활성화'}}
+            span 화면 전환은 거래 활성화가 아닙니다. 실주문은 실투자 서버에서 설정을 켠 경우에만 허용됩니다.
+
+    div(class="dx-kpis is-3")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") API 설정
+            div(class="dx-kpi-value", [class.is-muted]="!status.credentials_configured") {{status.credentials_configured ? '보관됨' : '미등록'}}
+            div(class="dx-kpi-sub") 실투자 전용 설정
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 실계좌 잔고
+            div(class="dx-kpi-value is-muted") 조회되지 않음
+            div(class="dx-kpi-sub") 이 화면은 잔고를 조회하지 않습니다
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 실현손익
+            div(class="dx-kpi-value is-muted") 미조회
+            div(class="dx-kpi-sub") 실계좌 체결 원장 미조회
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 기록 분리
+        p(class="dx-muted dx-wrap") 이 화면에는 모의투자 잔고나 수익을 실투자 데이터로 표시하지 않습니다. 모의투자 초기화와 주문 기록은 실투자 영역에 반영되지 않습니다.
