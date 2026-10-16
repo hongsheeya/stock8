@@ -4,6 +4,12 @@ import { OnDestroy, OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
 import { kstDateString } from '../utils/kst';
 
+// WIZ renames the component class at build time; keep lookups at module level.
+const SHORT_STRATEGY: any = {
+    vrev: '눌림 반등', volume_breakout: '거래량 돌파', paper_regime_trend: '방향 추세',
+    paper_momentum_ride: '급등주 편승', paper_selective_breakout: '선택 돌파', paper_selective_pullback: '선택 눌림',
+};
+
 export class Component implements OnInit, OnDestroy {
     public loading: boolean = true;
     public liveRefreshing: boolean = false;
@@ -171,8 +177,10 @@ export class Component implements OnInit, OnDestroy {
         setTimeout(() => {
             void this.refreshActivePositionsQuick(false);
             void this.loadLiveStatus(false);
-            void this.loadDailyLog();
         }, 0);
+        // The journal reads broker fills (~3 s); start it after the first
+        // requests so it does not crowd out the permission check.
+        setTimeout(() => { if (!this.dailyLog) void this.loadDailyLog(); }, 2500);
     }
 
     private startActivePositionPolling() {
@@ -1022,14 +1030,9 @@ export class Component implements OnInit, OnDestroy {
     }
 
     // ─── dx summary helpers ───
-    private static readonly SHORT_STRATEGY: any = {
-        vrev: '눌림 반등', volume_breakout: '거래량 돌파', paper_regime_trend: '방향 추세',
-        paper_momentum_ride: '급등주 편승', paper_selective_breakout: '선택 돌파', paper_selective_pullback: '선택 눌림',
-    };
-
     public shortStrategy(item: any): string {
         const id = String(item?.strategy_id || '').trim();
-        return Component.SHORT_STRATEGY[id] || item?.strategy_name || this.strategyLabel(id) || '-';
+        return SHORT_STRATEGY[id] || item?.strategy_name || this.strategyLabel(id) || '-';
     }
 
     public get positionsPnl(): number {

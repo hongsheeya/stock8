@@ -9,7 +9,7 @@ div(*ngIf="!loading", class="dx-page")
     div(class="dx-head")
         div(class="dx-title")
             h1 국장 단타
-            span(class="dx-chip", [class.is-live]="tradeControls.state && tradeControls.state.mode !== 'PAPER'") {{tradeControls.state?.mode === 'PAPER' ? '모의투자' : '실계좌'}}
+            span(class="dx-chip", [class.is-live]="tradeControls.state && tradeControls.state.mode !== 'PAPER'") {{!tradeControls.state ? '확인 중' : (tradeControls.state.mode === 'PAPER' ? '모의투자' : '실계좌')}}
             span(class="dx-chip", [class.is-on]="tradeControls.state?.daytrade_ks", [class.is-off]="!tradeControls.state?.daytrade_ks")
                 i
                 | 자동매매 {{tradeControls.state?.daytrade_ks ? 'ON' : 'OFF'}}
