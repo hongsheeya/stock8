@@ -568,7 +568,7 @@ def _build_us_verify_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_DE
     if isinstance(live_payload, dict):
         status = live_payload.get("status", {})
     else:
-        status = engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh)
+        status = engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh, view_only=not force_refresh)
         _cache_set(_US_LIVE_STATUS_CACHE, f"{symbol}:{strategy}:{round(seed, 2)}", {"status": status, "cached": False})
 
     daily_payload = daily_payload or _build_us_daily_payload(target_date=target_date, sync_broker=force_refresh)
@@ -680,7 +680,7 @@ def _build_us_snapshot_payload(symbol="TQQQ", strategy="us_premarket", seed=_US_
         if isinstance(live_payload, dict):
             status_payload = live_payload
         else:
-            status_payload = {"status": resolved_engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh), "cached": False}
+            status_payload = {"status": resolved_engine.signal_status(symbol=symbol, market="US", seed=seed, name="", strategy_id=strategy, sync_broker=force_refresh, view_only=not force_refresh), "cached": False}
             _cache_set(_US_LIVE_STATUS_CACHE, cache_key, status_payload)
 
         payload = {

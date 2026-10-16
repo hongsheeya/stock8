@@ -6813,7 +6813,7 @@ class DomesticDaytradeEngine:
         state["recent_errors"] = items
         state["halt_reason"] = message
 
-    def _guardrails(self, symbol, market, seed, state, signal, session, bar, profile, exit_only=False):
+    def _guardrails(self, symbol, market, seed, state, signal, session, bar, profile, exit_only=False, view_only=False):
         issues = []
         warnings = []
         action = signal.get("action", "HOLD")
@@ -6821,6 +6821,8 @@ class DomesticDaytradeEngine:
         is_buy = str(action).startswith("BUY")
         is_sell = str(action).startswith("SELL")
         operational_exit = bool(exit_only or is_sell)
+        # A page view reads cached balances and prices; orders never pass this.
+        cached_reads = bool(operational_exit or view_only)
         failure_at = str(state.get("last_order_failure_at", "") or "")
         failure_action = str(state.get("last_order_failure_action", "") or "")
         if failure_at and (not failure_action or failure_action == str(action)):
@@ -6893,8 +6895,8 @@ class DomesticDaytradeEngine:
         # all positions. Repeating full domestic+overseas balance calls per
         # symbol creates API bursts and can prevent the sell order itself.
         portfolio = self.portfolio_usage(
-            use_live_price=not operational_exit,
-            sync_broker=not operational_exit,
+            use_live_price=not cached_reads,
+            sync_broker=not cached_reads,
             budget_only=is_buy,
         )
         committed_seed = self._safe_float(portfolio.get("active_entry_seed_krw", portfolio.get("active_cost_krw", 0)), 0)
@@ -6904,7 +6906,7 @@ class DomesticDaytradeEngine:
             self._safe_float(budget_snapshot.get("total_seed_krw", 0), 0),
             float(seed),
         )
-        daily_loss = self.daily_loss_status(requested_seed=seed, use_live_price=not operational_exit, use_cache_only=operational_exit, market=market)
+        daily_loss = self.daily_loss_status(requested_seed=seed, use_live_price=not cached_reads, use_cache_only=cached_reads, market=market)
         if is_buy and daily_loss.get("halt_new_buys"):
             issues.append(f"일일 손실 제한 도달: {daily_loss.get('total_pnl', 0):,.0f}원 / 제한 {daily_loss.get('daily_loss_limit_krw', 0):,.0f}원")
         elif is_buy and daily_loss.get("soft_limit_reached"):
@@ -7951,7 +7953,7 @@ class DomesticDaytradeEngine:
         except Exception:
             return False
 
-    def signal_status(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True, allow_buy=True, current_price_override=0):
+    def signal_status(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", sync_broker=True, allow_buy=True, current_price_override=0, view_only=False):
         if not self.analysis_allowed(symbol):
             return {'symbol': symbol, 'market': market, 'name': name or symbol,
                     'state': {}, 'signal': {'action': 'HOLD', 'qty': 0, 'reason': '보호 종목 · 단타 분석 제외'},
@@ -7961,7 +7963,7 @@ class DomesticDaytradeEngine:
             payload = self._signal_from_state(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id, sync_broker=sync_broker, allow_buy=allow_buy, current_price_override=current_price_override)
             state = payload.get("state", {})
             signal = payload.get("signal", {})
-            guardrails = self._guardrails(symbol, market, seed, state, signal, payload.get("session", {}), payload.get("bar", {}), payload.get("profile", {}), exit_only=not allow_buy)
+            guardrails = self._guardrails(symbol, market, seed, state, signal, payload.get("session", {}), payload.get("bar", {}), payload.get("profile", {}), exit_only=not allow_buy, view_only=view_only)
             state["last_signal"] = signal.get("action", "HOLD")
             state["strategy_id"] = self.strategy._normalize_strategy(strategy_id)
             state["halt_reason"] = guardrails.get("issues", [""])[0] if guardrails.get("issues") else ""

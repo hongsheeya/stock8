@@ -33,6 +33,7 @@ class UsSnapshotLatencyTests(unittest.TestCase):
         self.assertEqual(_kw(_calls(node, "_build_us_daily_payload")[0], "sync_broker"), "force_refresh")
         for call in _calls(node, "signal_status"):
             self.assertEqual(_kw(call, "sync_broker"), "force_refresh")
+            self.assertEqual(_kw(call, "view_only"), "not force_refresh")
 
     def test_verify_uses_cached_budget_unless_forced(self):
         node = _function("_build_us_verify_payload")
@@ -43,6 +44,25 @@ class UsSnapshotLatencyTests(unittest.TestCase):
     def test_explicit_verification_stays_live(self):
         node = _function("us_verify_runtime")
         self.assertEqual(_kw(_calls(node, "_build_us_verify_payload")[0], "force_refresh"), "True")
+
+
+class GuardrailViewOnlyTests(unittest.TestCase):
+    """The page view's guardrails priced every holding live (KIS quote per
+    position plus a balance call); orders keep the live reads."""
+
+    def test_view_only_switches_guardrail_reads_to_cache(self):
+        from test_daytrade_engine_regressions import _engine_with_state
+        engine, _ = _engine_with_state({}, [])
+        seen = []
+        engine.portfolio_usage = lambda **kw: seen.append(("portfolio", kw)) or {}
+        engine.shared_budget_status = lambda **kw: {}
+        engine.daily_loss_status = lambda **kw: seen.append(("loss", kw)) or {}
+        signal = {"action": "BUY1", "order_qty": 1, "current_price": 10}
+        engine._guardrails("AAA", "US", 1000, {}, signal, {}, {}, {}, view_only=True)
+        engine._guardrails("AAA", "US", 1000, {}, signal, {}, {}, {})
+        (_, view_portfolio), (_, view_loss), (_, live_portfolio), (_, live_loss) = seen
+        self.assertEqual((view_portfolio["use_live_price"], view_portfolio["sync_broker"], view_loss["use_cache_only"]), (False, False, True))
+        self.assertEqual((live_portfolio["use_live_price"], live_portfolio["sync_broker"], live_loss["use_cache_only"]), (True, True, False))
 
 
 if __name__ == "__main__":
