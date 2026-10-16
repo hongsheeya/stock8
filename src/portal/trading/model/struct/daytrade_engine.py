@@ -675,6 +675,16 @@ class DomesticDaytradeEngine:
         value = str(self._config(key, "true") or "true").strip().lower()
         return value in ("1", "true", "yes", "on")
 
+    def _regime_trend_sides(self, market="KS"):
+        """Which ETF sides may open: "BULL,BEAR" by default.
+
+        10-16: over 07-24..10-15 the US inverse side lost 33.7% while the
+        long side made 11.2%, so US can be limited to BULL by config."""
+        prefix = "daytrade_regime_trend_us_" if self._is_us_market(market) else "daytrade_regime_trend_"
+        raw = str(self._config(prefix + "sides", "BULL,BEAR") or "BULL,BEAR").upper()
+        sides = {item.strip() for item in raw.split(",") if item.strip() in ("BULL", "BEAR")}
+        return sides or {"BULL", "BEAR"}
+
     def _regime_trend_params(self, market="KS"):
         us = self._is_us_market(market)
         prefix = "daytrade_regime_trend_us_" if us else "daytrade_regime_trend_"
@@ -815,6 +825,8 @@ class DomesticDaytradeEngine:
                 signal["reason"] = f"방향 추세 보유 중 · {view.get('reason', '')}"
         elif not allow_buy:
             signal["reason"] = "신규 진입 비활성"
+        elif self._regime_trend_pairs(market)[symbol][0] not in self._regime_trend_sides(market):
+            signal["reason"] = "이 시장은 방향 추세 " + ("롱" if "BULL" in self._regime_trend_sides(market) else "인버스") + " ETF만 진입합니다"
         elif not view.get("ok"):
             pass
         elif not (params["start"] <= now_hm <= params["end"]):
@@ -856,8 +868,11 @@ class DomesticDaytradeEngine:
         total = self._safe_float(payload.get("total_seed_krw", payload.get("effective_seed", 0)), 0)
         remaining = self._safe_float(payload.get("remaining_seed_krw", total), total)
         added = []
+        sides = self._regime_trend_sides(market)
         for symbol in etfs:
             if symbol in held or not self.analysis_allowed(symbol):
+                continue
+            if etfs[symbol][0] not in sides:
                 continue
             added.append({
                 "symbol": symbol, "market": market, "name": self.strategy.symbol_name(symbol) if market == "KS" else symbol,
