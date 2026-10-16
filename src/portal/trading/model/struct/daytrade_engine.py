@@ -3609,9 +3609,34 @@ class DomesticDaytradeEngine:
         finally:
             lock.release()
 
+    # 10-17: the PC slept at 02:53 in the middle of a cycle. At 08:37 the
+    # thread resumed and sent an SOXS BUY from that 6-hour-old signal, after
+    # the US close (it failed only because the network was still down).
+    _MAX_SIGNAL_AGE_SEC = 120
+
+    def _order_blocked_reason(self, started_at, action, market):
+        """Checked right before a broker order: signal age and, for buys, the session."""
+        age = _clock.time() - started_at
+        if age > self._MAX_SIGNAL_AGE_SEC:
+            return f"신호 계산 후 {int(age)}초가 지나 주문하지 않습니다 (PC 절전·지연 후 오래된 신호)."
+        if str(action).startswith("BUY"):
+            if self._is_us_market(market):
+                open_now = self._us_market_open() or self._us_premarket_open()
+            else:
+                open_now = self._daytrade_market_open(market="KS")
+            if not open_now:
+                return "주문 시점에 장이 닫혀 있어 매수하지 않습니다."
+        return ""
+
+    def _blocked_order_result(self, reason, status, action, symbol, market, strategy_id):
+        self._append_runtime_log("warning", f"{symbol} 주문 보류: {reason}", symbol=symbol, strategy_id=strategy_id, market=market)
+        return {"executed": False, "submitted": False, "action": "STALE_SIGNAL", "status": status,
+                "order_value": 0, "message": reason}
+
     def _execute_live_locked(self, symbol, market, seed, name, strategy_id, force,
                              allow_buy, sync_broker, forced_sell_qty, force_reason,
                              current_price_override, precomputed_status):
+        started_at = _clock.time()
         strategy_id = self.strategy._normalize_strategy(strategy_id)
         if isinstance(precomputed_status, dict):
             previous = precomputed_status.get("state", {}) or {}
@@ -3879,11 +3904,17 @@ class DomesticDaytradeEngine:
                     if qty > planning_qty:
                         qty = planning_qty
                         order_value = round(current_price * qty, 2)
+                    blocked = self._order_blocked_reason(started_at, action, market)
+                    if blocked:
+                        return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
                     order = self._broker().buy_order(symbol, qty, price=self._us_marketable_price(current_price, "BUY"), order_type="MARKET", exchange=exchange)
                     # 주문 접수와 체결은 다르다. 해외 체결 조회가 없는 동안
                     # 주문 수량 전체를 체결로 간주하면 모의자산이 부풀려진다.
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
                 else:
+                    blocked = self._order_blocked_reason(started_at, action, market)
+                    if blocked:
+                        return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
                     order = self._broker().buy_domestic_order(symbol, qty, price=0, order_type="MARKET")
                     fill = self._resolve_domestic_fill(symbol, "BUY", order, fallback_price=current_price, fallback_qty=qty)
                 exec_price = self._safe_float(fill.get("filled_price", 0), 0)
@@ -3973,6 +4004,9 @@ class DomesticDaytradeEngine:
                     "order_value": actual_order_value,
                 }
             else:
+                blocked = self._order_blocked_reason(started_at, action, market)
+                if blocked:
+                    return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
                 if self._is_us_market(market):
                     exchange = self._us_exchange(symbol)
                     order = self._broker().sell_order(symbol, qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
