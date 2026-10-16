@@ -72,6 +72,23 @@ class RegimeTrendTests(unittest.TestCase):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}, state=state)
         self.assertIn("재진입", self._signal(engine)["reason"])
 
+    def test_a_stop_loss_blocks_the_rest_of_the_session(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        stopped = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_STOP_LOSS",
+                         last_exit_watch_at=f"{TODAY} 09:35:00")
+        signal = self._signal(self._engine(trend, now=(12, 0), state=stopped))
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("손절", signal["reason"])
+        # An ordinary exit only waits the ten-minute cooldown.
+        exited = dict(stopped, last_exit_action="SELL_FULL")
+        self.assertEqual(self._signal(self._engine(trend, now=(12, 0), state=exited))["action"], "BUY1")
+
+    def test_yesterdays_stop_does_not_block_today(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        stopped = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_STOP_LOSS",
+                         last_exit_watch_at="2026-05-25 14:00:00")
+        self.assertEqual(self._signal(self._engine(trend, state=stopped))["action"], "BUY1")
+
     # -- exits
     def test_exits_when_the_index_reclaims_vwap(self):
         held = _state("114800", 1000, qty=10, strategy_id=STRATEGY)

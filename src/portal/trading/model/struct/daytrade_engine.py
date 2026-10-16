@@ -685,6 +685,9 @@ class DomesticDaytradeEngine:
             "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
             "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
             "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "10"), 10)),
+            # A stop-loss shuts the ETF for the rest of its session (12 h covers
+            # either market's day without reaching the next one).
+            "stop_block_hours": max(0, self._safe_int(self._config(prefix + "stop_block_hours", "12"), 12)),
         }
 
     def _regime_trend_clock(self, market="KS"):
@@ -758,6 +761,14 @@ class DomesticDaytradeEngine:
             return False
         return (self._now() - last).total_seconds() < minutes * 60
 
+    def _regime_trend_stopped(self, state, hours):
+        """10-16: 122630 stopped at 10:28, re-entered at 11:33 and stopped again
+        at 12:41 (-₩1.04M). Over 09-16..10-16 a same-session block after a stop
+        lifted the replay from +17.1% to +21.3% (80 -> 75 trades)."""
+        if hours <= 0 or "STOP" not in str(state.get("last_exit_action", "") or "").upper():
+            return False
+        return self._regime_trend_cooling(state, hours * 60)
+
     def _regime_trend_signal(self, symbol, market, seed, name, strategy_id, sync_broker, allow_buy):
         """PAPER: hold a direction ETF while the index trends its way.
 
@@ -808,6 +819,8 @@ class DomesticDaytradeEngine:
             pass
         elif not (params["start"] <= now_hm <= params["end"]):
             signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
+        elif self._regime_trend_stopped(state, params["stop_block_hours"]):
+            signal["reason"] = "오늘 손절한 종목 · 같은 장중 재진입 차단"
         elif self._regime_trend_cooling(state, params["cooldown_min"]):
             signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
         elif not view.get("trend"):
