@@ -193,14 +193,30 @@ class _UserScopedDb:
             return None
         return self._raw_get(**self._with_user(kwargs, ""))
 
+    def _raw_limit_controls(self, controls):
+        """Controls for one scoped query, limited in SQL.
+
+        The ORM applies `dump` only together with `page`, so rows(orderby=...,
+        dump=N) read the whole table and was cut afterwards. Each query now
+        fetches just enough rows to fill the requested page of the merge."""
+        try:
+            dump = int(float(controls.get("dump", 0) or 0))
+            page = max(int(float(controls.get("page", 1) or 1)), 1)
+        except Exception:
+            return controls
+        if dump <= 0 or not controls.get("orderby"):
+            return controls
+        return {**controls, "page": 1, "dump": page * dump}
+
     def rows(self, **kwargs):
         uid = self._uid()
         where, controls = self._control_keys(kwargs)
+        raw_controls = self._raw_limit_controls(controls)
         if uid:
-            rows = list(self._raw_rows(**{**self._with_user(where, uid), **controls}))
+            rows = list(self._raw_rows(**{**self._with_user(where, uid), **raw_controls}))
             if self._is_admin(uid):
                 seen = {str((row or {}).get("id", "")) for row in rows if (row or {}).get("id")}
-                for row in self._raw_rows(**{**self._with_user(where, ""), **controls}):
+                for row in self._raw_rows(**{**self._with_user(where, ""), **raw_controls}):
                     row_id = str((row or {}).get("id", "") or "")
                     if row_id and row_id in seen:
                         continue
@@ -208,6 +224,8 @@ class _UserScopedDb:
                         seen.add(row_id)
                     rows.append(row)
             return self._sort_and_limit(rows, controls)
+        if raw_controls is not controls and "page" not in controls:
+            controls = {**controls, "page": 1}
         return self._raw_rows(**{**self._with_user(where, ""), **controls})
 
     def insert(self, data):

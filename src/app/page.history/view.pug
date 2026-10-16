@@ -1,451 +1,369 @@
-//- History Page - 거래 이력
-div(class="flex flex-col gap-4")
+//- ============================================================
+//- 거래이력: 성과 · 체결 · 무한매수 사이클 · 주문 로그
+//- ============================================================
 
-    //- Header
-    div(class="flex items-center justify-between")
-        div(class="flex items-center gap-3")
-            div(class="flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30")
-                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor",
-                    class="size-5 text-indigo-400")
-                    path(stroke-linecap="round", stroke-linejoin="round", d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z")
-            div
-                h1(class="text-lg font-semibold text-white") {{t('hist.title')}}
-                p(class="text-xs text-slate-400") {{t('hist.subtitle')}}
+div(class="dx-head")
+    div(class="dx-title")
+        h1 거래이력
+        span(*ngIf="(tab === 'performance' || tab === 'fills') && tradesLoaded", class="dx-chip") {{periodLabel}}{{market ? ' · ' + marketLabel(market) : ''}}{{strategy ? ' · ' + strategyLabel : ''}}
+    div(class="dx-tools")
+        button((click)="refresh()", [disabled]="loading", class="dx-tool") {{loading ? '불러오는 중' : '새로고침'}}
+        span(*ngIf="updatedAt", class="dx-updated") {{updatedAt}}
 
-    //- Tabs
-    div(class="flex items-center gap-2")
-        button(*ngIf="showDaytrade", [class]="tabClass('daytrade')",
-            (click)="switchTab('daytrade')")
-            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125C16.5 3.504 17.004 3 17.625 3h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z")
-            span {{t('hist.daytrade')}}
-        button([class]="tabClass('cycles')",
-            (click)="switchTab('cycles')")
-            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                path(stroke-linecap="round", stroke-linejoin="round", d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3")
-            span {{t('hist.cycles')}}
-        button([class]="tabClass('logs')",
-            (click)="switchTab('logs')")
-            svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                path(stroke-linecap="round", stroke-linejoin="round", d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z")
-            span {{t('hist.logs')}}
+nav(class="hx-tabs")
+    button(*ngIf="showDaytrade", [class.is-active]="tab === 'performance'", (click)="switchTab('performance')") 성과
+    button(*ngIf="showDaytrade", [class.is-active]="tab === 'fills'", (click)="switchTab('fills')") 체결 내역
+    button([class.is-active]="tab === 'cycles'", (click)="switchTab('cycles')") 무한매수 사이클
+    button([class.is-active]="tab === 'logs'", (click)="switchTab('logs')") 주문 로그
 
-    div(*ngIf="loadError",
-        class="rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-3 text-[13px] text-red-300")
-        | {{loadError}}
+div(*ngIf="loadError", class="dx-alert is-warn hx-gap")
+    strong 불러오기 실패
+    span {{loadError}}
 
-    //- Loading Overlay
-    div(*ngIf="loading",
-        class="flex items-center justify-center py-12")
-        div(class="flex items-center gap-3 text-slate-400 text-sm")
-            svg(class="animate-spin size-5", xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24")
-                circle(class="opacity-25", cx="12", cy="12", r="10", stroke="currentColor", stroke-width="4")
-                path(class="opacity-75", fill="currentColor", d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z")
-            span {{t('hist.loading')}}
+//- ── Shared filters for 성과 / 체결 ─────────────────────────────
+div(*ngIf="tab === 'performance' || tab === 'fills'", class="hx-filters")
+    div(class="hx-seg")
+        button(*ngFor="let p of periods", [class.is-on]="period === p.id", (click)="setPeriod(p.id)") {{p.label}}
+    div(class="hx-seg")
+        button(*ngFor="let m of markets", [class.is-on]="market === m.id", (click)="setMarket(m.id)") {{m.label}}
+    select(class="hx-select", [ngModel]="strategy", (ngModelChange)="setStrategy($event)")
+        option(value="") 전체 전략
+        option(*ngFor="let s of data.strategy_options", [value]="s.id") {{s.label}}
 
-    //- ═══════════════ TRADE HISTORY TAB ═══════════════
-    div(*ngIf="tab === 'daytrade' && !loading")
+//- ============================================================
+//- 성과
+//- ============================================================
+ng-container(*ngIf="tab === 'performance'")
+    div(*ngIf="loading && !tradesLoaded", class="dx-card dx-empty") 불러오는 중…
+    ng-container(*ngIf="tradesLoaded")
+        div(*ngIf="summaryMarkets.length === 0", class="dx-card dx-empty") 이 기간에 청산된 거래가 없습니다.
 
-        div(class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4")
-            div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 실현손익
-                div(class="space-y-0.5")
-                    div(*ngFor="let line of summaryProfitLines('realized')", class="text-lg font-semibold leading-tight")
-                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
-                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
-                div(class="text-xs text-slate-500 mt-1") 매도 체결 기준
-            div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 보유 평가손익
-                div(class="space-y-0.5")
-                    div(*ngFor="let line of summaryProfitLines('unrealized')", class="text-lg font-semibold leading-tight")
-                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
-                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
-                div(class="text-xs text-slate-500 mt-1") 보유 {{daytradeSummary.open_position_count || 0}}건
-            div(class="glass-card p-4")
-                div(class="text-xs text-slate-400 mb-1") 현재까지 손익
-                div(class="space-y-0.5")
-                    div(*ngFor="let line of summaryProfitLines('current_profit')", class="text-lg font-semibold leading-tight")
-                        span(class="text-xs font-medium text-slate-500 mr-1") {{line.label}}
-                        span([class]="summaryProfitValueClass(line.value)") {{line.text}}
-                div(class="text-xs text-slate-500 mt-1") 실현 + 보유 평가
+        div(*ngIf="summaryMarkets.length > 0", class="dx-kpis")
+            div(class="dx-kpi")
+                div(class="dx-kpi-label") 실현손익
+                div(*ngFor="let m of summaryMarkets", class="hx-kpi-line")
+                    small {{marketLabel(m)}}
+                    strong([class]="tone(data.summary[m].net)") {{money(data.summary[m].net, m, true)}}
+                div(class="dx-kpi-note") 수수료·세금 차감 후
+            div(class="dx-kpi")
+                div(class="dx-kpi-label") 승률
+                div(*ngFor="let m of summaryMarkets", class="hx-kpi-line")
+                    small {{marketLabel(m)}}
+                    strong {{data.summary[m].win_rate === null ? '-' : data.summary[m].win_rate + '%'}}
+                    em {{data.summary[m].wins}}승 {{data.summary[m].losses}}패
+            div(class="dx-kpi")
+                div(class="dx-kpi-label") 평균 익절 / 손절
+                div(*ngFor="let m of summaryMarkets", class="hx-kpi-line")
+                    small {{marketLabel(m)}}
+                    strong
+                        span(class="up") {{money(data.summary[m].avg_win, m, true)}}
+                        span(class="hx-slash") /
+                        span(class="down") {{money(data.summary[m].avg_loss, m, true)}}
+                div(class="dx-kpi-note") 손익비 = 총이익 ÷ 총손실
+            div(class="dx-kpi")
+                div(class="dx-kpi-label") 손익비 · 평균 보유
+                div(*ngFor="let m of summaryMarkets", class="hx-kpi-line")
+                    small {{marketLabel(m)}}
+                    strong {{data.summary[m].profit_factor === null ? '-' : data.summary[m].profit_factor}}
+                    em {{hold(data.summary[m].avg_hold_min)}} · {{data.summary[m].closed}}건
 
-        div(class="rounded-lg border border-blue-400/15 bg-blue-500/5 px-3 py-2 mb-4 text-[11px] text-blue-100/80 flex flex-wrap items-center justify-between gap-2")
-            div
-                | 현재 계정의 체결과 주문 시도·거절·미체결을 함께 보존합니다. 손익 통계에는 실제 체결만 반영됩니다.
-                span(*ngIf="(daytradeSummary.rejected_count || 0) > 0", class="text-amber-300")
-                    |  현재 표시 범위의 주문 거절/미체결 {{daytradeSummary.rejected_count}}건
-                span(*ngIf="(daytradeSummary.unmatched_sell_count || 0) > 0", class="text-amber-300")
-                    |  매수원금을 확인할 수 없는 매도 {{daytradeSummary.unmatched_sell_count}}건은 실현손익 계산에서 제외했습니다.
-            button(type="button",
-                (click)="syncDaytradeBrokerHistory()",
-                [disabled]="daytradeSyncing",
-                class="shrink-0 rounded-md border border-blue-300/30 bg-blue-400/10 px-3 py-1.5 font-semibold text-blue-100 hover:bg-blue-400/20 disabled:opacity-50")
-                | {{daytradeSyncing ? 'KIS 확인 중...' : 'KIS 체결 동기화'}}
+        //- Best / worst
+        div(*ngIf="summaryMarkets.length > 0", class="hx-extremes")
+            ng-container(*ngFor="let m of summaryMarkets")
+                div(*ngIf="data.summary[m].best", class="hx-extreme")
+                    span 최고 · {{marketLabel(m)}}
+                    strong {{data.summary[m].best.name}}
+                    b(class="up") {{money(data.summary[m].best.net, m, true)}} ({{pct(data.summary[m].best.return_pct)}})
+                div(*ngIf="data.summary[m].worst", class="hx-extreme")
+                    span 최저 · {{marketLabel(m)}}
+                    strong {{data.summary[m].worst.name}}
+                    b(class="down") {{money(data.summary[m].worst.net, m, true)}} ({{pct(data.summary[m].worst.return_pct)}})
 
-        div(*ngIf="daytradeSummary.positions?.length",
-            class="glass-card p-4 mb-4")
-            div(class="text-xs text-slate-400 mb-3") {{t('hist.open_positions')}}
-            div(class="grid md:grid-cols-2 xl:grid-cols-4 gap-2")
-                div(*ngFor="let p of daytradeSummary.positions",
-                    class="rounded-lg bg-white/5 border border-white/5 p-3")
-                    div(class="flex items-center justify-between gap-2")
-                        div
-                            div(class="text-sm font-semibold text-white") {{p.name || p.symbol}}
-                            div(class="text-xs text-slate-500") {{p.symbol}} · {{p.strategy || '단타'}} · {{p.position_qty}}주
-                        span([class]="marketBadge(p.market)") {{p.market === 'US' ? '미장' : '국장'}}
-                    div(class="mt-2 flex items-center justify-between text-xs")
-                        span(class="text-slate-400") {{t('hist.avg_price')}}
-                        span(class="text-slate-200") {{formatMarketMoney(p.avg_price, p.market)}}
-                    div(class="mt-1 flex items-center justify-between text-xs")
-                        span(class="text-slate-400") 현재가
-                        span(class="text-slate-200") {{formatMarketMoney(p.current_price, p.market)}}
-                    div(class="mt-1 flex items-center justify-between text-xs")
-                        span(class="text-slate-400") 평가손익
-                        span([class]="profitClass(p.unrealized)") {{formatMarketMoney(p.unrealized, p.market)}}
-
-        //- Filters
-        div(class="glass-card p-4 mb-4")
-            div(class="flex flex-wrap items-center gap-3")
-                div(class="flex items-center gap-1")
-                    span(class="text-xs text-slate-400 mr-1") {{t('hist.market')}}:
-                    button(*ngFor="let m of ['', 'KS', 'US']",
-                        (click)="filterDaytradeMarket(m)",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="daytradeMarketFilter === m ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{m === '' ? t('common.all') : (m === 'US' ? t('hist.us_market') : t('hist.kr_market'))}}
-                div(class="flex items-center gap-1")
-                    span(class="text-xs text-slate-400 mr-1") {{t('hist.action')}}:
-                    button(*ngFor="let a of ['', 'BUY', 'SELL']",
-                        (click)="filterDaytradeAction(a)",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="daytradeActionFilter === a ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{a || t('common.all')}}
-                div(*ngIf="symbols.length > 0",
-                    class="flex items-center gap-1")
-                    span(class="text-xs text-slate-400 mr-1") {{t('hist.symbol')}}:
-                    button((click)="filterDaytradeSymbol('')",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="daytradeSymbolFilter === '' ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{t('common.all')}}
-                    button(*ngFor="let sym of symbols",
-                        (click)="filterDaytradeSymbol(sym)",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="daytradeSymbolFilter === sym ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{sym}}
-                div(class="flex items-center gap-2 ml-auto")
-                    input(type="text",
-                        [(ngModel)]="daytradeSearchText",
-                        (keyup.enter)="searchDaytradeTrades()",
-                        [placeholder]="t('hist.search')",
-                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-400/50 w-48")
-                    button((click)="searchDaytradeTrades()",
-                        class="px-3 py-1.5 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors")
-                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z")
-
-        div(class="glass-card overflow-hidden")
-            div(*ngIf="daytradeTrades.length === 0",
-                class="p-8 text-center text-slate-400 text-sm") {{t('hist.no_daytrade_trades')}}
-            table(*ngIf="daytradeTrades.length > 0",
-                class="w-full text-[13px]")
-                thead
-                    tr(class="border-b border-white/10 bg-white/5")
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.time')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.market')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") 전략
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.symbol')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.action')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.price')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.qty')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.amount')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.realized')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.reason')}}
-                tbody
-                    tr(*ngFor="let d of daytradeTrades",
-                        class="border-b border-white/5 hover:bg-white/5 transition-colors")
-                        td(class="py-2.5 px-4 text-xs text-slate-400 whitespace-nowrap") {{d.timestamp}}
-                        td(class="py-2.5 px-4")
-                            span([class]="marketBadge(d.market)") {{d.market_label}}
-                        td(class="py-2.5 px-4 text-xs text-slate-300") {{d.strategy || '단타'}}
-                        td(class="py-2.5 px-4")
-                            div(class="text-sm font-medium text-white") {{d.name || d.symbol}}
-                            div(class="text-xs text-slate-500") {{d.symbol}}
-                        td(class="py-2.5 px-4")
-                            span([class]="actionBadge(d.action)") {{actionLabel(d.action, d.action_detail)}}
-                        td(class="py-2.5 px-4 text-right text-slate-300") {{formatMarketMoney(d.price, d.market)}}
-                        td(class="py-2.5 px-4 text-right text-slate-300") {{d.qty || '-'}}
-                        td(class="py-2.5 px-4 text-right text-slate-300") {{formatMarketMoney(d.amount, d.market)}}
-                        td(class="py-2.5 px-4 text-right", [class]="profitClass(d.realized)")
-                            | {{d.action === 'SELL' && hasRealizedValue(d.realized) ? formatMarketMoney(d.realized, d.market) : '-'}}
-                        td(class="py-2.5 px-4 text-slate-400 text-xs max-w-sm truncate") {{d.message || '-'}}
-
-        div(*ngIf="daytradeHasMore || daytradeTrades.length > 0",
-            class="flex flex-col items-center gap-2 mt-4")
-            div(class="text-xs text-slate-500")
-                | {{daytradeTrades.length}}건 표시
-                span(*ngIf="daytradeOlderSummary.remaining_count > 0")  · 남은 기록 {{daytradeOlderSummary.remaining_count}}건
-                span(*ngIf="daytradeOlderSummary.archive_limited")  · 오래된 기록은 더보기로 추가 조회
-            button(*ngIf="daytradeHasMore",
-                (click)="loadMoreDaytradeTrades()",
-                [disabled]="daytradeLoadingMore",
-                class="px-4 py-2 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40 transition-colors")
-                | {{daytradeLoadingMore ? '불러오는 중...' : '더보기'}}
-
-    //- ═══════════════ CYCLES TAB ═══════════════
-    div(*ngIf="tab === 'cycles' && !loading")
-
-        //- Cycle Detail Modal
-        div(*ngIf="selectedCycle",
-            class="glass-card p-5 mb-4")
-            //- Detail Header
-            div(class="flex items-center justify-between mb-4")
-                div(class="flex items-center gap-3")
-                    div(class="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30")
-                        span(class="text-sm font-bold text-indigo-300") {{selectedCycle.symbol?.substring(0, 2)}}
-                    div
-                        div(class="flex items-center gap-2")
-                            span(class="text-[15px] font-semibold text-white") {{selectedCycle.symbol}}
-                            span([class]="statusBadge(selectedCycle.status)") {{selectedCycle.status}}
-                        span(class="text-xs text-slate-400") Cycle {{selectedCycle.id?.substring(0, 8)}}
-                button((click)="closeCycleDetail()",
-                    class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 transition-colors border border-white/5")
-                    svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                        path(stroke-linecap="round", stroke-linejoin="round", d="M6 18 18 6M6 6l12 12")
-                    span {{t('hist.close')}}
-
-            //- Detail Summary Cards
-            div(class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4")
-                div(class="bg-white/5 rounded-lg p-3 border border-white/5")
-                    div(class="text-xs text-slate-400 mb-1") {{t('hist.round')}}
-                    div(class="text-sm font-semibold text-white") {{selectedCycle.current_round}} / {{selectedCycle.division_count}}
-                div(class="bg-white/5 rounded-lg p-3 border border-white/5")
-                    div(class="text-xs text-slate-400 mb-1") {{t('hist.total_spent')}}
-                    div(class="text-sm font-semibold text-white") {{formatUSD(selectedCycle.total_spent)}}
-                div(class="bg-white/5 rounded-lg p-3 border border-white/5")
-                    div(class="text-xs text-slate-400 mb-1") {{t('hist.avg_price')}}
-                    div(class="text-sm font-semibold text-white") {{formatUSD(selectedCycle.avg_price)}}
-                div(class="bg-white/5 rounded-lg p-3 border border-white/5")
-                    div(class="text-xs text-slate-400 mb-1") {{t('hist.profit_rate')}}
-                    div(class="text-sm font-semibold", [class]="profitClass(selectedCycle.profit_rate)")
-                        | {{selectedCycle.profit_rate | number:'1.2-2'}}%
-
-            //- Progress Bar
-            div(class="mb-4")
-                div(class="flex items-center justify-between text-xs text-slate-400 mb-1")
-                    span {{t('hist.progress')}}
-                    span {{cycleProgress(selectedCycle)}}%
-                div(class="w-full h-2 bg-white/5 rounded-full overflow-hidden")
-                    div(class="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all",
-                        [style.width.%]="cycleProgress(selectedCycle)")
-
-            //- Trade History Table
-            div(class="overflow-x-auto")
-                table(class="w-full text-[13px]")
+        //- Strategy performance
+        section(*ngIf="data.strategies?.length > 0", class="dx-card")
+            div(class="dx-card-head")
+                h2 전략별 성과
+                span(class="dx-muted") 행을 누르면 해당 전략만 봅니다
+            div(class="dx-table-wrap")
+                table(class="dx-table")
                     thead
-                        tr(class="border-b border-white/10")
-                            th(class="text-left py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.round')}}
-                            th(class="text-left py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.date')}}
-                            th(class="text-left py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.action')}}
-                            th(class="text-left py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.type')}}
-                            th(class="text-right py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.price')}}
-                            th(class="text-right py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.qty')}}
-                            th(class="text-right py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.amount')}}
-                            th(class="text-right py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.avg_price')}}
-                            th(class="text-right py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.pl')}}
-                            th(class="text-left py-2 px-2 text-xs text-slate-400 font-medium") {{t('hist.status')}}
+                        tr
+                            th 전략
+                            th 시장
+                            th(class="num") 거래
+                            th(class="num") 승률
+                            th(class="num") 실현손익
+                            th(class="num") 평균 수익률
+                            th(class="num") 손익비
+                            th(class="num") 평균 보유
+                            th(class="num") 최근 청산
                     tbody
-                        tr(*ngFor="let t of cycleTrades",
-                            class="border-b border-white/5 hover:bg-white/5 transition-colors")
-                            td(class="py-2 px-2 text-slate-300") {{t.round}}
-                            td(class="py-2 px-2 text-slate-400") {{t.trade_date}}
-                            td(class="py-2 px-2")
-                                span([class]="actionBadge(t.action)") {{t.action}}
-                            td(class="py-2 px-2 text-slate-400") {{t.order_type}}
-                            td(class="py-2 px-2 text-right text-slate-300") {{formatUSD(t.filled_price || t.order_price)}}
-                            td(class="py-2 px-2 text-right text-slate-300") {{t.filled_qty || t.order_qty}}
-                            td(class="py-2 px-2 text-right text-slate-300") {{formatUSD(t.filled_amount)}}
-                            td(class="py-2 px-2 text-right text-slate-300") {{formatUSD(t.avg_buy_price)}}
-                            td(class="py-2 px-2 text-right", [class]="profitClass(t.profit_rate)")
-                                | {{t.profit_rate | number:'1.2-2'}}%
-                            td(class="py-2 px-2")
-                                span([class]="statusBadge(t.status)") {{t.status}}
+                        tr(*ngFor="let s of data.strategies", class="hx-click", [class.is-selected]="strategy === s.strategy_id", (click)="setStrategy(s.strategy_id)")
+                            td
+                                span(class="dx-strategy") {{s.label}}
+                            td
+                                span(class="hx-market", [class.is-us]="s.market === 'US'") {{marketLabel(s.market)}}
+                            td(class="num") {{s.closed}}
+                            td(class="num") {{s.win_rate === null ? '-' : s.win_rate + '%'}}
+                                small(class="dx-muted") {{s.wins}}승 {{s.closed - s.wins}}패
+                            td(class="num dx-strong", [class]="tone(s.net)") {{money(s.net, s.market, true)}}
+                            td(class="num", [class]="tone(s.avg_return_pct)") {{pct(s.avg_return_pct)}}
+                            td(class="num") {{s.profit_factor === null ? '-' : s.profit_factor}}
+                            td(class="num") {{hold(s.avg_hold_min)}}
+                            td(class="num dx-muted") {{when(s.last_exit_at)}}
 
-        //- Cycles List (when no detail selected)
-        div(*ngIf="!selectedCycle")
+        //- Daily realized P&L
+        section(*ngIf="dailyMarkets.length > 0 && period !== '1D'", class="dx-card")
+            div(class="dx-card-head")
+                h2 일별 실현손익
+            div(*ngFor="let m of dailyMarkets", class="hx-daily")
+                div(class="hx-daily-label") {{marketLabel(m)}}
+                div(class="hx-bars")
+                    div(*ngFor="let b of dailyBars(m)", class="hx-bar", [title]="b.date + ' ' + money(b.value, m, true)")
+                        i([class]="b.up ? 'up-bg' : 'down-bg'", [style.height.%]="b.height")
+                        small {{b.date.slice(5)}}
 
-            //- Filters
-            div(class="glass-card p-4 mb-4")
-                div(class="flex flex-wrap items-center gap-3")
-                    //- Status Filter
-                    div(class="flex items-center gap-1")
-                        span(class="text-xs text-slate-400 mr-1") {{t('hist.status')}}:
-                        button(*ngFor="let s of ['', 'ACTIVE', 'HOLDING', 'COMPLETED']",
-                            (click)="filterCycles(s)",
-                            class="px-2.5 py-1 rounded text-xs transition-colors",
-                            [class]="cycleFilter === s ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                            | {{s || t('common.all')}}
-                    //- Symbol Filter
-                    div(*ngIf="symbols.length > 0",
-                        class="flex items-center gap-1")
-                        span(class="text-xs text-slate-400 mr-1") {{t('hist.symbol')}}:
-                        button((click)="filterCycleSymbol('')",
-                            class="px-2.5 py-1 rounded text-xs transition-colors",
-                            [class]="cycleSymbolFilter === '' ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                            | {{t('common.all')}}
-                        button(*ngFor="let sym of symbols",
-                            (click)="filterCycleSymbol(sym)",
-                            class="px-2.5 py-1 rounded text-xs transition-colors",
-                            [class]="cycleSymbolFilter === sym ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                            | {{sym}}
-
-            //- Cycles Table
-            div(class="glass-card overflow-hidden")
-                div(*ngIf="cycles.length === 0",
-                    class="p-8 text-center text-slate-400 text-sm") {{t('hist.no_cycles')}}
-                table(*ngIf="cycles.length > 0",
-                    class="w-full text-[13px]")
+        //- Closed trades
+        section(class="dx-card")
+            div(class="dx-card-head")
+                h2 청산 거래
+                    span(class="dx-count") {{filteredTrips.length}}
+                input(class="hx-search", type="search", placeholder="종목·전략·사유 검색", [(ngModel)]="tripSearch")
+            div(*ngIf="filteredTrips.length === 0", class="dx-empty") 청산된 거래가 없습니다.
+            div(*ngIf="filteredTrips.length > 0", class="dx-table-wrap")
+                table(class="dx-table")
                     thead
-                        tr(class="border-b border-white/10 bg-white/5")
-                            th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.symbol')}}
-                            th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.status')}}
-                            th(class="text-center py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.round')}}
-                            th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.total_spent')}}
-                            th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.avg_price')}}
-                            th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.current')}}
-                            th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.eval')}}
-                            th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.pl')}}
-                            th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.period')}}
-                            th(class="text-center py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.detail')}}
+                        tr
+                            th 청산
+                            th 종목
+                            th 전략
+                            th(class="num") 진입 → 청산
+                            th(class="num") 수량
+                            th(class="num") 보유
+                            th(class="num") 손익
+                            th 사유
                     tbody
-                        tr(*ngFor="let c of cycles",
-                            class="border-b border-white/5 hover:bg-white/5 transition-colors")
-                            td(class="py-3 px-4")
-                                span(class="text-sm font-medium text-white") {{c.symbol}}
-                            td(class="py-3 px-4")
-                                span([class]="statusBadge(c.status)") {{c.status}}
-                            td(class="py-3 px-4 text-center")
-                                div(class="flex items-center justify-center gap-2")
-                                    span(class="text-slate-300") {{c.current_round}}/{{c.division_count}}
-                                    div(class="w-12 h-1.5 bg-white/5 rounded-full overflow-hidden")
-                                        div(class="h-full rounded-full bg-indigo-500",
-                                            [style.width.%]="cycleProgress(c)")
-                            td(class="py-3 px-4 text-right text-slate-300") {{formatUSD(c.total_spent)}}
-                            td(class="py-3 px-4 text-right text-slate-300") {{formatUSD(c.avg_price)}}
-                            td(class="py-3 px-4 text-right text-slate-300") {{formatUSD(c.current_price)}}
-                            td(class="py-3 px-4 text-right text-slate-300") {{formatUSD(c.current_eval)}}
-                            td(class="py-3 px-4 text-right font-medium", [class]="profitClass(c.profit_rate)")
-                                | {{c.profit_rate | number:'1.2-2'}}%
-                            td(class="py-3 px-4 text-left")
-                                div(class="text-xs text-slate-400")
-                                    span {{c.started_at ? (c.started_at | date:'yy.MM.dd') : '-'}}
-                                    span(class="mx-1") ~
-                                    span {{c.completed_at ? (c.completed_at | date:'yy.MM.dd') : 'now'}}
-                            td(class="py-3 px-4 text-center")
-                                div(class="flex items-center justify-center gap-1")
-                                    button((click)="viewCycleDetail(c)",
-                                        class="px-2.5 py-1 rounded text-xs text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-400/20 transition-colors")
-                                        | {{t('hist.view')}}
-                                    button(*ngIf="c.status === 'COMPLETED' || c.status === 'PAUSED'",
-                                        (click)="$event.stopPropagation(); deleteCycle(c)",
-                                        class="px-2 py-1 rounded text-xs text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-400/20 transition-colors")
-                                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-3.5")
-                                            path(stroke-linecap="round", stroke-linejoin="round", d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0")
+                        tr(*ngFor="let r of visibleTrips")
+                            td(class="dx-muted hx-nowrap") {{when(r.exit_at)}}
+                            td
+                                div(class="dx-sym")
+                                    strong {{r.name}}
+                                    small {{r.symbol}}
+                                span(class="hx-market", [class.is-us]="r.market === 'US'") {{marketLabel(r.market)}}
+                            td
+                                span(class="dx-strategy") {{r.strategy_label}}
+                            td(class="num")
+                                | {{price(r.entry_price, r.market)}} → {{price(r.exit_price, r.market)}}
+                            td(class="num") {{r.qty | number}}
+                                small(*ngIf="r.partial", class="dx-muted") 일부 청산
+                                small(*ngIf="r.unmatched_qty > 0", class="hx-warn") {{r.unmatched_qty | number}}주 매수기록 없음
+                            td(class="num") {{hold(r.hold_min)}}
+                            td(class="num")
+                                ng-container(*ngIf="r.cost_known")
+                                    strong([class]="tone(r.net)") {{money(r.net, r.market, true)}}
+                                    small([class]="tone(r.return_pct)") {{pct(r.return_pct)}}
+                                span(*ngIf="!r.cost_known", class="dx-muted") 원가 미확인
+                            td
+                                span(class="hx-exit", [class]="'is-' + r.exit_kind", [title]="r.reason") {{r.exit_label}}
+            button(*ngIf="filteredTrips.length > visibleTrips.length", class="hx-more", (click)="moreTrips()") 더보기 ({{filteredTrips.length - visibleTrips.length}})
 
-            //- Pagination
-            div(*ngIf="cycleTotalPages > 1",
-                class="flex items-center justify-center gap-1 mt-4")
-                button((click)="goCyclePage(cyclePage - 1)",
-                    [disabled]="cyclePage <= 1",
-                    class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.prev')}}
-                button(*ngFor="let p of pageArray(cycleTotalPages)",
-                    (click)="goCyclePage(p)",
-                    class="px-3 py-1.5 rounded text-xs transition-colors",
-                    [class]="p === cyclePage ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                    | {{p}}
-                button((click)="goCyclePage(cyclePage + 1)",
-                    [disabled]="cyclePage >= cycleTotalPages",
-                    class="px-3 py-1.5 rounded text-xs text-slate-400 bg-white/5 border border-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors") {{t('hist.next')}}
-
-    //- ═══════════════ TRADE LOGS TAB ═══════════════
-    div(*ngIf="tab === 'logs' && !loading")
-
-        //- Filters
-        div(class="glass-card p-4 mb-4")
-            div(class="flex flex-wrap items-center gap-3")
-                //- Symbol Filter
-                div(class="flex items-center gap-1")
-                    span(class="text-xs text-slate-400 mr-1") {{t('hist.symbol')}}:
-                    button((click)="filterLogSymbol('')",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="logSymbolFilter === '' ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{t('common.all')}}
-                    button(*ngFor="let sym of symbols",
-                        (click)="filterLogSymbol(sym)",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="logSymbolFilter === sym ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{sym}}
-                //- Action Filter
-                div(class="flex items-center gap-1")
-                    span(class="text-xs text-slate-400 mr-1") {{t('hist.action')}}:
-                    button(*ngFor="let a of ['', 'BUY', 'SELL']",
-                        (click)="filterLogAction(a)",
-                        class="px-2.5 py-1 rounded text-xs transition-colors",
-                        [class]="logActionFilter === a ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-400/30' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'")
-                        | {{a || t('common.all')}}
-                //- Search
-                div(class="flex items-center gap-2 ml-auto")
-                    input(type="text",
-                        [(ngModel)]="logSearchText",
-                        (keyup.enter)="searchLogs()",
-                        [placeholder]="t('hist.search')",
-                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-400/50 w-48")
-                    button((click)="searchLogs()",
-                        class="px-3 py-1.5 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors")
-                        svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                            path(stroke-linecap="round", stroke-linejoin="round", d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z")
-
-        //- Logs Table
-        div(class="glass-card overflow-hidden")
-            div(*ngIf="logs.length === 0",
-                class="p-8 text-center text-slate-400 text-sm") {{t('hist.no_logs')}}
-            table(*ngIf="logs.length > 0",
-                class="w-full text-[13px]")
+//- ============================================================
+//- 체결 내역
+//- ============================================================
+ng-container(*ngIf="tab === 'fills'")
+    div(*ngIf="loading && !tradesLoaded", class="dx-card dx-empty") 불러오는 중…
+    section(*ngIf="tradesLoaded", class="dx-card")
+        div(class="dx-card-head")
+            h2 체결 내역
+                span(class="dx-count") {{filteredFills.length}}
+            input(class="hx-search", type="search", placeholder="종목·전략·사유 검색", [(ngModel)]="fillSearch")
+        div(*ngIf="filteredFills.length === 0", class="dx-empty") 체결 내역이 없습니다.
+        div(*ngIf="filteredFills.length > 0", class="dx-table-wrap")
+            table(class="dx-table")
                 thead
-                    tr(class="border-b border-white/10 bg-white/5")
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.time')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.symbol')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.event')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.action')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.price')}}
-                        th(class="text-right py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.qty')}}
-                        th(class="text-left py-3 px-4 text-xs text-slate-400 font-medium") {{t('hist.message')}}
+                    tr
+                        th 시각
+                        th 종목
+                        th 전략
+                        th 구분
+                        th(class="num") 수량
+                        th(class="num") 체결가
+                        th(class="num") 금액
+                        th(class="num") 실현손익
                 tbody
-                    tr(*ngFor="let l of logs; let i = index",
-                        class="border-b border-white/5 hover:bg-white/5 transition-colors")
-                        td(class="py-2.5 px-4 text-xs text-slate-400 whitespace-nowrap") {{l.created}}
-                        td(class="py-2.5 px-4 text-sm font-medium text-white") {{l.symbol}}
-                        td(class="py-2.5 px-4")
-                            span([class]="eventBadge(l.event_type)") {{l.event_type}}
-                        td(class="py-2.5 px-4")
-                            span(*ngIf="l.action", [class]="actionBadge(l.action)") {{l.action}}
-                            span(*ngIf="!l.action", class="text-slate-500") -
-                        td(class="py-2.5 px-4 text-right text-slate-300")
-                            | {{l.order_price ? formatMarketMoney(l.order_price, l.market || (l.event_type?.includes('_US_') ? 'US' : 'KS')) : '-'}}
-                        td(class="py-2.5 px-4 text-right text-slate-300")
-                            | {{l.order_qty || '-'}}
-                        td(class="py-2.5 px-4 text-slate-400 text-xs max-w-xs cursor-pointer",
-                            (click)="toggleLogExpand(i)",
-                            [class]="expandedLogIdx.has(i) ? 'whitespace-pre-wrap break-all' : 'truncate'")
-                            | {{l.message}}
+                    tr(*ngFor="let r of visibleFills", [title]="r.reason")
+                        td(class="dx-muted hx-nowrap") {{when(r.timestamp)}}
+                        td
+                            div(class="dx-sym")
+                                strong {{r.name}}
+                                small {{r.symbol}}
+                            span(class="hx-market", [class.is-us]="r.market === 'US'") {{marketLabel(r.market)}}
+                        td
+                            span(class="dx-strategy") {{r.strategy_label}}
+                        td
+                            span(class="hx-side", [class.is-buy]="r.side === 'BUY'", [class.is-sell]="r.side === 'SELL'") {{r.label}}
+                        td(class="num") {{r.qty | number}}
+                        td(class="num") {{price(r.price, r.market)}}
+                        td(class="num") {{money(r.amount, r.market)}}
+                        td(class="num")
+                            ng-container(*ngIf="r.side === 'SELL' && r.net !== null")
+                                strong([class]="tone(r.net)") {{money(r.net, r.market, true)}}
+                                small([class]="tone(r.return_pct)") {{pct(r.return_pct)}}
+                            span(*ngIf="r.side !== 'SELL' || r.net === null", class="dx-muted") -
+        button(*ngIf="filteredFills.length > visibleFills.length", class="hx-more", (click)="moreFills()") 더보기 ({{filteredFills.length - visibleFills.length}})
 
-        div(*ngIf="logHasMore || logs.length > 0",
-            class="flex flex-col items-center gap-2 mt-4")
-            div(class="text-xs text-slate-500")
-                | {{logs.length}}건 표시
-                span(*ngIf="logOlderSummary.remaining_count > 0")  · 남은 로그 {{logOlderSummary.remaining_count}}건
-                span(*ngIf="logOlderSummary.archive_limited")  · 오래된 로그는 더보기로 추가 조회
-            button(*ngIf="logHasMore",
-                (click)="loadMoreLogs()",
-                [disabled]="logLoadingMore",
-                class="px-4 py-2 rounded-lg text-xs text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-40 transition-colors")
-                | {{logLoadingMore ? '불러오는 중...' : '더보기'}}
+//- ============================================================
+//- 무한매수 사이클
+//- ============================================================
+ng-container(*ngIf="tab === 'cycles' && !selectedCycle")
+    div(class="hx-filters")
+        div(class="hx-seg")
+            button([class.is-on]="cycleFilter === ''", (click)="filterCycles('')") 전체
+            button([class.is-on]="cycleFilter === 'ACTIVE'", (click)="filterCycles('ACTIVE')") 진행 중
+            button([class.is-on]="cycleFilter === 'COMPLETED'", (click)="filterCycles('COMPLETED')") 완료
+        select(class="hx-select", [ngModel]="cycleSymbolFilter", (ngModelChange)="filterCycleSymbol($event)")
+            option(value="") 전체 종목
+            option(*ngFor="let s of symbols", [value]="s") {{s}}
+    section(class="dx-card")
+        div(*ngIf="!loading && cycles.length === 0", class="dx-empty") 사이클이 없습니다.
+        div(*ngIf="cycles.length > 0", class="dx-table-wrap")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 종목
+                        th 상태
+                        th 진행
+                        th(class="num") 투입 / 한도
+                        th(class="num") 평단 · 수량
+                        th(class="num") 수익률
+                        th(class="num") 실현손익
+                        th(class="num") 기간
+                        th
+                tbody
+                    tr(*ngFor="let c of cycles", class="hx-click", (click)="viewCycleDetail(c)")
+                        td
+                            div(class="dx-sym")
+                                strong {{c.symbol}}
+                                small {{'#' + c.cycle_number}}
+                        td
+                            span(class="hx-status", [class]="'is-' + (c.status || '').toLowerCase()") {{cycleStatusLabel(c.status)}}
+                        td
+                            div(class="dx-progress")
+                                div(class="dx-progress-bar")
+                                    i([style.width.%]="cycleProgress(c)")
+                                span {{c.current_round || 0}}/{{c.division_count || 40}}
+                        td(class="num") {{money(c.total_spent, 'US')}}
+                            small(class="dx-muted") / {{money(c.total_investment, 'US')}}
+                        td(class="num") {{price(c.avg_price, 'US')}}
+                            small(class="dx-muted") {{c.total_qty || 0}}주
+                        td(class="num dx-strong", [class]="tone(c.profit_rate)") {{pct(c.profit_rate)}}
+                        td(class="num", [class]="tone(c.realized)") {{c.realized ? money(c.realized, 'US', true) : '-'}}
+                        td(class="num dx-muted") {{c.days === null ? '-' : c.days + '일'}}
+                            small {{(c.started_at || '').slice(0, 10)}}
+                        td(class="num")
+                            button(*ngIf="c.status === 'COMPLETED' || c.status === 'PAUSED'", class="hx-icon-btn", title="삭제", (click)="$event.stopPropagation(); deleteCycle(c)") 삭제
+        div(*ngIf="cycleTotalPages > 1", class="hx-pages")
+            button(*ngFor="let p of pageArray(cycleTotalPages)", [class.is-on]="p === cyclePage", (click)="goCyclePage(p)") {{p}}
+
+ng-container(*ngIf="tab === 'cycles' && selectedCycle")
+    section(class="dx-card")
+        div(class="dx-card-head")
+            div(class="dx-sym")
+                button(class="dx-tool", (click)="closeCycleDetail()") ← 목록
+                strong {{selectedCycle.symbol}}
+                small {{'#' + selectedCycle.cycle_number}}
+                span(class="hx-status", [class]="'is-' + (selectedCycle.status || '').toLowerCase()") {{cycleStatusLabel(selectedCycle.status)}}
+        div(class="dx-detail-grid")
+            div(class="dx-detail")
+                | 진행
+                strong {{selectedCycle.current_round || 0}} / {{selectedCycle.division_count || 40}}회
+            div(class="dx-detail")
+                | 투입 / 한도
+                strong {{money(selectedCycle.total_spent, 'US')}} / {{money(selectedCycle.total_investment, 'US')}}
+            div(class="dx-detail")
+                | 평단 · 수량
+                strong {{price(selectedCycle.avg_price, 'US')}} · {{selectedCycle.total_qty || 0}}주
+            div(class="dx-detail")
+                | 수익률 · 목표
+                strong([class]="tone(selectedCycle.profit_rate)") {{pct(selectedCycle.profit_rate)}}
+                small 목표 {{selectedCycle.target_profit || '-'}}%
+            div(class="dx-detail")
+                | 실현손익
+                strong([class]="tone(selectedCycle.realized)") {{selectedCycle.realized ? money(selectedCycle.realized, 'US', true) : '-'}}
+            div(class="dx-detail")
+                | 기간
+                strong {{selectedCycle.days === null || selectedCycle.days === undefined ? '-' : selectedCycle.days + '일'}}
+                small {{(selectedCycle.started_at || '').slice(0, 16)}} ~ {{(selectedCycle.completed_at || '진행 중').slice(0, 16)}}
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 회차별 체결
+                span(class="dx-count") {{cycleTrades.length}}
+        div(*ngIf="cycleTrades.length === 0", class="dx-empty") 체결 기록이 없습니다.
+        div(*ngIf="cycleTrades.length > 0", class="dx-table-wrap")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 회차
+                        th 날짜
+                        th 구분
+                        th(class="num") 체결가
+                        th(class="num") 수량
+                        th(class="num") 금액
+                        th(class="num") 평단 (후)
+                        th(class="num") 보유 (후)
+                        th 메모
+                tbody
+                    tr(*ngFor="let tr of cycleTrades")
+                        td {{tr.round}}
+                        td(class="dx-muted hx-nowrap") {{tr.trade_date || (tr.created || '').slice(0, 10)}}
+                        td
+                            span(class="hx-side", [class.is-buy]="tr.action === 'BUY'", [class.is-sell]="tr.action === 'SELL'") {{tr.action === 'BUY' ? '매수' : (tr.action === 'SELL' ? '매도' : tr.action)}}
+                        td(class="num") {{price(tr.filled_price || tr.order_price, 'US')}}
+                        td(class="num") {{tr.filled_qty || tr.order_qty || 0}}
+                        td(class="num") {{money(tr.filled_amount, 'US')}}
+                        td(class="num") {{price(tr.avg_buy_price, 'US')}}
+                        td(class="num") {{tr.total_qty_after || 0}}
+                        td(class="dx-muted dx-ellipsis", [title]="tr.memo || ''") {{tr.memo || '-'}}
+
+//- ============================================================
+//- 주문 로그
+//- ============================================================
+ng-container(*ngIf="tab === 'logs'")
+    div(class="hx-filters")
+        div(class="hx-seg")
+            button(*ngFor="let k of logKinds", [class.is-on]="logKind === k.id", (click)="setLogKind(k.id)") {{k.label}}
+        select(class="hx-select", [ngModel]="logSymbolFilter", (ngModelChange)="filterLogSymbol($event)")
+            option(value="") 전체 종목
+            option(*ngFor="let s of symbols", [value]="s") {{s}}
+        input(class="hx-search", type="search", placeholder="메시지 검색 후 Enter", [(ngModel)]="logSearchText", (keyup.enter)="searchLogs()")
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 주문 로그
+                span(class="dx-count") {{logTotal | number}}
+            span(class="dx-muted") 자동 점검·예약 갱신 같은 반복 기록은 '시스템 포함'에서만 보입니다
+        div(*ngIf="!loading && logs.length === 0", class="dx-empty") 로그가 없습니다.
+        div(*ngIf="logs.length > 0", class="dx-table-wrap")
+            table(class="dx-table hx-logs")
+                thead
+                    tr
+                        th 시각
+                        th 구분
+                        th 종목
+                        th 이벤트
+                        th(class="num") 수량 · 가격
+                        th 내용
+                tbody
+                    tr(*ngFor="let r of logs", class="hx-click", (click)="toggleLog(r)")
+                        td(class="dx-muted hx-nowrap") {{when(r.created)}}
+                        td(class="dx-muted hx-nowrap") {{r.lane}}
+                        td
+                            strong {{r.symbol || '-'}}
+                        td
+                            span(class="hx-event", [class]="'is-' + r.tone") {{r.label}}
+                        td(class="num")
+                            ng-container(*ngIf="(r.filled_qty || r.order_qty) > 0")
+                                | {{r.filled_qty || r.order_qty}}주
+                                small(class="dx-muted") {{price(r.filled_price || r.order_price, r.market)}}
+                            span(*ngIf="!((r.filled_qty || r.order_qty) > 0)", class="dx-muted") -
+                        td(class="hx-message", [class.is-open]="expandedLog === r.id") {{r.message || '-'}}
+        button(*ngIf="logHasMore", class="hx-more", [disabled]="loadingMore", (click)="moreLogs()") {{loadingMore ? '불러오는 중' : '더보기'}} ({{logTotal - logs.length | number}})
