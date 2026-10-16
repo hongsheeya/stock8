@@ -339,8 +339,9 @@ ng-container(*ngIf="tab === 'logs'")
     section(class="dx-card")
         div(class="dx-card-head")
             h2 주문 로그
-                span(class="dx-count") {{logTotal | number}}
+                span(*ngIf="!loading", class="dx-count") {{logTotal | number}}
             span(class="dx-muted") 자동 점검·예약 갱신 같은 반복 기록은 '시스템 포함'에서만 보입니다
+        div(*ngIf="loading && logs.length === 0", class="dx-empty") 불러오는 중…
         div(*ngIf="!loading && logs.length === 0", class="dx-empty") 로그가 없습니다.
         div(*ngIf="logs.length > 0", class="dx-table-wrap")
             table(class="dx-table hx-logs")
