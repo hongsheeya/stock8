@@ -392,10 +392,8 @@ export class Component implements OnInit, OnDestroy {
     public isActive(link: string) {
         const path = this.currentPath || location.pathname;
         if (link === '/daytrade') {
-            return path === '/daytrade';
-        }
-        if (link === '/daytrade/us') {
-            return path.indexOf('/daytrade/us') === 0;
+            // 국장·미장 단타는 한 메뉴에서 시장만 바꿔 봅니다.
+            return path.indexOf('/daytrade') === 0;
         }
         return path.indexOf(link) === 0;
     }

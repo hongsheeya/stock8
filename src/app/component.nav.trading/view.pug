@@ -25,14 +25,7 @@ nav(class="bn-top-nav mx-4 mt-4 mb-2 px-2 py-2 flex items-center justify-between
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M3 13.5 8.25 8.25l4.5 4.5L21 4.5")
                     path(stroke-linecap="round", stroke-linejoin="round", d="M17.25 4.5H21v3.75")
-                span 국장 단타
-            a(*ngIf="canShowDaytradeNav",
-                routerLink="/daytrade/us", [class]="navClass('/daytrade/us')")
-                svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
-                    path(stroke-linecap="round", stroke-linejoin="round", d="M13.5 3 21 7.5 13.5 12 6 7.5 13.5 3Z")
-                    path(stroke-linecap="round", stroke-linejoin="round", d="M21 12l-7.5 4.5L6 12")
-                    path(stroke-linecap="round", stroke-linejoin="round", d="M21 16.5 13.5 21 6 16.5")
-                span 미장 단타
+                span 단타
             a(*ngIf="effectiveAdminMode",
                 routerLink="/simulation", [class]="navClass('/simulation')")
                 svg(xmlns="http://www.w3.org/2000/svg", fill="none", viewBox="0 0 24 24", stroke-width="1.5", stroke="currentColor", class="size-4")
