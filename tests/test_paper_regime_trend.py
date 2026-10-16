@@ -89,6 +89,15 @@ class RegimeTrendTests(unittest.TestCase):
                          last_exit_watch_at="2026-05-25 14:00:00")
         self.assertEqual(self._signal(self._engine(trend, state=stopped))["action"], "BUY1")
 
+    def test_sides_config_limits_entries(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        engine = self._engine(trend)
+        engine._config = lambda key, default=None: "BULL" if key == "daytrade_regime_trend_sides" else default
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("롱", signal["reason"])
+        self.assertNotIn("114800", [r["symbol"] for r in engine._with_regime_trend_candidates([], {}, market="KS")])
+
     # -- exits
     def test_exits_when_the_index_reclaims_vwap(self):
         held = _state("114800", 1000, qty=10, strategy_id=STRATEGY)
