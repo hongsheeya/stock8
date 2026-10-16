@@ -1015,6 +1015,18 @@ class DomesticDaytradeEngine:
         return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, market),
                     bar=bar, session=(frame or {}).get("session", {}) or {}, feature_snapshot={})
 
+    def _without_paused_entries(self, rows):
+        """Drop new-entry candidates of strategies paused by
+        daytrade_paused_entry_strategies (comma separated ids). Held positions
+        keep their exits. 10-16: the user paused the rule strategies that
+        showed no edge (KS vrev/volume_breakout, the US rule set)."""
+        raw = str(self._config("daytrade_paused_entry_strategies", "") or "")
+        paused = {item.strip().lower() for item in raw.split(",") if item.strip()}
+        if not paused:
+            return rows
+        return [row for row in rows
+                if row.get("source") == "active_position" or str(row.get("strategy_id", "") or "").strip().lower() not in paused]
+
     def _with_momentum_candidates(self, rows, payload, market="KS"):
         """PAPER: today's movers from the scan, evaluated with the momentum rule
         right after the direction ETFs. Symbols already in the list keep their
@@ -3266,6 +3278,7 @@ class DomesticDaytradeEngine:
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload)
         candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="KS")
+        candidate_rows = self._without_paused_entries(candidate_rows)
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
@@ -6358,6 +6371,7 @@ class DomesticDaytradeEngine:
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload, market="US")
         candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="US")
+        candidate_rows = self._without_paused_entries(candidate_rows)
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
