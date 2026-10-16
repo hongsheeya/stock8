@@ -1015,6 +1015,18 @@ class DomesticDaytradeEngine:
         return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, market),
                     bar=bar, session=(frame or {}).get("session", {}) or {}, feature_snapshot={})
 
+    def _without_paused_entries(self, rows):
+        """Drop new-entry candidates of strategies paused by
+        daytrade_paused_entry_strategies (comma separated ids). Held positions
+        keep their exits. 10-16: the user paused the rule strategies that
+        showed no edge (KS vrev/volume_breakout, the US rule set)."""
+        raw = str(self._config("daytrade_paused_entry_strategies", "") or "")
+        paused = {item.strip().lower() for item in raw.split(",") if item.strip()}
+        if not paused:
+            return rows
+        return [row for row in rows
+                if row.get("source") == "active_position" or str(row.get("strategy_id", "") or "").strip().lower() not in paused]
+
     def _with_momentum_candidates(self, rows, payload, market="KS"):
         """PAPER: today's movers from the scan, evaluated with the momentum rule
         right after the direction ETFs. Symbols already in the list keep their
@@ -3266,6 +3278,7 @@ class DomesticDaytradeEngine:
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload)
         candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="KS")
+        candidate_rows = self._without_paused_entries(candidate_rows)
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:
@@ -4383,7 +4396,15 @@ class DomesticDaytradeEngine:
                 market="KS",
                 use_cache_only=True,
             )
-            net_assets = max(0.0, self._safe_float(budget.get("total_seed_krw", 0), 0))
+            # Net assets are the account's equity (cash + holdings). The day-trade
+            # seed is not: on a cache-only read with a cold balance cache it
+            # collapses to the positions' cost, so any gain above cost read as
+            # "over-exposure" and force-sold a winner (10-16, 233740: exposure
+            # 32.2M > "net assets" 31.2M = its cost). Unknown equity never
+            # forces a sale.
+            net_assets = max(0.0, self._safe_float(budget.get("total_asset_krw", 0), 0))
+            if str(budget.get("source", "") or "") == "cache_miss":
+                net_assets = 0.0
             max_exposure_ratio = max(0.5, self._safe_float(self._config("daytrade_max_gross_exposure_ratio", "1.0"), 1.0))
             exposure_limit = net_assets * max_exposure_ratio
             excess_exposure = max(0.0, gross_exposure - exposure_limit) if net_assets > 0 else 0.0
@@ -6350,6 +6371,7 @@ class DomesticDaytradeEngine:
         executed_count = 0
         candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload, market="US")
         candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="US")
+        candidate_rows = self._without_paused_entries(candidate_rows)
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:

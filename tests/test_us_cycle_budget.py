@@ -62,7 +62,8 @@ class UsCycleBudgetTests(unittest.TestCase):
             execute_live=Mock(side_effect=outcomes), daily_loss_status=lambda **kw: {},
             shared_budget_status=lambda **kw: {}, portfolio_usage=lambda **kw: {},
             _with_regime_trend_candidates=lambda rows, payload, market='US': rows,
-            _with_momentum_candidates=lambda rows, payload, market='US': rows)
+            _with_momentum_candidates=lambda rows, payload, market='US': rows,
+            _without_paused_entries=lambda rows: rows)
         result = ns['us_auto_cycle'](engine, requested_seed=seed)
         return result, engine
 

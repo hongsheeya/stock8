@@ -1,0 +1,30 @@
+"""Paused strategies open no new positions; held positions keep their exits.
+
+10-16: the user paused the rule strategies that showed no edge (KS
+vrev/volume_breakout and the US rule set), keeping the direction-ETF trend.
+"""
+import unittest
+
+from test_daytrade_engine_regressions import _engine_with_state
+
+PAUSED = "vrev,volume_breakout,us_premarket,us_breakout,us_pullback,us_vwap,us_opening_reclaim"
+
+
+class PausedEntryTests(unittest.TestCase):
+    def test_paused_new_entries_are_dropped_and_held_positions_kept(self):
+        engine, _ = _engine_with_state({}, [], configs={"daytrade_paused_entry_strategies": PAUSED})
+        rows = [{"symbol": "114800", "strategy_id": "paper_regime_trend", "source": "regime_trend"},
+                {"symbol": "042510", "strategy_id": "vrev", "source": "leaderboard"},
+                {"symbol": "HUBS", "strategy_id": "us_premarket", "source": "leaderboard"},
+                {"symbol": "EPAM", "strategy_id": "us_premarket", "source": "active_position"}]
+        kept = engine._without_paused_entries(rows)
+        self.assertEqual([r["symbol"] for r in kept], ["114800", "EPAM"])
+
+    def test_nothing_is_paused_by_default(self):
+        engine, _ = _engine_with_state({}, [])
+        rows = [{"symbol": "042510", "strategy_id": "vrev", "source": "leaderboard"}]
+        self.assertEqual(engine._without_paused_entries(rows), rows)
+
+
+if __name__ == "__main__":
+    unittest.main()
