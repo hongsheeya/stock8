@@ -25,6 +25,14 @@ class PausedEntryTests(unittest.TestCase):
         rows = [{"symbol": "042510", "strategy_id": "vrev", "source": "leaderboard"}]
         self.assertEqual(engine._without_paused_entries(rows), rows)
 
+    def test_all_rules_paused_skips_retraining(self):
+        engine, _ = _engine_with_state({}, [], configs={"daytrade_paused_entry_strategies": PAUSED})
+        self.assertTrue(engine._rule_strategies_paused("US"))
+        self.assertTrue(engine._rule_strategies_paused("KS"))
+        engine, _ = _engine_with_state({}, [], configs={"daytrade_paused_entry_strategies": "vrev"})
+        self.assertFalse(engine._rule_strategies_paused("KS"))
+        self.assertFalse(engine._rule_strategies_paused("US"))
+
 
 if __name__ == "__main__":
     unittest.main()
