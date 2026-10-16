@@ -4383,7 +4383,15 @@ class DomesticDaytradeEngine:
                 market="KS",
                 use_cache_only=True,
             )
-            net_assets = max(0.0, self._safe_float(budget.get("total_seed_krw", 0), 0))
+            # Net assets are the account's equity (cash + holdings). The day-trade
+            # seed is not: on a cache-only read with a cold balance cache it
+            # collapses to the positions' cost, so any gain above cost read as
+            # "over-exposure" and force-sold a winner (10-16, 233740: exposure
+            # 32.2M > "net assets" 31.2M = its cost). Unknown equity never
+            # forces a sale.
+            net_assets = max(0.0, self._safe_float(budget.get("total_asset_krw", 0), 0))
+            if str(budget.get("source", "") or "") == "cache_miss":
+                net_assets = 0.0
             max_exposure_ratio = max(0.5, self._safe_float(self._config("daytrade_max_gross_exposure_ratio", "1.0"), 1.0))
             exposure_limit = net_assets * max_exposure_ratio
             excess_exposure = max(0.0, gross_exposure - exposure_limit) if net_assets > 0 else 0.0

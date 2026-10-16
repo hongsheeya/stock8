@@ -610,7 +610,7 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
             {"symbol": "AAA", "market": "KS", "position_qty": 10, "avg_price": 9, "current_price": 10, "pnl_pct": 11.1, "strategy_id": "vrev"},
             {"symbol": "BBB", "market": "KS", "position_qty": 10, "avg_price": 11, "current_price": 10, "pnl_pct": -9.1, "strategy_id": "vrev"},
         ]
-        engine.shared_budget_status = lambda **kwargs: {"total_seed_krw": 100}
+        engine.shared_budget_status = lambda **kwargs: {"total_asset_krw": 100, "source": "cache_only:domestic_balance"}
         engine._append_runtime_log = lambda *args, **kwargs: None
         calls = []
 
