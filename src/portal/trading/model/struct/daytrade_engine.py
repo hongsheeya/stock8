@@ -2373,33 +2373,57 @@ class DomesticDaytradeEngine:
             return float(int(raw_price_cap / 1000.0) * 1000)
         return float(int(raw_price_cap / 10000.0) * 10000)
 
-    def _break_even_price(self, avg_price):
+    # KS fees: 0.015% commission a side; stocks also pay 0.18% transaction tax
+    # on the sale. Domestic ETFs and ETNs are exempt from that tax, but every
+    # KS sale was charged it (122630 10-16: ₩55k of a ₩64.6k "fee").
+    _KR_FEE_RATE = 0.00015
+    _KR_STOCK_SELL_TAX = 0.0018
+    _KR_FUND_BRANDS = (
+        "KODEX", "TIGER", "RISE", "KBSTAR", "ACE", "SOL", "HANARO", "KOSEF", "PLUS", "ARIRANG", "KIWOOM",
+        "TIMEFOLIO", "WON", "1Q", "BNK", "TREX", "FOCUS", "KOACT", "UNICORN", "TRUSTON", "DAISHIN343", "VITA",
+        "마이다스", "에셋플러스", "히어로즈", "마이티",
+    )
+
+    def _kr_sell_tax_exempt(self, symbol="", name=""):
+        """Domestic ETF/ETN, judged by name (or the static ETF and candidate lists)."""
+        symbol = str(symbol or "").strip().upper()
+        text = str(name or "").strip().upper()
+        if not text:
+            for item in list(getattr(self.strategy, "KR_REGIME_ETFS", []) or []) + list(getattr(self.strategy, "DEFAULT_CANDIDATES", []) or []):
+                if str((item or {}).get("symbol", "") or "").strip().upper() == symbol:
+                    text = str(item.get("name", "") or "").strip().upper()
+                    break
+        if not text:
+            return False
+        return "ETN" in text or any(text.startswith(brand + " ") for brand in self._KR_FUND_BRANDS)
+
+    def _kr_sell_fee_rate(self, symbol="", name=""):
+        tax = 0.0 if self._kr_sell_tax_exempt(symbol, name) else self._KR_STOCK_SELL_TAX
+        return self._KR_FEE_RATE + tax
+
+    def _break_even_price(self, avg_price, symbol="", name=""):
         avg_price = self._safe_float(avg_price, 0)
         if avg_price <= 0:
             return 0.0
-        fee_buy = 0.00015
-        fee_sell = 0.00195
-        return avg_price * (1 + fee_buy) / (1 - fee_sell)
+        return avg_price * (1 + self._KR_FEE_RATE) / (1 - self._kr_sell_fee_rate(symbol, name))
 
-    def _estimate_exit_net_profit(self, avg_price, exit_price, qty):
+    def _estimate_exit_net_profit(self, avg_price, exit_price, qty, symbol="", name=""):
         avg_price = self._safe_float(avg_price, 0)
         exit_price = self._safe_float(exit_price, 0)
         qty = self._safe_int(qty, 0)
         if avg_price <= 0 or exit_price <= 0 or qty <= 0:
             return 0.0
         gross = (exit_price - avg_price) * qty
-        fee_buy = avg_price * qty * 0.00015
-        fee_sell = exit_price * qty * 0.00195
-        return gross - fee_buy - fee_sell
+        return gross - self._estimate_exit_total_fee(avg_price, exit_price, qty, symbol, name)
 
-    def _estimate_exit_total_fee(self, avg_price, exit_price, qty):
+    def _estimate_exit_total_fee(self, avg_price, exit_price, qty, symbol="", name=""):
         avg_price = self._safe_float(avg_price, 0)
         exit_price = self._safe_float(exit_price, 0)
         qty = self._safe_int(qty, 0)
         if avg_price <= 0 or exit_price <= 0 or qty <= 0:
             return 0.0
-        fee_buy = avg_price * qty * 0.00015
-        fee_sell = exit_price * qty * 0.00195
+        fee_buy = avg_price * qty * self._KR_FEE_RATE
+        fee_sell = exit_price * qty * self._kr_sell_fee_rate(symbol, name)
         return fee_buy + fee_sell
 
     def _last_buy_order(self, state):
@@ -3987,8 +4011,8 @@ class DomesticDaytradeEngine:
                         net_usd = gross_usd - total_fee_usd
                         log_message = f"{symbol} {action} 실행 | {actual_qty}주 · ${actual_price:.2f} | 손익 ${gross_usd:+.2f} | 수수료 ${total_fee_usd:.4f} | 순손익 ${net_usd:+.2f} | {signal.get('reason', '')}"
                 else:
-                    fee_buy = round(prev_avg * actual_qty * 0.00015) if action.startswith("SELL") else round(actual_price * actual_qty * 0.00015)
-                    fee_sell = round(actual_price * actual_qty * 0.00195) if action.startswith("SELL") else 0
+                    fee_buy = round(prev_avg * actual_qty * self._KR_FEE_RATE) if action.startswith("SELL") else round(actual_price * actual_qty * self._KR_FEE_RATE)
+                    fee_sell = round(actual_price * actual_qty * self._kr_sell_fee_rate(symbol, name)) if action.startswith("SELL") else 0
                     if action.startswith("BUY"):
                         log_message = f"{symbol} {action} 실행 | {actual_qty}주 · 체결가 ₩{round(actual_price):,} · 체결금액 ₩{round(actual_order_value):,} | {signal.get('reason', '')}"
                     else:
@@ -4543,8 +4567,8 @@ class DomesticDaytradeEngine:
                 f"평단 ${prev_avg:.2f}→매도 ${exec_price:.2f} | "
                 f"손익 ${_mgross:+.4f} | 수수료 ${_msell_fee + _mbuy_fee + _sec_fee:.4f} | 순손익 ${_mnet:+.4f}")
         else:
-            _msell_fee = round(exec_price * sell_qty * 0.00195)
-            _mbuy_fee = round(prev_avg * sell_qty * 0.00015)
+            _msell_fee = round(exec_price * sell_qty * self._kr_sell_fee_rate(symbol, name or state.get("name", "")))
+            _mbuy_fee = round(prev_avg * sell_qty * self._KR_FEE_RATE)
             _mgross = round((exec_price - prev_avg) * sell_qty)
             _mnet = _mgross - _msell_fee - _mbuy_fee
             _m_log = (f"사용자 즉시 매도 [시장가] | "
@@ -4765,7 +4789,7 @@ class DomesticDaytradeEngine:
             if self._is_us_market(market):
                 return self._safe_float(profile.get("sell_commission_bps", profile.get("commission_bps", 25.0)), 25.0) / 10000.0
             commission_bps = self._safe_float(profile.get("commission_bps", 1.5), 1.5)
-            tax_bps = self._safe_float(profile.get("sell_tax_bps", 18.0), 18.0)
+            tax_bps = 0.0 if self._kr_sell_tax_exempt(symbol) else self._safe_float(profile.get("sell_tax_bps", 18.0), 18.0)
             return (commission_bps + tax_bps) / 10000.0
 
         def _journal_fee(notional, symbol, market, is_sell=False):
@@ -5448,8 +5472,6 @@ class DomesticDaytradeEngine:
                 selected_rows.append(row)
         selected_rows.reverse()
 
-        _FEE_BUY = 0.00015
-        _FEE_SELL = 0.00195
         logs = []
         symbol_summary = {}
         total_buy_amount = 0.0
@@ -5467,9 +5489,9 @@ class DomesticDaytradeEngine:
                 continue
 
             amount = round(filled_price * filled_qty)
-            fee = round(amount * (_FEE_BUY if action == "BUY" else _FEE_SELL))
             created = str(row.get("created", "") or "")
             name = str(row.get("name", "") or "") or self.strategy.symbol_name(symbol)
+            fee = round(amount * (self._KR_FEE_RATE if action == "BUY" else self._kr_sell_fee_rate(symbol, name)))
 
             logs.append({
                 "id": row.get("id"),
@@ -6263,7 +6285,7 @@ class DomesticDaytradeEngine:
                 continue
             avg_price = self._safe_float(position.get("avg_price", 0), 0)
             current_price = self._safe_float(position.get("current_price", 0), 0)
-            break_even = self._break_even_price(avg_price)
+            break_even = self._break_even_price(avg_price, position.get("symbol", ""), position.get("name", ""))
             if break_even <= 0 or current_price < break_even:
                 continue
             status = self.signal_status(
@@ -7553,7 +7575,7 @@ class DomesticDaytradeEngine:
             rescue_target = avg_price * (1 + float(profile.get("rescue_take_profit_pct", 0.5)) / 100)
             stop_loss_pct_val = self._strategy_stop_pct(strategy_id, profile, market)
             auto_stop_price = self._auto_stop_level(avg_price, stop_loss_pct_val, market)
-            break_even_price = self._break_even_price(avg_price)
+            break_even_price = self._break_even_price(avg_price, symbol, name or state.get("name", ""))
             bb_upper_live = self._safe_float(bar.get("bb_upper", 0), 0)
             stop_touch_price = current_price
             auto_stop_hit = auto_stop_price > 0 and current_price <= auto_stop_price
@@ -7769,9 +7791,8 @@ class DomesticDaytradeEngine:
                 })
 
         # 수수료 손익분기 체크 — 수수료만 나가는 매도 방지 (손절 제외)
-        # 매수 수수료 0.015% + 매도 수수료 0.015% + 증권거래세 0.18% = 총 ~0.21%
-        _FEE_BUY = 0.00015
-        _FEE_SELL = 0.00195  # 0.015% + 0.18% 거래세
+        # 매수·매도 수수료 0.015%씩 + 주식 매도 시 증권거래세 0.18% (ETF·ETN 면제)
+        fee_name = name or state.get("name", "")
         # Risk exits (close-rule clean-up, failed breakout) cut a loss on purpose;
         # the profit floor must not turn them back into HOLD.
         if signal["action"].startswith("SELL") and "STOP" not in signal["action"] and signal["action"] != "SELL_MANUAL" and not signal.get("risk_exit") and avg_price > 0 and current_price > 0:
@@ -7793,10 +7814,10 @@ class DomesticDaytradeEngine:
                 fee_based_min_profit = round(est_total_fee * min_exit_fee_multiple, 2)
                 money = lambda value: f"${value:,.2f}"
             else:
-                break_even = avg_price * (1 + _FEE_BUY) / (1 - _FEE_SELL)  # ≈ avg_price * 1.0021
+                break_even = self._break_even_price(avg_price, symbol, fee_name)
                 min_exit_net_profit = max(0, round(self._safe_float(profile.get("min_exit_net_profit_krw", 500), 500)))
-                est_net_profit = round(self._estimate_exit_net_profit(avg_price, current_price, sell_qty_for_check))
-                est_total_fee = round(self._estimate_exit_total_fee(avg_price, current_price, sell_qty_for_check))
+                est_net_profit = round(self._estimate_exit_net_profit(avg_price, current_price, sell_qty_for_check, symbol, fee_name))
+                est_total_fee = round(self._estimate_exit_total_fee(avg_price, current_price, sell_qty_for_check, symbol, fee_name))
                 fee_based_min_profit = round(est_total_fee * min_exit_fee_multiple)
                 money = lambda value: f"₩{round(value):,}"
             required_min_profit = max(min_exit_net_profit, fee_based_min_profit)
