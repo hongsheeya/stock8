@@ -3,6 +3,13 @@ import { Service } from '@wiz/libs/portal/season/service';
 
 declare const wiz: any;
 
+// WIZ renames the component class at build time; keep lookups at module level.
+const SHORT_STRATEGY: any = {
+    us_premarket: '갭업 하따', us_breakout: '돌파', us_pullback: '눌림', us_vwap: 'VWAP',
+    us_opening_reclaim: '시가 회복', paper_regime_trend: '방향 추세', paper_momentum_ride: '급등주 편승',
+    paper_selective_breakout: '선택 돌파', paper_selective_pullback: '선택 눌림',
+};
+
 export class Component implements OnInit, OnDestroy {
     @Input() title: any;
 
@@ -39,7 +46,8 @@ export class Component implements OnInit, OnDestroy {
     public searchLoading: boolean = false;
     public orderProcessing: boolean = false;
     public executionResult: any = null;
-    public briefingCollapsed: boolean = true;
+    public briefingCollapsed: boolean = false;
+    public todayUs: any = null;
     public advancedControlsCollapsed: boolean = true;
     public bootstrapDelayed: boolean = false;
 
@@ -95,6 +103,7 @@ export class Component implements OnInit, OnDestroy {
         // trading model. Account and quote state hydrates in the background.
         this.loading = false;
         await this.service.render();
+        void this.loadTodayHistory();
         await this.bootstrap();
         await this.service.render();
     }
@@ -336,8 +345,48 @@ export class Component implements OnInit, OnDestroy {
         await this.service.render();
     }
 
+    // Today's realized P&L comes from the history page, the same source as 거래이력.
+    public async loadTodayHistory() {
+        try {
+            const res = await fetch('/wiz/api/page.history/trades?period=1D&market=US').then(r => r.json());
+            if (res?.code === 200) this.todayUs = res.data?.summary?.US || { net: 0, closed: 0, win_rate: null };
+        } catch (e) {
+        }
+        await this.service.render();
+    }
+
+    public get todayRealized(): number {
+        return Number(this.todayUs?.net || 0);
+    }
+
+    public get positionsPnl(): number {
+        return this.usActivePositions.reduce((sum: number, item: any) => sum + Number(item?.pnl || 0), 0);
+    }
+
+    public get positionsValue(): number {
+        return this.usActivePositions.reduce((sum: number, item: any) =>
+            sum + Number(item?.current_price || item?.last_price || 0) * Number(item?.position_qty || item?.qty || 0), 0);
+    }
+
+    public shortStrategy(id: any): string {
+        const key = String(id || '').trim();
+        return SHORT_STRATEGY[key] || key || '-';
+    }
+
+    public tone(value: any): string {
+        const n = Number(value || 0);
+        return n > 0 ? 'dx-up' : (n < 0 ? 'dx-down' : 'dx-flat');
+    }
+
+    public signedUsd(value: any): string {
+        const n = Number(value || 0);
+        const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `${n > 0 ? '+' : (n < 0 ? '-' : '')}$${abs}`;
+    }
+
     public async refreshLight() {
         this.refreshing = true;
+        void this.loadTodayHistory();
         await this.service.render();
         await this.loadSnapshot(true);
         this.queueBackgroundRefresh(false);
