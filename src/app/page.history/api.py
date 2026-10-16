@@ -1014,11 +1014,25 @@ def _fill_label(record):
         return _BUY_LABELS.get(detail, "매수")
     return _exit_kind(detail, record.get("message", ""))[1]
 
-def _estimated_fee(market, cost, proceeds):
-    # Same schedule as _estimate_net_realized and the engine's own log lines.
+# Mirrors DomesticDaytradeEngine._kr_sell_tax_exempt: domestic ETFs and ETNs
+# pay no 0.18% transaction tax on the sale.
+_KR_FUND_BRANDS = (
+    "KODEX", "TIGER", "RISE", "KBSTAR", "ACE", "SOL", "HANARO", "KOSEF", "PLUS", "ARIRANG", "KIWOOM",
+    "TIMEFOLIO", "WON", "1Q", "BNK", "TREX", "FOCUS", "KOACT", "UNICORN", "TRUSTON", "DAISHIN343", "VITA",
+    "마이다스", "에셋플러스", "히어로즈", "마이티",
+)
+_KR_STOCK_SELL_TAX = 0.0018
+
+def _kr_tax_exempt(name=""):
+    text = str(name or "").strip().upper()
+    return bool(text) and ("ETN" in text or any(text.startswith(brand + " ") for brand in _KR_FUND_BRANDS))
+
+def _estimated_fee(market, cost, proceeds, name=""):
+    # Same schedule as the engine's own log lines.
     if market == "US":
         return cost * 0.0025 + proceeds * 0.0025 + proceeds / 1_000_000.0 * 8.0
-    return cost * 0.00015 + proceeds * 0.00195
+    tax = 0.0 if _kr_tax_exempt(name) else _KR_STOCK_SELL_TAX
+    return cost * 0.00015 + proceeds * (0.00015 + tax)
 
 def _minutes_between(start, end):
     try:
@@ -1076,8 +1090,13 @@ def _closed_trades(records, cycles_by_id=None):
         # not cover a sale it books the unmatched proceeds as fee (069500
         # 09-18: a ₩18M fee on an ₩87M sale).
         unmatched_qty = 0
+        name = str(record.get("name", "") or "")
         if abs(logged_net) > 1e-9:
             net, fee = logged_net, max(0.0, _safe_float(record.get("fee", 0), 0))
+            if market == "KS" and _kr_tax_exempt(name) and fee >= proceeds * _KR_STOCK_SELL_TAX * 0.9:
+                # Logged before 10-16, when the engine charged ETFs the stock tax.
+                fee -= proceeds * _KR_STOCK_SELL_TAX
+                net += proceeds * _KR_STOCK_SELL_TAX
             if cost <= 0:
                 cost = max(0.0, proceeds - net - fee)
                 avg = cost / qty if qty > 0 else 0.0
@@ -1085,7 +1104,7 @@ def _closed_trades(records, cycles_by_id=None):
             # The engine's own average cost covers buys missing from the logs.
             cost = max(0.0, proceeds - engine_gross)
             avg = cost / qty if qty > 0 else 0.0
-            fee = _estimated_fee(market, cost, proceeds)
+            fee = _estimated_fee(market, cost, proceeds, name)
             net = engine_gross - fee
         elif cost > 0:
             matched_qty = qty
@@ -1095,7 +1114,7 @@ def _closed_trades(records, cycles_by_id=None):
                 matched_qty, unmatched_qty = held, qty - held
             cost = avg * matched_qty
             matched_proceeds = price * matched_qty
-            fee = max(0.0, _safe_float(record.get("fee", 0), 0)) if infinite else _estimated_fee(market, cost, matched_proceeds)
+            fee = max(0.0, _safe_float(record.get("fee", 0), 0)) if infinite else _estimated_fee(market, cost, matched_proceeds, name)
             net = matched_proceeds - cost - fee
         else:
             net, fee = 0.0, 0.0

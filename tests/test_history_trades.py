@@ -202,16 +202,37 @@ class ClosedTradeTests(unittest.TestCase):
         self.assertFalse(last["partial"])
         self.assertEqual(last["hold_min"], 60)
         self.assertEqual(last["exit_kind"], "stop")
-        self.assertAlmostEqual(last["net"], 15 * (90 - 105) - api["_estimated_fee"]("KS", 1575, 1350), places=2)
+        self.assertAlmostEqual(last["net"], 15 * (90 - 105) - api["_estimated_fee"]("KS", 1575, 1350, "KODEX 200"), places=2)
 
     def test_engine_net_from_the_log_line_wins(self):
         trips = api["_closed_trades"]([
-            _fill("2026-10-16 10:13:18", "BUY", 434, 71834.34),
-            _fill("2026-10-16 10:28:22", "SELL", 434, 70765.0, net_realized=-528509.0, fee=64564.0),
+            _fill("2026-10-16 10:13:18", "BUY", 100, 50000.0, name="삼성전자", symbol="005930"),
+            _fill("2026-10-16 10:28:22", "SELL", 100, 49000.0, name="삼성전자", symbol="005930",
+                  net_realized=-110305.0, fee=10305.0),
         ])
-        self.assertEqual(trips[0]["net"], -528509.0)
-        self.assertEqual(trips[0]["fee"], 64564.0)
-        self.assertEqual(trips[0]["return_pct"], round(-528509.0 / (71834.34 * 434) * 100, 2))
+        self.assertEqual(trips[0]["net"], -110305.0)
+        self.assertEqual(trips[0]["fee"], 10305.0)
+        self.assertEqual(trips[0]["return_pct"], round(-110305.0 / 5_000_000 * 100, 2))
+
+    def test_etf_lines_logged_with_the_stock_tax_are_corrected(self):
+        # 122630 10-16: the engine logged ₩64,564 of fees, ₩55,282 of it the
+        # 0.18% transaction tax that ETFs do not pay.
+        trips = api["_closed_trades"]([
+            _fill("2026-10-16 10:13:18", "BUY", 434, 71834.34, name="KODEX 레버리지", symbol="122630"),
+            _fill("2026-10-16 10:28:22", "SELL", 434, 70765.0, name="KODEX 레버리지", symbol="122630",
+                  net_realized=-528509.0, fee=64564.0),
+        ])
+        tax = 434 * 70765.0 * 0.0018
+        self.assertAlmostEqual(trips[0]["net"], round(-528509.0 + tax, 2), places=2)
+        self.assertAlmostEqual(trips[0]["fee"], round(64564.0 - tax, 2), places=2)
+
+    def test_etf_lines_logged_after_the_fix_are_kept(self):
+        trips = api["_closed_trades"]([
+            _fill("2026-10-17 10:13:18", "BUY", 434, 71834.34, name="KODEX 레버리지", symbol="122630"),
+            _fill("2026-10-17 10:28:22", "SELL", 434, 70765.0, name="KODEX 레버리지", symbol="122630",
+                  net_realized=-473227.0, fee=9282.0),
+        ])
+        self.assertEqual((trips[0]["net"], trips[0]["fee"]), (-473227.0, 9282.0))
 
     def test_sale_beyond_recorded_buys_counts_only_known_shares(self):
         trips = api["_closed_trades"]([
