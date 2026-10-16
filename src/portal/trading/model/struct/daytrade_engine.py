@@ -1043,6 +1043,18 @@ class DomesticDaytradeEngine:
         return dict(state=state, signal=signal, profile=self._profile_for(symbol, strategy_id, market),
                     bar=bar, session=(frame or {}).get("session", {}) or {}, feature_snapshot={})
 
+    _RULE_STRATEGIES = {
+        "KS": {"vrev", "volume_breakout"},
+        "US": {"us_premarket", "us_breakout", "us_pullback", "us_vwap", "us_opening_reclaim"},
+    }
+
+    def _rule_strategies_paused(self, market="KS"):
+        """True when every backtested rule strategy of the market is paused."""
+        raw = str(self._config("daytrade_paused_entry_strategies", "") or "")
+        paused = {item.strip().lower() for item in raw.split(",") if item.strip()}
+        rules = self._RULE_STRATEGIES["US" if self._is_us_market(market) else "KS"]
+        return bool(paused) and rules <= paused
+
     def _without_paused_entries(self, rows):
         """Drop new-entry candidates of strategies paused by
         daytrade_paused_entry_strategies (comma separated ids). Held positions
@@ -6001,13 +6013,20 @@ class DomesticDaytradeEngine:
             refresh_sec = idle_refresh_sec
 
         try:
-            recommendation = self.strategy.recommend(
-                seed=max(total_seed_krw, requested_seed or 0, 0),
-                force=bool(force_recommend),
-                price_cap=price_cap_krw,
-                max_age_sec=refresh_sec,
-                market=market,
-            )
+            if self._rule_strategies_paused(market) and not force_recommend:
+                # 10-16 23:00: every US rule strategy was paused, yet each cycle
+                # retrained them first (minutes of CPU) while the regime ETFs
+                # waited for their entry check. Their candidates would be
+                # dropped anyway, so reuse the cached leaderboard.
+                recommendation = self.strategy.latest_recommendation(allow_stale_day=True, market=market)
+            else:
+                recommendation = self.strategy.recommend(
+                    seed=max(total_seed_krw, requested_seed or 0, 0),
+                    force=bool(force_recommend),
+                    price_cap=price_cap_krw,
+                    max_age_sec=refresh_sec,
+                    market=market,
+                )
         except Exception as e:
             self._append_runtime_log("warning", f"단타 자동 추천 갱신 실패 ({market}): {str(e)}")
             recommendation = self.strategy.latest_recommendation(
