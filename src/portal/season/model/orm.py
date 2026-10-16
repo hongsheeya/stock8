@@ -112,6 +112,15 @@ class Model:
         skip = []
 
         for key in where:
+            if key.endswith("__startswith"):
+                # rows(event_type__startswith="DT_") fell through to the
+                # getattr below, failed and was dropped: callers got the whole
+                # table (25k trade_log rows) instead of the prefix they asked for.
+                try:
+                    query = query.where(getattr(db, key[:-len("__startswith")]).startswith(where[key]))
+                except Exception:
+                    pass
+                continue
             notequal = False
             tkey = key
             if key[0] == "_":

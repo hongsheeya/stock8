@@ -2,8 +2,10 @@ import { OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
 import { i18n } from '@wiz/libs/portal/trading/i18n';
 
+const PAGE = 20;
+
 export class Component implements OnInit {
-    // Tab: 'daytrade' | 'cycles' | 'logs'
+    // Tab: 'performance' | 'fills' | 'cycles' | 'logs'
     public tab: string = 'cycles';
     public get showDaytrade(): boolean {
         const user: any = this.service?.auth?.session || {};
@@ -13,100 +15,196 @@ export class Component implements OnInit {
     }
     public t = (key: string) => i18n.t(key);
 
+    public readonly periods = [
+        { id: '1D', label: '오늘' }, { id: '1W', label: '7일' }, { id: '1M', label: '30일' },
+        { id: '3M', label: '90일' }, { id: 'ALL', label: '전체' },
+    ];
+    public readonly markets = [{ id: '', label: '전체' }, { id: 'KS', label: '국장' }, { id: 'US', label: '미장' }];
+    public readonly logKinds = [{ id: '', label: '주문·체결' }, { id: 'error', label: '오류' }, { id: 'all', label: '시스템 포함' }];
+
+    // Trades (performance + fills share one payload)
+    public period: string = '1M';
+    public market: string = '';
+    public strategy: string = '';
+    public data: any = { summary: {}, strategies: [], daily: [], trips: [], fills: [], strategy_options: [] };
+    public tripSearch: string = '';
+    public tripLimit: number = PAGE;
+    public fillSearch: string = '';
+    public fillLimit: number = PAGE;
+    public tradesLoaded: boolean = false;
+
     // Cycles
     public cycles: any[] = [];
     public cyclePage: number = 1;
     public cycleTotalPages: number = 1;
-    public cycleFilter: string = '';  // ALL, ACTIVE, COMPLETED, HOLDING
+    public cycleFilter: string = '';
     public cycleSymbolFilter: string = '';
     public symbols: string[] = [];
-
-    // Cycle Detail
     public selectedCycle: any = null;
     public cycleTrades: any[] = [];
 
-    // Daytrade
-    public daytradeTrades: any[] = [];
-    public daytradeSummary: any = {};
-    public daytradePage: number = 1;
-    public daytradeTotalPages: number = 1;
-    public daytradeTotal: number = 0;
-    public daytradeHasMore: boolean = false;
-    public daytradeLoadingMore: boolean = false;
-    public daytradeSyncing: boolean = false;
-    public daytradeOlderSummary: any = {};
-    public daytradeMarketFilter: string = '';
-    public daytradeActionFilter: string = '';
-    public daytradeSymbolFilter: string = '';
-    public daytradeSearchText: string = '';
-
-    // Trade Logs
+    // Logs
     public logs: any[] = [];
     public logPage: number = 1;
-    public logTotalPages: number = 1;
     public logTotal: number = 0;
     public logHasMore: boolean = false;
-    public logLoadingMore: boolean = false;
-    public logOlderSummary: any = {};
+    public logKind: string = '';
     public logSymbolFilter: string = '';
-    public logActionFilter: string = '';  // BUY, SELL
     public logSearchText: string = '';
-    public expandedLogIdx: Set<number> = new Set();
+    public expandedLog: string = '';
 
     public loading: boolean = false;
+    public loadingMore: boolean = false;
     public loadError: string = '';
+    public updatedAt: string = '';
 
     constructor(public service: Service) { }
 
     public async ngOnInit() {
         await this.service.init(this);
         await this.service.auth.allow("/access");
-        await Promise.all([
-            this.loadSymbols(),
-            this.loadCycles(),
-        ]);
-        await this.service.render();
+        if (this.showDaytrade) this.tab = 'performance';
+        await Promise.all([this.loadSymbols(), this.loadTab()]);
     }
 
-    public async switchTab(t: string) {
-        if (t === 'daytrade' && !this.showDaytrade) return;
-        this.tab = t;
+    public async switchTab(tab: string) {
+        if ((tab === 'performance' || tab === 'fills') && !this.showDaytrade) return;
+        this.tab = tab;
         this.selectedCycle = null;
-        if (t === 'daytrade') await this.loadDaytradeTrades();
-        else if (t === 'cycles') await this.loadCycles();
-        else if (t === 'logs') await this.loadLogs();
+        await this.loadTab();
+    }
+
+    private async loadTab(force: boolean = false) {
+        if (this.tab === 'performance' || this.tab === 'fills') {
+            if (force || !this.tradesLoaded) await this.loadTrades();
+            else await this.service.render();
+        } else if (this.tab === 'cycles') await this.loadCycles();
+        else await this.loadLogs();
+    }
+
+    public async refresh() {
+        await this.loadTab(true);
+    }
+
+    private stamp() {
+        const now = new Date();
+        this.updatedAt = now.toTimeString().slice(0, 8);
+    }
+
+    // ─── Trades ───
+    public async loadTrades() {
+        this.loading = true;
+        this.loadError = '';
+        await this.service.render();
+        try {
+            const res = await wiz.call("trades", { period: this.period, market: this.market, strategy: this.strategy });
+            if (res.code === 200) {
+                this.data = res.data || {};
+                this.tradesLoaded = true;
+                this.tripLimit = PAGE;
+                this.fillLimit = PAGE;
+                this.stamp();
+            } else {
+                this.loadError = res.data?.message || '거래이력을 불러오지 못했습니다.';
+            }
+        } catch (e: any) {
+            console.error('trades load failed:', e);
+            this.loadError = '거래이력을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.';
+        }
+        this.loading = false;
         await this.service.render();
     }
 
-    // ─── Symbols ───
+    public async setPeriod(period: string) {
+        if (this.period === period) return;
+        this.period = period;
+        await this.loadTrades();
+    }
+
+    public async setMarket(market: string) {
+        if (this.market === market) return;
+        this.market = market;
+        await this.loadTrades();
+    }
+
+    public async setStrategy(strategy: string) {
+        this.strategy = this.strategy === strategy ? '' : strategy;
+        await this.loadTrades();
+    }
+
+    public get summaryMarkets(): string[] {
+        return ['KS', 'US'].filter((m) => this.data?.summary?.[m]);
+    }
+
+    private matches(row: any, text: string): boolean {
+        const q = (text || '').trim().toLowerCase();
+        if (!q) return true;
+        return `${row.symbol} ${row.name} ${row.strategy_label} ${row.reason || ''}`.toLowerCase().includes(q);
+    }
+
+    public get filteredTrips(): any[] {
+        return (this.data?.trips || []).filter((row: any) => this.matches(row, this.tripSearch));
+    }
+
+    public get visibleTrips(): any[] {
+        return this.filteredTrips.slice(0, this.tripLimit);
+    }
+
+    public get filteredFills(): any[] {
+        return (this.data?.fills || []).filter((row: any) => this.matches(row, this.fillSearch));
+    }
+
+    public get visibleFills(): any[] {
+        return this.filteredFills.slice(0, this.fillLimit);
+    }
+
+    public async moreTrips() {
+        this.tripLimit += PAGE;
+        await this.service.render();
+    }
+
+    public async moreFills() {
+        this.fillLimit += PAGE;
+        await this.service.render();
+    }
+
+    // Daily bars: one scale per market (KRW and USD never share an axis).
+    public dailyBars(market: string): any[] {
+        const days = (this.data?.daily || []).filter((d: any) => Math.abs(Number(d[market]) || 0) > 0);
+        const max = Math.max(1, ...days.map((d: any) => Math.abs(Number(d[market]) || 0)));
+        return days.map((d: any) => {
+            const value = Number(d[market]) || 0;
+            return { date: d.date, value, height: Math.max(4, Math.round(Math.abs(value) / max * 100)), up: value >= 0 };
+        });
+    }
+
+    public get dailyMarkets(): string[] {
+        return ['KS', 'US'].filter((m) => (!this.market || this.market === m) && this.dailyBars(m).length > 0);
+    }
+
+    // ─── Cycles ───
     private async loadSymbols() {
-        this.loadError = '';
         try {
             const res = await wiz.call("symbols");
-            if (res.code === 200) {
-                this.symbols = Array.isArray(res.data) ? res.data : (res.data?.symbols || []);
-            }
-            else this.loadError = res.data?.message || '종목 목록을 불러오지 못했습니다.';
+            if (res.code === 200) this.symbols = Array.isArray(res.data) ? res.data : (res.data?.symbols || []);
         } catch (e: any) {
             console.error('symbols load failed:', e);
-            this.loadError = '종목 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.';
         }
         await this.service.render();
     }
 
-    // ─── Cycles ───
     public async loadCycles() {
         this.loading = true;
         await this.service.render();
-        const res = await wiz.call("cycles", {
-            page: this.cyclePage,
-            status: this.cycleFilter,
-            symbol: this.cycleSymbolFilter,
-            sync: 'false',
-        });
-        if (res.code === 200) {
-            this.cycles = res.data.rows || [];
-            this.cycleTotalPages = res.data.total_pages || 1;
+        try {
+            const res = await wiz.call("cycles", { page: this.cyclePage, status: this.cycleFilter, symbol: this.cycleSymbolFilter });
+            if (res.code === 200) {
+                this.cycles = res.data.rows || [];
+                this.cycleTotalPages = res.data.total_pages || 1;
+                this.stamp();
+            }
+        } catch (e: any) {
+            console.error('cycles load failed:', e);
         }
         this.loading = false;
         await this.service.render();
@@ -130,13 +228,12 @@ export class Component implements OnInit {
         await this.loadCycles();
     }
 
-    // ─── Cycle Detail ───
     public async viewCycleDetail(cycle: any) {
         this.loading = true;
         await this.service.render();
-        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id, sync: 'false' });
+        const res = await wiz.call("cycle_detail", { cycle_id: cycle.id });
         if (res.code === 200) {
-            this.selectedCycle = res.data.cycle;
+            this.selectedCycle = { ...res.data.cycle, realized: cycle.realized, days: cycle.days };
             this.cycleTrades = res.data.trades || [];
         }
         this.loading = false;
@@ -148,99 +245,6 @@ export class Component implements OnInit {
         await this.service.render();
     }
 
-    // ─── Daytrade ───
-    public async loadDaytradeTrades(append: boolean = false, syncBroker: boolean = false) {
-        if (append) this.daytradeLoadingMore = true;
-        else if (!syncBroker) this.loading = true;
-        await this.service.render();
-        try {
-            const request = wiz.call("daytrade_trades", {
-                page: this.daytradePage,
-                market: this.daytradeMarketFilter,
-                action: this.daytradeActionFilter,
-                symbol: this.daytradeSymbolFilter,
-                search: this.daytradeSearchText,
-                sync_broker: syncBroker ? 'true' : 'false',
-                include_old: this.daytradePage > 3 ? 'true' : 'false',
-            });
-            const res: any = syncBroker
-                ? await Promise.race([
-                    request,
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('KIS_SYNC_TIMEOUT')), 15000)),
-                ])
-                : await request;
-            if (res.code === 200) {
-                const rows = res.data.rows || [];
-                this.daytradeTrades = append ? this.daytradeTrades.concat(rows) : rows;
-                this.daytradeSummary = res.data.summary || {};
-                this.daytradeTotalPages = res.data.total_pages || 1;
-                this.daytradeTotal = res.data.total || this.daytradeTrades.length;
-                this.daytradeHasMore = res.data.has_more === true;
-                this.daytradeOlderSummary = res.data.older_summary || {};
-                this.loadError = '';
-            } else {
-                this.loadError = res.data?.message || '거래이력을 불러오지 못했습니다.';
-            }
-        } catch (e: any) {
-            console.error('daytrade history load failed:', e);
-            this.loadError = syncBroker && e?.message === 'KIS_SYNC_TIMEOUT'
-                ? 'KIS 과거 체결 조회가 15초를 초과했습니다. 기존 거래이력은 유지되며 백그라운드 조회 완료 후 다시 동기화할 수 있습니다.'
-                : '거래이력 응답이 지연되고 있습니다. 로컬 체결 로그를 다시 불러와주세요.';
-        } finally {
-            if (append) this.daytradeLoadingMore = false;
-            else if (!syncBroker) this.loading = false;
-            await this.service.render();
-        }
-    }
-
-    public async syncDaytradeBrokerHistory() {
-        if (this.daytradeSyncing) return;
-        this.daytradeSyncing = true;
-        this.daytradePage = 1;
-        try {
-            await this.loadDaytradeTrades(false, true);
-        } finally {
-            this.daytradeSyncing = false;
-            await this.service.render();
-        }
-    }
-
-    public async filterDaytradeMarket(market: string) {
-        this.daytradeMarketFilter = market;
-        this.daytradePage = 1;
-        await this.loadDaytradeTrades();
-    }
-
-    public async filterDaytradeAction(action: string) {
-        this.daytradeActionFilter = action;
-        this.daytradePage = 1;
-        await this.loadDaytradeTrades();
-    }
-
-    public async filterDaytradeSymbol(symbol: string) {
-        this.daytradeSymbolFilter = symbol;
-        this.daytradePage = 1;
-        await this.loadDaytradeTrades();
-    }
-
-    public async searchDaytradeTrades() {
-        this.daytradePage = 1;
-        await this.loadDaytradeTrades();
-    }
-
-    public async goDaytradePage(p: number) {
-        if (p < 1 || p > this.daytradeTotalPages) return;
-        this.daytradePage = p;
-        await this.loadDaytradeTrades();
-    }
-
-    public async loadMoreDaytradeTrades() {
-        if (!this.daytradeHasMore || this.daytradeLoadingMore) return;
-        this.daytradePage += 1;
-        await this.loadDaytradeTrades(true);
-    }
-
-    // ─── Delete Cycle ───
     public async deleteCycle(cycle: any) {
         const res = await this.service.modal.show({
             title: this.t('cycle.delete_title'),
@@ -256,215 +260,142 @@ export class Component implements OnInit {
         if (code === 200) {
             await this.loadCycles();
         } else {
-            await this.service.modal.show({
-                title: 'Error',
-                message: data?.message || 'Failed to delete cycle',
-                action: '확인',
-            });
+            await this.service.modal.show({ title: 'Error', message: data?.message || 'Failed to delete cycle', action: '확인' });
             await this.service.render();
         }
-    }
-
-    // ─── Trade Logs ───
-    public async loadLogs(append: boolean = false) {
-        if (append) this.logLoadingMore = true;
-        else this.loading = true;
-        await this.service.render();
-        const res = await wiz.call("trade_logs", {
-            page: this.logPage,
-            symbol: this.logSymbolFilter,
-            action: this.logActionFilter,
-            search: this.logSearchText,
-            sync_broker: 'false',
-            include_old: this.logPage > 3 ? 'true' : 'false',
-        });
-        if (res.code === 200) {
-            const rows = res.data.rows || [];
-            this.logs = append ? this.logs.concat(rows) : rows;
-            this.logTotalPages = res.data.total_pages || 1;
-            this.logTotal = res.data.total || this.logs.length;
-            this.logHasMore = res.data.has_more === true;
-            this.logOlderSummary = res.data.older_summary || {};
-        }
-        this.expandedLogIdx.clear();
-        if (append) this.logLoadingMore = false;
-        else this.loading = false;
-        await this.service.render();
-    }
-
-    public async filterLogSymbol(sym: string) {
-        this.logSymbolFilter = sym;
-        this.logPage = 1;
-        await this.loadLogs();
-    }
-
-    public async filterLogAction(action: string) {
-        this.logActionFilter = action;
-        this.logPage = 1;
-        await this.loadLogs();
-    }
-
-    public async searchLogs() {
-        this.logPage = 1;
-        await this.loadLogs();
-    }
-
-    public async goLogPage(p: number) {
-        if (p < 1 || p > this.logTotalPages) return;
-        this.logPage = p;
-        await this.loadLogs();
-    }
-
-    public async loadMoreLogs() {
-        if (!this.logHasMore || this.logLoadingMore) return;
-        this.logPage += 1;
-        await this.loadLogs(true);
-    }
-
-    public async toggleLogExpand(i: number) {
-        if (this.expandedLogIdx.has(i)) this.expandedLogIdx.delete(i);
-        else this.expandedLogIdx.add(i);
-        await this.service.render();
-    }
-
-    // ─── Utils ───
-    public formatUSD(val: any): string {
-        const n = parseFloat(val) || 0;
-        return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-
-    public formatKRW(val: any): string {
-        const n = Math.round(parseFloat(val) || 0);
-        return '₩' + n.toLocaleString('ko-KR');
-    }
-
-    public formatMarketMoney(val: any, market: string = 'KS'): string {
-        return (market || '').toUpperCase() === 'US' ? this.formatUSD(val) : this.formatKRW(val);
-    }
-
-    public hasRealizedValue(val: any): boolean {
-        if (val === null || val === undefined || val === '') return false;
-        return !Number.isNaN(Number(val));
-    }
-
-    public summaryProfitLines(key: string): any[] {
-        const byMarket = this.daytradeSummary?.by_market || {};
-        const preferred = (this.daytradeMarketFilter || '').toUpperCase();
-        const markets = preferred ? [preferred] : ['KS', 'US'];
-        const lines = markets
-            .map((market: string) => {
-                const bucket = byMarket?.[market] || null;
-                if (!bucket) return null;
-                const value = Number(bucket?.[key]) || 0;
-                const hasData = Number(bucket?.trade_count || 0) > 0
-                    || Number(bucket?.open_position_count || 0) > 0
-                    || Math.abs(value) > 0;
-                if (!hasData) return null;
-                return {
-                    market,
-                    label: market === 'US' ? '미장' : '국장',
-                    value,
-                    text: this.formatMarketMoney(value, market),
-                };
-            })
-            .filter((item: any) => item !== null);
-        if (lines.length > 0) return lines;
-        const fallbackMarket = preferred || 'KS';
-        const value = Number(this.daytradeSummary?.[key]) || 0;
-        return [{
-            market: fallbackMarket,
-            label: fallbackMarket === 'US' ? '미장' : '국장',
-            value,
-            text: this.formatMarketMoney(value, fallbackMarket),
-        }];
-    }
-
-    public summaryProfitClass(key: string): string {
-        const lines = this.summaryProfitLines(key);
-        const values = lines.map((line: any) => Number(line.value) || 0).filter((value: number) => Math.abs(value) > 0);
-        if (values.length === 0) return 'bn-muted-text';
-        if (values.every((value: number) => value > 0)) return 'hist-profit-up';
-        if (values.every((value: number) => value < 0)) return 'hist-profit-down';
-        return 'bn-muted-text';
-    }
-
-    public summaryProfitValueClass(value: any): string {
-        const n = Number(value) || 0;
-        if (n > 0) return 'hist-profit-up';
-        if (n < 0) return 'hist-profit-down';
-        return 'bn-muted-text';
-    }
-
-    public profitClass(rate: any): string {
-        const r = parseFloat(rate) || 0;
-        if (r > 0) return 'hist-profit-up';
-        if (r < 0) return 'hist-profit-down';
-        return 'bn-muted-text';
-    }
-
-    public statusBadge(status: string): string {
-        const s = (status || '').toUpperCase();
-        switch (s) {
-            case 'ACTIVE': return 'bn-chip state-active';
-            case 'HOLDING': return 'bn-chip state-holding';
-            case 'COMPLETED': return 'bn-chip state-completed';
-            case 'IDLE': return 'bn-chip state-idle';
-            default: return 'bn-chip state-idle';
-        }
-    }
-
-    public actionBadge(action: string): string {
-        const a = (action || '').toUpperCase();
-        if (a.startsWith('BUY')) return 'bn-chip action-buy';
-        if (a.startsWith('SELL')) return 'bn-chip action-sell';
-        if (a === 'ERROR') return 'bn-chip action-error';
-        if (a === 'SKIP') return 'bn-chip action-muted';
-        return 'bn-chip action-muted';
-    }
-
-    public marketBadge(market: string): string {
-        const m = (market || '').toUpperCase();
-        if (m === 'US') return 'bn-chip market-us';
-        return 'bn-chip market-ks';
-    }
-
-    public actionLabel(action: string, detail: string = ''): string {
-        const d = (detail || action || '').toUpperCase();
-        if (d.includes('ERROR')) return '주문 거절';
-        if (d.includes('SKIP')) return '미체결/건너뜀';
-        if (d.includes('PENDING') || (action || '').toUpperCase() === 'PENDING') return '접수·체결대기';
-        if (d === 'BUY1') return '1차 매수';
-        if (d === 'BUY2') return '2차 매수';
-        if (d.includes('RESERVED')) return '예약매수';
-        if (d.includes('PARTIAL')) return '부분매도';
-        if (d.includes('BUY')) return '매수';
-        if (d.includes('SELL')) return '매도';
-        return d || '-';
-    }
-
-    public eventBadge(eventType: string): string {
-        const e = (eventType || '').toLowerCase();
-        if (e.includes('buy')) return 'bn-chip action-buy';
-        if (e.includes('sell')) return 'bn-chip action-sell';
-        if (e.includes('error')) return 'bn-chip action-error';
-        if (e.includes('cycle')) return 'bn-chip state-active';
-        return 'bn-chip action-muted';
     }
 
     public cycleProgress(cycle: any): number {
         const current = parseInt(cycle.current_round) || 0;
         const total = parseInt(cycle.division_count) || 40;
-        return Math.round((current / total) * 100);
+        return Math.min(100, Math.round((current / total) * 100));
+    }
+
+    public cycleStatusLabel(status: string): string {
+        const s = (status || '').toUpperCase();
+        return ({ ACTIVE: '진행 중', HOLDING: '보유 중', COMPLETED: '완료', PAUSED: '일시정지', IDLE: '대기' } as any)[s] || s || '-';
     }
 
     public pageArray(total: number): number[] {
         return Array.from({ length: total }, (_, i) => i + 1);
     }
 
-    public tabClass(t: string): string {
-        if (this.tab === t) {
-            return "bn-tab is-active";
+    // ─── Logs ───
+    public async loadLogs(append: boolean = false) {
+        if (append) this.loadingMore = true;
+        else {
+            this.loading = true;
+            this.logPage = 1;
         }
-        return "bn-tab";
+        await this.service.render();
+        try {
+            const res = await wiz.call("trade_logs", {
+                page: this.logPage, kind: this.logKind, symbol: this.logSymbolFilter, search: this.logSearchText,
+            });
+            if (res.code === 200) {
+                const rows = res.data.rows || [];
+                this.logs = append ? this.logs.concat(rows) : rows;
+                this.logTotal = res.data.total || this.logs.length;
+                this.logHasMore = res.data.has_more === true;
+                this.loadError = '';
+                this.stamp();
+            } else {
+                this.loadError = res.data?.message || '로그를 불러오지 못했습니다.';
+            }
+        } catch (e: any) {
+            console.error('logs load failed:', e);
+            this.loadError = '로그를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.';
+        }
+        this.loading = false;
+        this.loadingMore = false;
+        await this.service.render();
+    }
+
+    public async setLogKind(kind: string) {
+        if (this.logKind === kind) return;
+        this.logKind = kind;
+        await this.loadLogs();
+    }
+
+    public async filterLogSymbol(sym: string) {
+        this.logSymbolFilter = sym;
+        await this.loadLogs();
+    }
+
+    public async searchLogs() {
+        await this.loadLogs();
+    }
+
+    public async moreLogs() {
+        if (!this.logHasMore || this.loadingMore) return;
+        this.logPage += 1;
+        await this.loadLogs(true);
+    }
+
+    public async toggleLog(row: any) {
+        this.expandedLog = this.expandedLog === row.id ? '' : row.id;
+        await this.service.render();
+    }
+
+    // ─── Format ───
+    public money(value: any, market: string = 'KS', signed: boolean = false): string {
+        if (value === null || value === undefined || value === '') return '-';
+        const n = Number(value) || 0;
+        const sign = signed && n > 0 ? '+' : (n < 0 ? '-' : '');
+        const abs = Math.abs(n);
+        if ((market || '').toUpperCase() === 'US') {
+            return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        return `${sign}₩${Math.round(abs).toLocaleString('ko-KR')}`;
+    }
+
+    public price(value: any, market: string = 'KS'): string {
+        const n = Number(value) || 0;
+        if (n <= 0) return '-';
+        if ((market || '').toUpperCase() === 'US') return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return '₩' + Math.round(n).toLocaleString('ko-KR');
+    }
+
+    public pct(value: any, signed: boolean = true): string {
+        if (value === null || value === undefined || value === '') return '-';
+        const n = Number(value) || 0;
+        return `${signed && n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+    }
+
+    public tone(value: any): string {
+        const n = Number(value) || 0;
+        if (n > 0) return 'up';
+        if (n < 0) return 'down';
+        return 'flat';
+    }
+
+    public hold(minutes: any): string {
+        if (minutes === null || minutes === undefined) return '-';
+        const m = Number(minutes) || 0;
+        if (m < 60) return `${m}분`;
+        if (m < 1440) return `${Math.floor(m / 60)}시간 ${m % 60 ? (m % 60) + '분' : ''}`.trim();
+        const days = m / 1440;
+        return `${days >= 10 ? Math.round(days) : days.toFixed(1)}일`;
+    }
+
+    public when(ts: string): string {
+        const text = String(ts || '');
+        if (!text) return '-';
+        const today = new Date();
+        const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        return text.startsWith(ymd) ? text.slice(11, 16) : text.slice(5, 16);
+    }
+
+    public marketLabel(market: string): string {
+        return (market || '').toUpperCase() === 'US' ? '미장' : '국장';
+    }
+
+    public get periodLabel(): string {
+        return (this.periods.find((p) => p.id === this.period) || this.periods[2]).label;
+    }
+
+    public get strategyLabel(): string {
+        const found = (this.data?.strategy_options || []).find((s: any) => s.id === this.strategy);
+        return found ? found.label : '';
     }
 }
