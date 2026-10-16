@@ -262,6 +262,11 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(api["_event_label"]("DT_KS_SELL_STOP_LOSS_ERROR")[:2], ("손절 매도 거절", "error"))
         self.assertEqual(api["_event_label"]("DT_US_BUY_PENDING"), ("매수 접수", "pending", "미장 단타"))
         self.assertEqual(api["_event_label"]("IB_BUY_FILLED")[1:], ("buy", "무한매수"))
+        self.assertEqual(api["_event_label"]("IB_LOC_RESERVATION_CANCELLED")[:2], ("LOC 예약 취소", "error"))
+
+    def test_reservations_stay_visible_and_repeats_do_not(self):
+        self.assertNotIn("IB_LOC_BUY_SCHEDULED", api["_SYSTEM_EVENT_TYPES"])
+        self.assertIn("IB_LOC_BUY_ALREADY_SCHEDULED", api["_SYSTEM_EVENT_TYPES"])
 
     def test_log_line_money(self):
         text = "122630 SELL_STOP_LOSS 실행 | 손익 ₩-463,945 | 수수료 ₩64,564 | 순손익 ₩-528,509"

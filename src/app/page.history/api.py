@@ -1370,7 +1370,8 @@ _LOG_COLUMNS = ("id", "created", "symbol", "event_type", "action", "order_price"
                 "filled_price", "filled_qty", "message")
 # Written on every automation pass; they drown the order events (≈90% of trade_log).
 _SYSTEM_EVENT_TYPES = (
-    "IB_LOC_AUTOMATION_RUN", "IB_LOC_SELL_SCHEDULED", "IB_LOC_BUY_SCHEDULED",
+    "IB_LOC_AUTOMATION_RUN", "IB_LOC_BUY_SKIPPED", "IB_LOC_SELL_SKIPPED",
+    "IB_LOC_BUY_ALREADY_SCHEDULED", "IB_LOC_SELL_ALREADY_SCHEDULED",
     "IB_LOC_BUY_MISSING_FOR_REBUILD", "IB_LOC_SELL_MISSING_FOR_REBUILD",
     "IB_EXTERNAL_CYCLE_SYNC_RUN", "IB_BROKER_HOLDING_SNAPSHOT_ALIGNED",
 )
@@ -1391,7 +1392,11 @@ _IB_EVENT_LABELS = {
     "IB_EXTERNAL_CYCLE_SYNC_RUN": "KIS 동기화", "IB_CYCLE_START": "사이클 시작",
     "IB_CYCLE_AUTO_RESTART": "사이클 자동 재시작", "IB_PENDING_EXTENSION": "미체결 연장",
     "IB_BROKER_HOLDING_SNAPSHOT_ALIGNED": "보유 수량 정렬", "IB_PAPER_ROUND_REPAIRED": "회차 보정",
-    "IB_WATCHLIST_AUTO_CREATE": "관심종목 자동 등록",
+    "IB_WATCHLIST_AUTO_CREATE": "관심종목 자동 등록", "IB_WATCHLIST_AUTO_ACTIVATE": "관심종목 자동 활성화",
+    "IB_LOC_BUY_SKIPPED": "LOC 매수 생략", "IB_LOC_SELL_SKIPPED": "LOC 매도 생략",
+    "IB_LOC_BUY_ALREADY_SCHEDULED": "LOC 매수 예약 유지", "IB_LOC_SELL_ALREADY_SCHEDULED": "LOC 매도 예약 유지",
+    "IB_LOC_RESERVATION_CANCELLED": "LOC 예약 취소", "IB_LOC_BUY_PRICE_MISMATCH": "LOC 가격 불일치",
+    "IB_FIREGATE_TRADE_SYNCED": "FireGate 체결 반영", "IB_CYCLE_DELETE": "사이클 삭제",
 }
 
 def _event_label(event_type=""):
@@ -1407,7 +1412,7 @@ def _event_label(event_type=""):
         tone = tone or ("buy" if body.startswith("BUY") else "sell")
         return _DT_EVENT_LABELS.get(body, body) + suffix, tone, lane
     label = _IB_EVENT_LABELS.get(event, event.replace("_", " ").title())
-    if "ERROR" in event:
+    if "ERROR" in event or "CANCEL" in event or "MISMATCH" in event:
         tone = "error"
     elif "BUY" in event:
         tone = "buy"
