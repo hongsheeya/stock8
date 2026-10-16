@@ -8,7 +8,11 @@
 <div *ngIf="!loading" class="dx-page">
     <div class="dx-head">
         <div class="dx-title">
-            <h1>미장 단타</h1>
+            <h1>단타</h1>
+            <div class="dx-seg dx-market-switch">
+                <a routerLink="/daytrade"><i [class.is-on]="tradeControls.state?.daytrade_ks"></i>국장</a>
+                <a class="is-on" routerLink="/daytrade/us"><i [class.is-on]="tradeControls.state?.daytrade_us"></i>미장</a>
+            </div>
             <span class="dx-chip" [class.is-live]="tradeControls.state && tradeControls.state.mode !== 'PAPER'">{{!tradeControls.state ? '확인 중' : (tradeControls.state.mode === 'PAPER' ? '모의투자' : '실계좌')}}</span>
             <span class="dx-chip" [class.is-on]="tradeControls.state?.daytrade_us" [class.is-off]="!tradeControls.state?.daytrade_us"><i></i>자동매매 {{tradeControls.state?.daytrade_us ? 'ON' : 'OFF'}}</span>
             <span class="dx-chip" [class.is-on]="autoStatus?.market_open || autoStatus?.premarket_open">{{marketSessionLabel}}</span>

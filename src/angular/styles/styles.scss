@@ -287,6 +287,14 @@ button.dx-tag:disabled { opacity: .5; cursor: not-allowed; }
 }
 .dx-seg button:hover { color: var(--bn-body); }
 .dx-seg button.is-on { color: var(--bn-body); background: var(--bn-elevated); }
+.dx-seg > a {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 7px;
+    font-size: 13px; font-weight: 650; color: var(--bn-muted-strong); text-decoration: none; white-space: nowrap;
+}
+.dx-seg > a:hover { color: var(--bn-body); }
+.dx-seg > a.is-on { color: var(--bn-body); background: var(--bn-elevated); }
+.dx-market-switch i { width: 7px; height: 7px; border-radius: 50%; background: var(--bn-muted); display: inline-block; }
+.dx-market-switch i.is-on { background: #10b981; }
 .dx-input, .dx-select {
     padding: 6px 10px; font-size: 12px; border-radius: 8px;
     background: var(--bn-canvas); border: 1px solid var(--bn-hairline); color: var(--bn-body);
