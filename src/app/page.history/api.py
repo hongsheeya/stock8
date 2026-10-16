@@ -1338,15 +1338,17 @@ def cycles():
     status = str(wiz.request.query("status", "") or "").upper()
     symbol = str(wiz.request.query("symbol", "") or "").upper()
 
+    all_cycles = _cycle_rows(trading)
+    # Same average-cost book as the trades tab: sell rows often carry no
+    # avg_buy_price, which left their realized P&L at zero.
     realized_by_cycle = {}
-    for record in _collect_cycle_trade_records(trading):
-        if _normalize_trade_action(record.get("action", "")) == "SELL" and _is_executable_daytrade_record(record):
-            cycle_id = str(record.get("cycle_id", "") or "")
-            realized_by_cycle[cycle_id] = realized_by_cycle.get(cycle_id, 0.0) + _safe_float(record.get("realized", 0), 0)
+    for trip in _closed_trades(_collect_cycle_trade_records(trading), {str(c.get("id", "")): c for c in all_cycles}):
+        if trip.get("cost_known") and trip.get("cycle_id"):
+            realized_by_cycle[trip["cycle_id"]] = realized_by_cycle.get(trip["cycle_id"], 0.0) + trip["net"]
 
     rows = []
     now = datetime.datetime.now(KST).replace(tzinfo=None)
-    for cycle in _cycle_rows(trading):
+    for cycle in all_cycles:
         if _is_empty_cycle(cycle):
             continue
         if status and str(cycle.get("status", "") or "").upper() != status:
