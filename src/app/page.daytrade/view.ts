@@ -68,7 +68,8 @@ export class Component implements OnInit, OnDestroy {
     public recommendationRequestedSeed: number = 0;
     public hiddenSeedExceededCount: number = 0;
     public briefingCollapsed: boolean = true;
-    public advancedControlsCollapsed: boolean = true;
+    public advancedControlsCollapsed: boolean = false;
+    public executing: boolean = false;
     public bootstrapDelayed: boolean = false;
     private activePositionTimer: any = null;
     private activePositionRefreshing: boolean = false;
@@ -170,9 +171,7 @@ export class Component implements OnInit, OnDestroy {
         setTimeout(() => {
             void this.refreshActivePositionsQuick(false);
             void this.loadLiveStatus(false);
-            if (this.showDailyLog) {
-                void this.loadDailyLog();
-            }
+            void this.loadDailyLog();
         }, 0);
     }
 
@@ -996,6 +995,8 @@ export class Component implements OnInit, OnDestroy {
     }
 
     public async executeSignal() {
+        this.executing = true;
+        await this.service.render();
         try {
             const { code, data } = await this.api('execute_live', {
                 symbol: this.symbol,
@@ -1016,7 +1017,53 @@ export class Component implements OnInit, OnDestroy {
         } catch (e: any) {
             this.errorMessage = e?.message || '실행 중 오류가 발생했습니다.';
         }
+        this.executing = false;
         await this.service.render();
+    }
+
+    // ─── dx summary helpers ───
+    private static readonly SHORT_STRATEGY: any = {
+        vrev: '눌림 반등', volume_breakout: '거래량 돌파', paper_regime_trend: '방향 추세',
+        paper_momentum_ride: '급등주 편승', paper_selective_breakout: '선택 돌파', paper_selective_pullback: '선택 눌림',
+    };
+
+    public shortStrategy(item: any): string {
+        const id = String(item?.strategy_id || '').trim();
+        return Component.SHORT_STRATEGY[id] || item?.strategy_name || this.strategyLabel(id) || '-';
+    }
+
+    public get positionsPnl(): number {
+        return (this.activePositions || []).reduce((sum: number, item: any) => sum + Number(item?.pnl || 0), 0);
+    }
+
+    public get positionsValue(): number {
+        return (this.activePositions || []).reduce(
+            (sum: number, item: any) => sum + Number(item?.current_price || 0) * Number(item?.position_qty || 0), 0);
+    }
+
+    public tone(value: any): string {
+        const n = Number(value || 0);
+        return n > 0 ? 'dx-up' : (n < 0 ? 'dx-down' : 'dx-flat');
+    }
+
+    public signedKrw(value: any): string {
+        const n = Math.round(Number(value || 0));
+        return `${n > 0 ? '+' : (n < 0 ? '-' : '')}₩${Math.abs(n).toLocaleString('ko-KR')}`;
+    }
+
+    public signedPct(value: any): string {
+        const n = Number(value || 0);
+        return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+    }
+
+    public async refreshAll() {
+        await Promise.all([this.loadLiveStatus(true), this.loadDailyLog(), this.refreshActivePositionsQuick(false)]);
+        await this.service.render();
+    }
+
+    public async onDailyToggle(event: any) {
+        this.showDailyLog = !!event?.target?.open;
+        if (this.showDailyLog && !this.dailyLog && !this.dailyLogLoading) await this.loadDailyLog();
     }
 
     public async toggleDailyLog() {
