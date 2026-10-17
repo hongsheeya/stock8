@@ -67,6 +67,20 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertEqual(kwargs['retries'], 0)
         with self.assertRaises(ValueError): api.get_us_momentum_rank('INVALID')
 
+    def test_present_balance_reads_usd_cash_from_the_usd_row(self):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *args, **kwargs: {
+            "rt_cd": "0",
+            "output2": [
+                {"crcy_cd": "JPY", "frcr_drwg_psbl_amt_1": "5000", "frst_bltn_exrt": "9.1"},
+                {"crcy_cd": "USD", "frcr_dncl_amt_2": "120.50", "frcr_drwg_psbl_amt_1": "97.54", "frst_bltn_exrt": "1348.5"},
+            ],
+            "output3": {"tot_dncl_amt": "1219202", "wdrw_psbl_tot_amt": "1219202"},
+        }
+        info = api.get_present_balance()
+        self.assertEqual(info["usd_cash_usd"], 97.54)
+        self.assertEqual(info["meta"]["usd_cash_key"], "frcr_drwg_psbl_amt_1")
+
     def test_domestic_buying_power_never_uses_margin_inclusive_max_amount(self):
         api = kis_api.KisApi(_StructStub())
         api._request = lambda *args, **kwargs: {

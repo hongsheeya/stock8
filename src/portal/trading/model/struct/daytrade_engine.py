@@ -2650,6 +2650,7 @@ class DomesticDaytradeEngine:
         domestic_eval_krw = 0.0
         foreign_eval_krw = 0.0
         usd_cash_balance_usd = 0.0
+        present_usd_cash_usd = 0.0
         usd_cash_balance_krw = 0.0
         subscription_deposit_krw = 0.0
         d1_deposit_krw = 0.0
@@ -2733,13 +2734,14 @@ class DomesticDaytradeEngine:
             present = self._broker().get_present_balance()
             usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
             present_total_asset_krw = self._safe_float(present.get("total_asset_krw", 0), 0)
+            present_usd_cash_usd = self._safe_float(present.get("usd_cash_usd", 0), 0)
             if present_total_asset_krw > 0:
                 total_asset_source = "present_balance.total_asset_krw"
         except Exception:
             pass
         try:
             overseas = self._broker().get_balance()
-            usd_cash_balance_usd = self._safe_float(overseas.get("cash_balance", 0), 0)
+            usd_cash_balance_usd = max(self._safe_float(overseas.get("cash_balance", 0), 0), present_usd_cash_usd)
             foreign_eval_usd = self._safe_float(overseas.get("total_eval", 0), 0)
             if foreign_eval_usd <= 0:
                 foreign_eval_usd = sum(self._safe_float(item.get("eval_amount", 0), 0) for item in (overseas.get("holdings", []) or []))
