@@ -154,9 +154,12 @@ def access_status():
 
 def _page_budget_status(engine, seed, force=False):
     budget = engine.shared_budget_status(requested_seed=seed, use_cache_only=not force)
-    if _TRADING_MODE == 'PAPER' and not force and budget.get('budget_status') == 'unavailable':
+    if not force and (budget.get('budget_status') == 'unavailable' or budget.get('source') == 'cache_miss'):
         # A cold cache is not a zero balance. Warm it on the first page read;
         # subsequent polls use the existing engine TTL rather than refetching.
+        # 10-18: LIVE was excluded, and with LIVE day trading OFF nothing else
+        # fills the cache, so the LIVE page showed a ₩0 seed. The warm-up is a
+        # read-only balance query.
         with engine._broker().request_options(timeout=8, retries=0):
             budget = engine.shared_budget_status(requested_seed=seed, use_cache_only=False)
     return budget

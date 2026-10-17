@@ -36,12 +36,22 @@ class PaperPageBudgetTests(unittest.TestCase):
         self.assertEqual(fn(engine,5000000)['total_seed_krw'],5000000)
         self.assertEqual([c.kwargs['use_cache_only'] for c in engine.shared_budget_status.call_args_list],[True,False])
 
-    def test_warm_page_and_live_do_not_add_gateway_calls(self):
-        for mode,status in [('PAPER','ready'),('LIVE','unavailable')]:
+    def test_warm_page_does_not_add_gateway_calls(self):
+        for mode in ('PAPER', 'LIVE'):
             fn = method('src/app/page.daytrade/api.py','_page_budget_status',{'_TRADING_MODE':mode})
-            engine=SimpleNamespace(shared_budget_status=Mock(return_value={'budget_status':status}))
+            engine=SimpleNamespace(shared_budget_status=Mock(return_value={'budget_status':'ready','source':'cache_only:domestic_balance'}))
             fn(engine,5000000)
             engine.shared_budget_status.assert_called_once()
+
+    def test_cold_live_page_reads_the_balance_once(self):
+        # 10-18: with LIVE day trading OFF nothing warmed the cache and the
+        # LIVE page showed a zero seed (source cache_miss, reserve_unavailable).
+        fn = method('src/app/page.daytrade/api.py', '_page_budget_status', {'_TRADING_MODE':'LIVE'})
+        engine = SimpleNamespace(shared_budget_status=Mock(side_effect=[{'budget_status':'reserve_unavailable','source':'cache_miss'},
+                                                                        {'budget_status':'ready','total_seed_krw':1200000}]),
+                                 _broker=lambda: SimpleNamespace(request_options=lambda **kwargs: nullcontext()))
+        self.assertEqual(fn(engine,1000000)['total_seed_krw'],1200000)
+        self.assertEqual([c.kwargs['use_cache_only'] for c in engine.shared_budget_status.call_args_list],[True,False])
 
     def test_dynamic_paper_allocation_respects_input_cap_live_unchanged(self):
         for paper,expected in [(True,5000000),(False,70000000)]:
