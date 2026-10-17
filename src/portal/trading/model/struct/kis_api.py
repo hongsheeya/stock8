@@ -2951,8 +2951,19 @@ class KisApi:
 
         self._log("info", f"KRW balance={krw_balance}, withdrawable={withdrawable_krw}, usd_krw={usd_krw}, source={exchange_rate_source}")
 
+        # 10-18: inquire-balance has no cash field, so held dollars read as $0.
+        # Withdrawable USD is the conservative figure (deposit as a fallback).
+        usd_rows = [r for r in (output2 if isinstance(output2, list) else [output2]) if isinstance(r, dict)
+                    and str(r.get("crcy_cd", "") or "").upper() == "USD"]
+        usd_row = usd_rows[0] if usd_rows else {}
+        usd_cash_info = self._pick_amount_info(usd_row, [
+            "frcr_drwg_psbl_amt_1",
+            "frcr_dncl_amt_2",
+        ])
+
         return {
             "usd_krw": usd_krw,
+            "usd_cash_usd": max(0.0, self._safe_float(usd_cash_info.get("value", 0), 0)),
             "krw_balance": krw_balance,
             "withdrawable_krw": withdrawable_krw if withdrawable_krw > 0 else krw_balance,
             "total_asset_krw": total_asset_krw,
@@ -2972,6 +2983,7 @@ class KisApi:
                 "portfolio_eval_present": portfolio_eval_krw > 0,
                 "exchange_rate_present": usd_krw > 0,
                 "exchange_rate_source": exchange_rate_source,
+                "usd_cash_key": usd_cash_info.get("key"),
             },
             "raw": {
                 "output2": currency_row,
