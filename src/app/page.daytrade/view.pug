@@ -46,7 +46,7 @@ div(*ngIf="!loading", class="dx-page")
         div(*ngIf="budgetStatus?.budget_status === 'ready' && remainingSeedKrw <= 0", class="dx-alert is-warn")
             strong 신규 매수 대기
             span 무한매수 확보금과 사용 중인 단타 금액을 빼면 남은 시드가 없습니다.
-            span(*ngIf="budgetStatus?.applied_reserve_krw > 0") 원화 주문가능 ₩{{formatNumber(budgetStatus.available_before_reserve || 0)}} − 무한매수 확보금 ₩{{formatNumber(budgetStatus.applied_reserve_krw)}} (${{budgetStatus.infinite_buy_daily_reserve_usd}})
+            span(*ngIf="budgetStatus?.applied_reserve_krw > 0") 원화 주문가능 ₩{{formatNumber(budgetStatus.available_before_reserve || 0)}} − 무한매수 확보금 ₩{{formatNumber(budgetStatus.applied_reserve_krw)}} (필요 ${{budgetStatus.infinite_buy_daily_reserve_usd}}<span *ngIf="budgetStatus.infinite_buy_reserve_covered_usd > 0"> 중 보유 달러 ${{budgetStatus.infinite_buy_reserve_covered_usd}} 제외</span>)
 
     div(class="dx-kpis")
         div(class="dx-kpi")

@@ -73,6 +73,20 @@ class DailyReserveTests(unittest.TestCase):
         self.assertFalse(budget['reserve_ignored'])
         self.assertAlmostEqual(budget['applied_reserve_krw'], 838300)
 
+    def test_usd_cash_covers_the_reserve_before_krw(self):
+        engine, _, _ = self.engine()
+        raw = engine._fetch_kis_balance_raw()
+        raw['usd_cash_balance_usd'] = 500
+        engine._fetch_kis_balance_raw = lambda: raw
+        budget = engine.shared_budget_status(2000000)
+        self.assertEqual(budget['infinite_buy_reserve_covered_usd'], 500)
+        self.assertAlmostEqual(budget['applied_reserve_krw'], 338300)
+        self.assertAlmostEqual(budget['remaining_seed_krw'], 1661700)
+        raw['usd_cash_balance_usd'] = 5000
+        budget = engine.shared_budget_status(2000000)
+        self.assertEqual(budget['infinite_buy_reserve_covered_usd'], 838.30)
+        self.assertAlmostEqual(budget['remaining_seed_krw'], 2000000)
+
     def test_missing_fx_blocks_conversion(self):
         engine, _, _ = self.engine()
         raw = engine._fetch_kis_balance_raw()

@@ -2980,8 +2980,15 @@ class DomesticDaytradeEngine:
         # Infinite-buy funding has priority; legacy bypass cannot spend it.
         ignore_reserve = False
         reserved_krw = 0.0
+        reserve_usd_covered = 0.0
+        if market_key != "US":
+            # 10-18: the KS seed is KRW only, yet the whole USD reserve was
+            # taken from KRW even when the user had already exchanged dollars
+            # for it. USD cash covers the reserve first. (The US budget counts
+            # USD cash in its own tradable cash, so it keeps the full reserve.)
+            reserve_usd_covered = min(max(0.0, reserve.get("reserve_usd", 0)), max(0.0, usd_cash_balance_usd))
         if ignore_reserve is False:
-            reserved_krw = reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0
+            reserved_krw = (reserve.get("reserve_usd", 0) - reserve_usd_covered) * usd_krw if usd_krw > 0 else 0.0
         # withdrawable_krw는 TTTC8908R(주문가능금액) 기준이므로 당일매도분이 이미 포함됨.
         # same_day_sell_krw는 참고용 표시 전용 — 여기에 다시 더하면 이중계산 됨.
         intraday_usable_krw = 0.0  # 이중계산 방지: 주문가능금액에 이미 반영
@@ -3069,6 +3076,7 @@ class DomesticDaytradeEngine:
             "available_before_reserve": round(available_before_reserve, 2),
             "infinite_buy_daily_reserve_usd": round(reserve.get("reserve_usd", 0), 2),
             "infinite_buy_daily_reserve_krw": round(reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0, 2),
+            "infinite_buy_reserve_covered_usd": round(reserve_usd_covered, 2),
             "reserve_ignored": ignore_reserve,
             "applied_reserve_krw": round(reserved_krw, 2),
             "budget_status": "reserve_unavailable" if not reserve_ready else ("unavailable" if source == "cache_miss" else "ready"),
