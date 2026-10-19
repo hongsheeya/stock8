@@ -3016,8 +3016,7 @@ class DomesticDaytradeEngine:
             reserve_usd_covered = min(max(0.0, reserve.get("reserve_usd", 0)), max(0.0, usd_cash_balance_usd))
         if ignore_reserve is False:
             reserved_krw = (reserve.get("reserve_usd", 0) - reserve_usd_covered) * usd_krw if usd_krw > 0 else 0.0
-            reserve_borrow_krw = min(reserved_krw, self._ks_reserve_borrow_krw(market_key))
-            reserved_krw -= reserve_borrow_krw
+            reserve_borrow_krw = self._ks_reserve_borrow_krw(market_key)
         # withdrawable_krw는 TTTC8908R(주문가능금액) 기준이므로 당일매도분이 이미 포함됨.
         # same_day_sell_krw는 참고용 표시 전용 — 여기에 다시 더하면 이중계산 됨.
         intraday_usable_krw = 0.0  # 이중계산 방지: 주문가능금액에 이미 반영
@@ -3032,6 +3031,13 @@ class DomesticDaytradeEngine:
             tradable_cash_krw = withdrawable_krw
         available_before_reserve = max(0.0, tradable_cash_krw)
         available_for_daytrade = max(0.0, available_before_reserve - reserved_krw)
+        if reserve_borrow_krw > 0:
+            # The borrow guarantees up to that much seed out of the reserve;
+            # only the part the reserve actually blocked counts as borrowed.
+            unreserved = available_for_daytrade
+            available_for_daytrade = max(unreserved, min(reserve_borrow_krw, available_before_reserve))
+            reserve_borrow_krw = available_for_daytrade - unreserved
+            reserved_krw = max(0.0, reserved_krw - reserve_borrow_krw)
         reserve_ready = reserve.get("ready", True) and (reserve.get("reserve_usd", 0) <= 0 or usd_krw > 0)
         if not reserve_ready:
             available_for_daytrade = 0.0
