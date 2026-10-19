@@ -2037,6 +2037,117 @@ class DomesticDaytradeEngine:
             # sync still shows the order open.
             state["pending_sell_cancel_error"] = str(exc)[:160] or type(exc).__name__
 
+    # -- US close guard (MOC) ---------------------------------------------
+    # 10-17: PAPER bought four inverse ETFs on Friday afternoon and the PC
+    # slept, so the 15:40 ET flatten never ran. They were +$726 at Friday's
+    # close and -$1,000 after Monday's open. While a US day-trade position is
+    # held, a market-on-close sell for the same quantity rests at the broker;
+    # an app exit cancels it first and sells only after the cancel is seen.
+    # KIS 모의투자 accepts only limit orders, so this is LIVE-only by config.
+    _US_MOC_LAST_PLACE_HHMM = "15:30"  # ET; exchanges stop taking MOC near 15:50
+
+    def _us_moc_enabled(self):
+        value = str(self._config("daytrade_us_moc_guard_enabled", "false") or "false").strip().lower()
+        return value in ("1", "true", "yes", "on")
+
+    def _us_moc_window_open(self):
+        return self._us_market_open() and self._regime_trend_clock("US")[1] < self._US_MOC_LAST_PLACE_HHMM
+
+    def _clear_us_moc(self, state):
+        for key in ("moc_order_no", "moc_qty", "moc_placed_at", "moc_cancel_requested_at", "moc_cancel_error"):
+            state.pop(key, None)
+
+    _MOC_SYNC_KEYS = ("position_qty", "avg_price", "orders", "last_exit_price", "last_exit_watch_at",
+                      "last_exit_reason", "last_exit_action", "last_exit_order_no", "flat_after_exit_at",
+                      "regime_reversal_exit_at")
+
+    def _us_moc_reconcile(self, state, symbol):
+        """Book a filled or cancelled MOC through the pending-sell sync.
+
+        Returns "none", "open", "filled" or "cancelled"."""
+        order_no = str(state.get("moc_order_no", "") or "")
+        if not order_no:
+            return "none"
+        if state.get("pending_sell_order_no"):
+            return "open"  # an app sell is being confirmed; never mix the two
+        moc_qty = self._safe_int(state.get("moc_qty", 0), 0)
+        probe = dict(state)
+        probe.update(pending_sell_order_no=order_no, pending_sell_placed_at=state.get("moc_placed_at", ""),
+                     pending_sell_qty=moc_qty, pending_sell_type="SELL_MOC", pending_sell_position_before=moc_qty)
+        status = self._sync_us_pending_order(probe, symbol, "SELL")
+        if status in ("filled", "cancelled"):
+            for key in self._MOC_SYNC_KEYS:
+                if key in probe:
+                    state[key] = probe[key]
+            self._clear_us_moc(state)
+        return status
+
+    def _us_moc_release(self, state, symbol):
+        """Before an app sell: True once no MOC holds the shares.
+
+        Requests the cancel and checks the broker twice; otherwise the next
+        pass sells (seconds later) after the cancel is observed. A failed
+        cancel never frees the shares for a second sell."""
+        if not state.get("moc_order_no"):
+            return True
+        if self._us_moc_reconcile(state, symbol) != "open":
+            return not state.get("moc_order_no") and self._safe_int(state.get("position_qty", 0), 0) > 0
+        if not state.get("moc_cancel_requested_at") or state.get("moc_cancel_error"):
+            state["moc_cancel_requested_at"] = self._timestamp()
+            try:
+                self._broker().cancel_overseas_order(state["moc_order_no"], symbol, self._safe_int(state.get("moc_qty", 0), 0),
+                                                     exchange=self._us_exchange(symbol))
+                state["moc_cancel_error"] = ""
+            except Exception as exc:
+                state["moc_cancel_error"] = str(exc)[:160] or type(exc).__name__
+                return False
+        for _ in range(2):
+            _clock.sleep(1.0)
+            if self._us_moc_reconcile(state, symbol) != "open":
+                return not state.get("moc_order_no") and self._safe_int(state.get("position_qty", 0), 0) > 0
+        return False
+
+    def _us_moc_reconcile_all(self):
+        """Book every resting MOC, held or not, even when the app woke up after
+        the close: the balance sync may already have zeroed a position its MOC
+        sold, and a later reconcile must never touch a newer position."""
+        for key, moc_state in list((self._load_state_map() or {}).items()):
+            if not str(key).endswith(".US") or not (moc_state or {}).get("moc_order_no"):
+                continue
+            symbol = str(key)[:-3]
+            if self._us_moc_reconcile(moc_state, symbol) != "open":
+                self._store_state(moc_state)
+
+    def _us_moc_guard(self, state, symbol):
+        """Keep one MOC sell matching the held quantity; returns what it did."""
+        if not self._us_moc_enabled():
+            return "off"
+        status = self._us_moc_reconcile(state, symbol)
+        if status in ("filled", "cancelled"):
+            return "moc_" + status
+        qty = self._safe_int(state.get("position_qty", 0), 0)
+        if state.get("moc_order_no"):
+            if qty == self._safe_int(state.get("moc_qty", 0), 0) or not self._us_moc_window_open():
+                return "kept"
+            # The position changed (a scale-in): cancel; the next pass re-places.
+            self._us_moc_release(state, symbol)
+            return "resizing"
+        if (qty <= 0 or state.get("pending_sell_order_no") or state.get("pending_buy_order_no")
+                or not self._us_moc_window_open()):
+            return "idle"
+        try:
+            order = self._broker().sell_order(symbol, qty, price=0, order_type="MOC", exchange=self._us_exchange(symbol))
+        except Exception as exc:
+            self._append_runtime_log("warning", f"{symbol} 장마감 보호(MOC) 주문 실패: {exc}", symbol=symbol, market="US", dedup_sec=600)
+            return "error"
+        state["moc_order_no"] = str((order or {}).get("order_no", "") or "")
+        state["moc_qty"] = qty
+        state["moc_placed_at"] = self._timestamp()
+        self._append_order(state, "SELL_MOC", qty, self._safe_float(state.get("last_price", 0), 0), order or {},
+                           strategy_id=state.get("strategy_id", "vrev"), reason="장마감 보호 MOC 매도 (PC 절전 대비)", status="OPEN")
+        self._append_runtime_log("info", f"{symbol} 장마감 보호 MOC 매도 {qty}주 접수", symbol=symbol, market="US", dedup_sec=60)
+        return "placed"
+
     def _default_state(self, symbol, market, seed, name="", strategy_id="vrev"):
         return {
             "symbol": symbol,
@@ -4040,6 +4151,8 @@ class DomesticDaytradeEngine:
                         qty = planning_qty
                         order_value = round(current_price * qty, 2)
                     blocked = self._order_blocked_reason(started_at, action, market)
+                    if not blocked and state.get("moc_order_no") and self._safe_int(state.get("position_qty", 0), 0) <= 0:
+                        blocked = "이전 장마감 보호(MOC) 매도 체결 확인 전이라 매수하지 않습니다."
                     if blocked:
                         return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
                     order = self._broker().buy_order(symbol, qty, price=self._us_marketable_price(current_price, "BUY"), order_type="MARKET", exchange=exchange)
@@ -4143,6 +4256,11 @@ class DomesticDaytradeEngine:
                 if blocked:
                     return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
                 if self._is_us_market(market):
+                    if not self._us_moc_release(state, symbol):
+                        self._store_state(state)
+                        return {"executed": False, "submitted": False, "action": "MOC_CANCEL_PENDING", "status": status,
+                                "order_value": 0, "message": f"{symbol} 장마감 보호(MOC) 주문 취소 확인 후 매도합니다."}
+                    qty = min(qty, self._safe_int(state.get("position_qty", 0), 0))
                     exchange = self._us_exchange(symbol)
                     order = self._broker().sell_order(symbol, qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
@@ -4738,6 +4856,10 @@ class DomesticDaytradeEngine:
 
         current_price = self._current_price(symbol, market=market, fallback=self._safe_float(state.get("avg_price", 0), 0))
         if self._is_us_market(market):
+            if not self._us_moc_release(state, symbol):
+                self._store_state(state)
+                raise Exception("장마감 보호(MOC) 주문 취소를 확인한 뒤 다시 매도해 주세요.")
+            sell_qty = min(sell_qty, self._safe_int(state.get("position_qty", 0), 0))
             exchange = self._us_exchange(symbol)
             order = self._broker().sell_order(symbol, sell_qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
             fill = {"filled_price": current_price, "filled_qty": sell_qty, "status": "UNKNOWN"}
@@ -6770,6 +6892,8 @@ class DomesticDaytradeEngine:
         """미장 활성 포지션에 대해 자동청산 감시 실행 (신규 매수 없음)"""
         if self._hard_locked():
             return {"executed": False, "executed_count": 0, "watched_count": 0, "message": self._hard_lock_message(), "hard_locked": True, "results": []}
+        if self._us_moc_enabled():
+            self._us_moc_reconcile_all()
         if not self._us_market_open() and not self._us_premarket_open():
             message = "미장 종료 — 프리마켓 또는 본장 시작 후 자동청산 감시를 재개합니다."
             self._append_runtime_log("info", message, meta={"market": "US", "market_closed": True}, market="US")
@@ -6800,6 +6924,8 @@ class DomesticDaytradeEngine:
                 if not has_watch:
                     continue
                 watched_count += 1
+                if self._us_moc_guard(state, symbol) not in ("off", "idle", "kept"):
+                    self._store_state(state)
                 outcome = self.execute_live(
                     symbol,
                     market=market,
