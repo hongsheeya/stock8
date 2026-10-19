@@ -87,6 +87,22 @@ class DailyReserveTests(unittest.TestCase):
         self.assertEqual(budget['infinite_buy_reserve_covered_usd'], 838.30)
         self.assertAlmostEqual(budget['remaining_seed_krw'], 2000000)
 
+    def test_ks_may_borrow_the_reserve_only_during_the_ks_session(self):
+        import datetime
+        engine, _, _ = self.engine()
+        engine._config = lambda key, default=None: '500000' if key == 'daytrade_ks_reserve_borrow_krw' else default
+        engine._now = lambda: datetime.datetime(2026, 10, 19, 10, 0)
+        budget = engine.shared_budget_status(2000000)
+        self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 500000)
+        self.assertAlmostEqual(budget['applied_reserve_krw'], 338300)
+        self.assertAlmostEqual(budget['remaining_seed_krw'], 1661700)
+        self.assertEqual(engine.shared_budget_status(2000000, market='US')['infinite_buy_reserve_borrowed_krw'], 0)
+        for now in (datetime.datetime(2026, 10, 19, 15, 30), datetime.datetime(2026, 10, 18, 10, 0)):
+            engine._now = lambda now=now: now
+            budget = engine.shared_budget_status(2000000)
+            self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 0)
+            self.assertAlmostEqual(budget['remaining_seed_krw'], 1161700)
+
     def test_missing_fx_blocks_conversion(self):
         engine, _, _ = self.engine()
         raw = engine._fetch_kis_balance_raw()
