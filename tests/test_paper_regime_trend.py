@@ -98,6 +98,16 @@ class RegimeTrendTests(unittest.TestCase):
         engine._mark_exit_watch(other, reason="방향 추세 손절 (평단 -1.5%)", action="SELL_STOP_LOSS")
         self.assertNotIn("regime_reversal_exit_at", other)
 
+    def test_a_pending_sell_on_a_flat_slot_is_reconciled(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        state = _state("114800", 0, qty=0, strategy_id=STRATEGY, pending_sell_order_no="0006655500",
+                       pending_sell_placed_at=f"{TODAY} 09:55:30", pending_sell_qty=4)
+        engine = self._engine(trend, now=(12, 0), state=state)
+        engine._sync_pending_sell = Mock(side_effect=lambda st, *a, **k: st.update(pending_sell_order_no="") or "filled")
+        signal = self._signal(engine)
+        engine._sync_pending_sell.assert_called_once()
+        self.assertEqual(signal["action"], "BUY1")
+
     def test_a_stop_loss_blocks_the_rest_of_the_session(self):
         trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
         stopped = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_STOP_LOSS",
