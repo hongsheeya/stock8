@@ -786,42 +786,53 @@ class DomesticDaytradeEngine:
     def _ks_minute_archive_path(self, day):
         return f"{self._data_root()}/ks_minute_archive/{day}.json"
 
-    def archive_ks_minute_bars(self):
-        """Once per weekday after the KS close: save today's KIS 1-minute bars.
+    def archive_ks_minute_bars(self, max_symbols=3):
+        """After the KS close on weekdays: save today's KIS 1-minute bars.
 
-        Read-only quotation queries; returns a short status dict."""
+        Read-only quotation queries. The KIS call limiter is shared with LIVE
+        and the US session (10-19 17:37: "호출 대기 한도 초과"), so each pass
+        fetches at most `max_symbols` missing symbols, keeps what it got and
+        the next pass fills the rest. Returns "done" once all are saved."""
         now = self._now()
         day = now.strftime("%Y-%m-%d")
         if now.weekday() >= 5 or now.hour * 100 + now.minute < self._KS_ARCHIVE_AFTER_HHMM:
             return {"status": "waiting", "day": day}
         fs = self._fs()
         path = self._ks_minute_archive_path(day)
+        payload = {"date": day, "source": "kis_inquire_time_itemchartprice", "bars": {}, "errors": {}}
         if fs.exists(path):
+            payload = fs.read.json(path, default=None) or payload
+        missing = [symbol for symbol in self._KS_ARCHIVE_SYMBOLS if symbol not in payload.get("bars", {})]
+        if not missing:
             return {"status": "done", "day": day}
-        payload, errors = {"date": day, "source": "kis_inquire_time_itemchartprice", "bars": {}}, {}
         # Market data, not an order: use the quotation API directly like the
         # live minute feed does (the day-trade broker is the order-policy wrapper).
         api = self.struct.kis_api
-        for symbol in self._KS_ARCHIVE_SYMBOLS:
+        errors, added = {}, []
+        for symbol in missing[:max(1, int(max_symbols))]:
             try:
-                with api.request_options(timeout=8, retries=1):
+                with api.request_options(timeout=30, retries=1):
                     bars = api.get_domestic_minute_bars(symbol, since_hhmmss="090000")
                 rows = [bar for bar in bars or [] if str(bar.get("date", "")) == day]
                 if rows:
-                    payload["bars"][symbol] = rows
+                    payload.setdefault("bars", {})[symbol] = rows
+                    added.append(symbol)
                 else:
                     errors[symbol] = "no bars"
             except Exception as exc:
                 errors[symbol] = str(exc)[:200]
-        if not payload["bars"]:
-            # A holiday or a failed gateway: nothing to keep, retry next pass.
-            self._append_runtime_log("warning", f"국장 분봉 보관 실패: {list(errors.items())[:2]}", dedup_sec=3600)
-            return {"status": "empty", "day": day, "errors": errors}
         payload["errors"] = errors
-        fs.makedirs(f"{self._data_root()}/ks_minute_archive")
-        fs.write.json(path, payload)
-        self._append_runtime_log("info", f"국장 분봉 보관 {day}: {len(payload['bars'])}종목", dedup_sec=3600)
-        return {"status": "saved", "day": day, "symbols": sorted(payload["bars"]), "errors": errors}
+        if added:
+            fs.makedirs(f"{self._data_root()}/ks_minute_archive")
+            fs.write.json(path, payload)
+        if errors and not added:
+            # A holiday or a busy gateway: nothing new, retry next pass.
+            self._append_runtime_log("warning", f"국장 분봉 보관 대기: {list(errors.items())[:2]}", dedup_sec=1800)
+        left = [symbol for symbol in self._KS_ARCHIVE_SYMBOLS if symbol not in payload.get("bars", {})]
+        if not left:
+            self._append_runtime_log("info", f"국장 분봉 보관 완료 {day}: {len(payload['bars'])}종목", dedup_sec=3600)
+            return {"status": "saved", "day": day, "symbols": sorted(payload["bars"])}
+        return {"status": "partial" if payload.get("bars") else "empty", "day": day, "missing": left, "errors": errors}
 
     def _regime_trend_reversed_today(self, state, market="KS"):
         """10-19: KOSDAQ150 gapped +2% and then ranged around its VWAP, so the
