@@ -37,7 +37,7 @@ class DailyReserveTests(unittest.TestCase):
         reserve = engine.infinite_buy_daily_reserve()
         self.assertTrue(reserve['ready'])
         self.assertEqual(reserve['reserve_usd'], 838.30)
-        planner.assert_called_once_with(cycle, 150)
+        planner.assert_called_once_with(cycle, 150, dip_reference=0.0)
         budget = engine.shared_budget_status(2000000)
         self.assertAlmostEqual(budget['remaining_seed_krw'], 1161700)
 

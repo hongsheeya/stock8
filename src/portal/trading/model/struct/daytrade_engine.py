@@ -2817,7 +2817,14 @@ class DomesticDaytradeEngine:
                     reference = self._safe_float(quote.get("prev_close", 0), 0)
                     if reference <= 0:
                         raise ValueError("전일종가 확인 실패")
-                decision = self.struct.engine.calculate_buy_decision(cycle, reference)
+                # The plan is priced off the average here, but the dip floor
+                # is about today's drop: use the cycle's last price, or keep
+                # every leg (no floor) when it is unknown.
+                dip_reference = self._safe_float(cycle.get("current_price", 0), 0)
+                try:
+                    decision = self.struct.engine.calculate_buy_decision(cycle, reference, dip_reference=dip_reference)
+                except TypeError:
+                    decision = self.struct.engine.calculate_buy_decision(cycle, reference)
                 legs = decision.get("buy_orders") or ([decision] if decision.get("should_buy") else [])
                 next_buy_usd = 0.0
                 for leg in legs:
