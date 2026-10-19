@@ -90,12 +90,18 @@ class DailyReserveTests(unittest.TestCase):
     def test_ks_may_borrow_the_reserve_only_during_the_ks_session(self):
         import datetime
         engine, _, _ = self.engine()
-        engine._config = lambda key, default=None: '500000' if key == 'daytrade_ks_reserve_borrow_krw' else default
+        engine._config = lambda key, default=None: '1500000' if key == 'daytrade_ks_reserve_borrow_krw' else default
         engine._now = lambda: datetime.datetime(2026, 10, 19, 10, 0)
+        # 2,000,000 KRW, 838,300 reserve: the borrow tops the seed up to 1.5M.
         budget = engine.shared_budget_status(2000000)
-        self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 500000)
-        self.assertAlmostEqual(budget['applied_reserve_krw'], 338300)
-        self.assertAlmostEqual(budget['remaining_seed_krw'], 1661700)
+        self.assertAlmostEqual(budget['infinite_buy_reserve_borrowed_krw'], 338300)
+        self.assertAlmostEqual(budget['applied_reserve_krw'], 500000)
+        self.assertAlmostEqual(budget['remaining_seed_krw'], 1500000)
+        # A borrow smaller than the free cash changes nothing.
+        engine._config = lambda key, default=None: '500000' if key == 'daytrade_ks_reserve_borrow_krw' else default
+        budget = engine.shared_budget_status(2000000)
+        self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 0)
+        self.assertAlmostEqual(budget['remaining_seed_krw'], 1161700)
         self.assertEqual(engine.shared_budget_status(2000000, market='US')['infinite_buy_reserve_borrowed_krw'], 0)
         for now in (datetime.datetime(2026, 10, 19, 15, 30), datetime.datetime(2026, 10, 18, 10, 0)):
             engine._now = lambda now=now: now
