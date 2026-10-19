@@ -670,7 +670,12 @@ class DomesticDaytradeEngine:
 
     def _regime_trend_enabled(self, market="KS"):
         if not _PAPER_MODE:
-            return False
+            # 10-19: the user asked to run the KS trend rule on LIVE with a
+            # small seed. Opt-in per config; US stays PAPER-only.
+            if self._is_us_market(market):
+                return False
+            value = str(self._config("daytrade_live_regime_trend_enabled", "false") or "false").strip().lower()
+            return value in ("1", "true", "yes", "on")
         key = "daytrade_paper_us_regime_trend_enabled" if self._is_us_market(market) else "daytrade_paper_regime_trend_enabled"
         value = str(self._config(key, "true") or "true").strip().lower()
         return value in ("1", "true", "yes", "on")
@@ -791,8 +796,8 @@ class DomesticDaytradeEngine:
         """
         symbol = str(symbol).strip().upper()
         market = "US" if self._is_us_market(market) else "KS"
-        if not _PAPER_MODE or symbol not in self._regime_trend_pairs(market):
-            raise ValueError("시장 방향 추세 전략은 모의투자 방향성 ETF 전용입니다.")
+        if not self._regime_trend_enabled(market) or symbol not in self._regime_trend_pairs(market):
+            raise ValueError("시장 방향 추세 전략이 꺼져 있거나 방향성 ETF가 아닙니다.")
         if sync_broker:
             self._sync_broker_positions()
         state = self._state_for(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
@@ -2559,6 +2564,25 @@ class DomesticDaytradeEngine:
             "timestamp": now.replace(second=0, microsecond=0),
         }
 
+    _RESERVE_BORROW_END_HHMM = 1530
+
+    def _ks_reserve_borrow_krw(self, market="KS"):
+        """KRW the KS day trade may borrow from the infinite-buy reserve.
+
+        10-19: the US LOC buys only need the money at the US session, so KS
+        day trading may use up to daytrade_ks_reserve_borrow_krw of it during
+        the KS session (weekdays before 15:30 KST). The KS close flatten
+        returns it; afterwards the full reserve applies again."""
+        if self._is_us_market(market):
+            return 0.0
+        amount = max(0.0, self._safe_float(self._config("daytrade_ks_reserve_borrow_krw", "0"), 0))
+        if amount <= 0:
+            return 0.0
+        now = self._now()
+        if now.weekday() >= 5 or now.hour * 100 + now.minute >= self._RESERVE_BORROW_END_HHMM:
+            return 0.0
+        return amount
+
     def infinite_buy_daily_reserve(self, use_cache_only=False):
         import math
         reserve_items = []
@@ -2982,6 +3006,7 @@ class DomesticDaytradeEngine:
         # Infinite-buy funding has priority; legacy bypass cannot spend it.
         ignore_reserve = False
         reserved_krw = 0.0
+        reserve_borrow_krw = 0.0
         reserve_usd_covered = 0.0
         if market_key != "US":
             # 10-18: the KS seed is KRW only, yet the whole USD reserve was
@@ -2991,6 +3016,8 @@ class DomesticDaytradeEngine:
             reserve_usd_covered = min(max(0.0, reserve.get("reserve_usd", 0)), max(0.0, usd_cash_balance_usd))
         if ignore_reserve is False:
             reserved_krw = (reserve.get("reserve_usd", 0) - reserve_usd_covered) * usd_krw if usd_krw > 0 else 0.0
+            reserve_borrow_krw = min(reserved_krw, self._ks_reserve_borrow_krw(market_key))
+            reserved_krw -= reserve_borrow_krw
         # withdrawable_krw는 TTTC8908R(주문가능금액) 기준이므로 당일매도분이 이미 포함됨.
         # same_day_sell_krw는 참고용 표시 전용 — 여기에 다시 더하면 이중계산 됨.
         intraday_usable_krw = 0.0  # 이중계산 방지: 주문가능금액에 이미 반영
@@ -3079,6 +3106,7 @@ class DomesticDaytradeEngine:
             "infinite_buy_daily_reserve_usd": round(reserve.get("reserve_usd", 0), 2),
             "infinite_buy_daily_reserve_krw": round(reserve.get("reserve_usd", 0) * usd_krw if usd_krw > 0 else 0.0, 2),
             "infinite_buy_reserve_covered_usd": round(reserve_usd_covered, 2),
+            "infinite_buy_reserve_borrowed_krw": round(reserve_borrow_krw, 2),
             "reserve_ignored": ignore_reserve,
             "applied_reserve_krw": round(reserved_krw, 2),
             "budget_status": "reserve_unavailable" if not reserve_ready else ("unavailable" if source == "cache_miss" else "ready"),
@@ -3560,7 +3588,8 @@ class DomesticDaytradeEngine:
         if str(symbol).strip().upper() == 'SOXL' or (str(market or '').upper() == 'US' and self._is_infinite_buy_symbol(symbol, market)):
             return {'executed': False, 'submitted': False, 'action': 'INFINITE_BUY_ONLY',
                     'order_value': 0, 'message': f'{str(symbol).strip().upper()}은 무한매수 진행 종목이라 단타 주문이 잠겨 있습니다.'}
-        if str(strategy_id) in ('paper_regime_trend', 'paper_momentum_ride') and not _PAPER_MODE:
+        if str(strategy_id) == 'paper_momentum_ride' and not _PAPER_MODE or (
+                str(strategy_id) == 'paper_regime_trend' and not self._regime_trend_enabled(market)):
             return {'executed': False, 'submitted': False, 'action': 'PAPER_ONLY',
                     'message': '이 전략은 국내 모의투자에서만 검증할 수 있습니다.', 'order_value': 0}
         if str(strategy_id).startswith('paper_selective_'):
