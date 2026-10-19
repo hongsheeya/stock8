@@ -703,6 +703,7 @@ class DomesticDaytradeEngine:
             # A stop-loss shuts the ETF for the rest of its session (12 h covers
             # either market's day without reaching the next one).
             "stop_block_hours": max(0, self._safe_int(self._config(prefix + "stop_block_hours", "12"), 12)),
+            "reversal_block": str(self._config(prefix + "reversal_block", "false") or "false").strip().lower() in ("1", "true", "yes", "on"),
         }
 
     def _regime_trend_clock(self, market="KS"):
@@ -764,7 +765,7 @@ class DomesticDaytradeEngine:
             return {"action": "SELL_STOP_LOSS", "reason": f"방향 추세 손절 (평단 -{stop_pct:g}%)", "risk_exit": True}
         view = view if view is not None else self._regime_trend_view(symbol, market=market)
         if view.get("ok") and view.get("reversed"):
-            return {"action": "SELL_FULL", "reason": f"지수 VWAP 회복 — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
+            return {"action": "SELL_FULL", "reason": f"{self._REGIME_REVERSAL_REASON} — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
         return None
 
     def _regime_trend_cooling(self, state, minutes):
@@ -775,6 +776,15 @@ class DomesticDaytradeEngine:
         except ValueError:
             return False
         return (self._now() - last).total_seconds() < minutes * 60
+
+    def _regime_trend_reversed_today(self, state, market="KS"):
+        """10-19: KOSDAQ150 gapped +2% and then ranged around its VWAP, so the
+        rule bought every pop above VWAP and sold every dip (PAPER 1 win / 5
+        losses, -₩1.0M by 11:00). Over 60 days of 5m bars, no re-entry after
+        an index VWAP exit lifted the replay from +16.2% to +32.3% (0.10% RT
+        cost; both halves up: +21.7% / +10.6%; worst day -13.6% -> -7.5%)."""
+        when = str(state.get("regime_reversal_exit_at", "") or "")[:10]
+        return bool(when) and when == self._now().strftime("%Y-%m-%d")
 
     def _regime_trend_stopped(self, state, hours):
         """10-16: 122630 stopped at 10:28, re-entered at 11:33 and stopped again
@@ -838,6 +848,8 @@ class DomesticDaytradeEngine:
             signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
         elif self._regime_trend_stopped(state, params["stop_block_hours"]):
             signal["reason"] = "오늘 손절한 종목 · 같은 장중 재진입 차단"
+        elif params["reversal_block"] and self._regime_trend_reversed_today(state, market):
+            signal["reason"] = "오늘 지수 VWAP 이탈로 청산한 종목 · 횡보장 재진입 차단"
         elif self._regime_trend_cooling(state, params["cooldown_min"]):
             signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
         elif not view.get("trend"):
@@ -1462,8 +1474,13 @@ class DomesticDaytradeEngine:
             "current_time": now.strftime("%H:%M KST"),
         }
 
+    _REGIME_REVERSAL_REASON = "지수 VWAP 회복"
+
     def _mark_exit_watch(self, state, reason="", action="", order_no=""):
         state["last_exit_watch_at"] = self._timestamp()
+        if str(reason or "").startswith(self._REGIME_REVERSAL_REASON):
+            # Kept apart from last_exit_reason, which later fill syncs overwrite.
+            state["regime_reversal_exit_at"] = state["last_exit_watch_at"]
         if str(action or "").startswith("SELL") and self._safe_int(state.get("position_qty", 0), 0) <= 0:
             state["flat_after_exit_at"] = _clock.time()
         if reason != "":
