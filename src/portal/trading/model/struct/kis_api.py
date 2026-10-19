@@ -1043,7 +1043,9 @@ class KisApi:
         path = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = _TIME.now()
         today = now.strftime("%Y%m%d")
-        cursor = now.strftime("%H%M%S")
+        # After the close, ask from the 15:30 closing bar backwards; later
+        # cursors are after-hours times this regular-session chart lacks.
+        cursor = min(now.strftime("%H%M%S"), "153000")
         bars = {}
         for _ in range(max(1, int(max_pages))):
             params = {

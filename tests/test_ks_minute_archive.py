@@ -28,7 +28,8 @@ class KsMinuteArchiveTests(unittest.TestCase):
         broker = MagicMock()
         broker.request_options.side_effect = lambda **_k: contextlib.nullcontext()
         broker.get_domestic_minute_bars.side_effect = bars
-        engine._broker = lambda: broker
+        engine.struct.kis_api = broker
+        engine._append_runtime_log = lambda *a, **k: None
         return engine, fs, broker
 
     def test_saves_once_after_the_close(self):
