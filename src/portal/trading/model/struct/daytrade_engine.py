@@ -777,6 +777,47 @@ class DomesticDaytradeEngine:
             return False
         return (self._now() - last).total_seconds() < minutes * 60
 
+    # 10-19: Yahoo's KS minute data stops at 15:00, so the 15:00~15:30 move
+    # (late drops, the closing auction) could not be replayed. Keep KIS's own
+    # 1-minute bars of the trend rule's indexes and ETFs for later studies.
+    _KS_ARCHIVE_SYMBOLS = ("069500", "229200", "122630", "233740", "252670", "114800", "251340")
+    _KS_ARCHIVE_AFTER_HHMM = 1540
+
+    def _ks_minute_archive_path(self, day):
+        return f"{self._data_root()}/ks_minute_archive/{day}.json"
+
+    def archive_ks_minute_bars(self):
+        """Once per weekday after the KS close: save today's KIS 1-minute bars.
+
+        Read-only quotation queries; returns a short status dict."""
+        now = self._now()
+        day = now.strftime("%Y-%m-%d")
+        if now.weekday() >= 5 or now.hour * 100 + now.minute < self._KS_ARCHIVE_AFTER_HHMM:
+            return {"status": "waiting", "day": day}
+        fs = self._fs()
+        path = self._ks_minute_archive_path(day)
+        if fs.exists(path):
+            return {"status": "done", "day": day}
+        payload, errors = {"date": day, "source": "kis_inquire_time_itemchartprice", "bars": {}}, {}
+        for symbol in self._KS_ARCHIVE_SYMBOLS:
+            try:
+                with self._broker().request_options(timeout=8, retries=1):
+                    bars = self._broker().get_domestic_minute_bars(symbol, since_hhmmss="090000")
+                rows = [bar for bar in bars or [] if str(bar.get("date", "")) == day]
+                if rows:
+                    payload["bars"][symbol] = rows
+                else:
+                    errors[symbol] = "no bars"
+            except Exception as exc:
+                errors[symbol] = str(exc)[:200]
+        if not payload["bars"]:
+            # A holiday or a failed gateway: nothing to keep, retry next pass.
+            return {"status": "empty", "day": day, "errors": errors}
+        payload["errors"] = errors
+        fs.makedirs(f"{self._data_root()}/ks_minute_archive")
+        fs.write.json(path, payload)
+        return {"status": "saved", "day": day, "symbols": sorted(payload["bars"]), "errors": errors}
+
     def _regime_trend_reversed_today(self, state, market="KS"):
         """10-19: KOSDAQ150 gapped +2% and then ranged around its VWAP, so the
         rule bought every pop above VWAP and sold every dip (PAPER 1 win / 5
