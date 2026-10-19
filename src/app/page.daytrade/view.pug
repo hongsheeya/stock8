@@ -404,7 +404,7 @@ div(*ngIf="!loading", class="dx-page")
             span 종목 잠금 관리
                 small 직접 매매하는 종목은 잠가 두세요
         div(class="dx-details-body")
-            wiz-component-trading-controls([positions]="activePositions", [locksOnly]="true", [showLocks]="true", market="KS")
+            wiz-component-trading-controls([positions]="activePositions", [extraSymbols]="regimeEtfs", [locksOnly]="true", [showLocks]="true", market="KS")
 
     details(class="dx-card dx-details")
         summary

@@ -9,6 +9,9 @@ export class Component implements OnInit, OnDestroy {
     @Input() public locksOnly = false;
     // Dashboard: switches with a status dot, no explanatory text.
     @Input() public compact = false;
+    // Symbols a strategy trades without holding them (e.g. direction ETFs),
+    // so they can be unlocked before the first entry.
+    @Input() public extraSymbols: string[] = [];
     public state: any = null;
     public get showDaytrade(): boolean {
         return this.state?.daytrade_allowed === true && window.localStorage.getItem('admin_preview_user_mode') !== 'true';
@@ -118,7 +121,8 @@ export class Component implements OnInit, OnDestroy {
                     const domestic = ['KS', 'KQ', 'KRX', 'NXT'].includes(String(p.market || '').toUpperCase()) || /^[0-9][A-Z0-9]{5}$/.test(code);
                     return code !== 'SOXL' && (!this.market || (this.market === 'KS' ? domestic : !domestic));
                 })
-                .map(p => String(p.symbol || p.code || '').trim().toUpperCase())
+                .map(p => String(p.symbol || p.code || '').trim().toUpperCase()),
+            ...(this.extraSymbols || []).map(s => String(s).trim().toUpperCase())
         ].filter(Boolean)));
     }
     public locked(symbol: string): boolean {

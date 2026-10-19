@@ -48,6 +48,9 @@ export class Component implements OnInit, OnDestroy {
     public featureSnapshot: any = {};
     public backtestSummary: any = null;
     public activePositions: any[] = [];
+    // KS direction-trend ETFs (KODEX 레버리지/인버스 계열): listed in the lock
+    // manager so LIVE can unlock them before the first entry.
+    public regimeEtfs: string[] = ['122630', '233740', '252670', '114800', '251340'];
     public liveOrders: any[] = [];
     public autoCycleResult: any = null;
     public executionResult: any = null;
