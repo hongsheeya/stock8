@@ -1041,7 +1041,24 @@ class Engine:
             return 5
         return 1
 
-    def _firegate_v4_extra_buy_orders(self, one_turn, base_qty, first_price, avg_price_limit=0):
+    def _firegate_dip_floor_price(self, reference):
+        """Lowest price a 1-share dip leg may have; 0 keeps every leg.
+
+        10-20: LIVE cash covered 8 of the 13 main SOXL shares and none of the
+        seven dip legs, while the reserve still counted them all. At the
+        user's request legs needing a close below reference*(1 - pct) (SOXL,
+        3 years: -15% or worse on 2.7% of days) are not placed or reserved.
+        Config infinite_buy_dip_floor_pct; 0 (default) keeps the FireGate plan."""
+        try:
+            pct = float(self._get_config_value("infinite_buy_dip_floor_pct", "0") or 0)
+        except Exception:
+            pct = 0.0
+        reference = float(reference or 0)
+        if pct <= 0 or pct >= 100 or reference <= 0:
+            return 0.0
+        return reference * (1 - pct / 100)
+
+    def _firegate_v4_extra_buy_orders(self, one_turn, base_qty, first_price, avg_price_limit=0, floor_price=0):
         one_turn = float(one_turn or 0)
         base_qty = int(float(base_qty or 0))
         first_price = float(first_price or 0)
@@ -1054,6 +1071,8 @@ class Engine:
             denom = base_qty + index * unit
             price = self._round_nearest_cent(one_turn / denom)
             if price < first_price and (avg_price_limit <= 0 or price < avg_price_limit):
+                if floor_price > 0 and price < floor_price:
+                    break  # legs only get lower from here
                 orders.append({"label": "LOC", "loc_price": price, "order_qty": unit, "order_type": "LOC"})
         return orders
 
@@ -1128,7 +1147,8 @@ class Engine:
             return round(target_profit, 2)
         return self._firegate_v4_star_percent("SOXL", division_count, t_value)
 
-    def _firegate_v4_buy_decision(self, cycle, prev_close, buy_amount):
+    def _firegate_v4_buy_decision(self, cycle, prev_close, buy_amount, dip_reference=None):
+        floor_price = self._firegate_dip_floor_price(prev_close if dip_reference is None else dip_reference)
         current_round = int(cycle["current_round"])
         division_count = int(cycle["division_count"])
         total_investment = float(cycle["total_investment"])
@@ -1175,7 +1195,7 @@ class Engine:
                 "order_qty": order_qty,
                 "order_type": first_order_type,
             })
-            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, order_qty, order_price))
+            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, order_qty, order_price, floor_price=floor_price))
             return {
                 "should_buy": order_qty > 0,
                 "algorithm": "firegate_v4",
@@ -1213,7 +1233,7 @@ class Engine:
                     "loc_price": star_loc_price,
                     "order_qty": star_qty,
                 })
-            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, base_qty, star_loc_price, avg_price))
+            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, base_qty, star_loc_price, avg_price, floor_price=floor_price))
         else:
             star_qty = int(one_turn / star_loc_price) if star_loc_price > 0 else 0
             if star_qty > 0:
@@ -1222,7 +1242,7 @@ class Engine:
                     "loc_price": star_loc_price,
                     "order_qty": star_qty,
                 })
-            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, star_qty, star_loc_price, avg_price))
+            buy_orders.extend(self._firegate_v4_extra_buy_orders(one_turn, star_qty, star_loc_price, avg_price, floor_price=floor_price))
 
         primary = buy_orders[0] if buy_orders else {}
         return {
@@ -1239,7 +1259,7 @@ class Engine:
             "reason": f"FireGate v4 LOC 매수 계획 (★{star_percent:g}%)",
         }
 
-    def calculate_buy_decision(self, cycle, prev_close):
+    def calculate_buy_decision(self, cycle, prev_close, dip_reference=None):
         """
         매수 판단
         - cycle: trading_cycle 레코드
@@ -1290,7 +1310,7 @@ class Engine:
                 "reason": "전일종가 없음",
             }
 
-        return self._firegate_v4_buy_decision(cycle, prev_close, buy_amount)
+        return self._firegate_v4_buy_decision(cycle, prev_close, buy_amount, dip_reference=dip_reference)
 
     # =========================================================================
     # 매도 판단 로직
