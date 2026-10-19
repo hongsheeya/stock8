@@ -783,8 +783,17 @@ class DomesticDaytradeEngine:
         losses, -₩1.0M by 11:00). Over 60 days of 5m bars, no re-entry after
         an index VWAP exit lifted the replay from +16.2% to +32.3% (0.10% RT
         cost; both halves up: +21.7% / +10.6%; worst day -13.6% -> -7.5%)."""
-        when = str(state.get("regime_reversal_exit_at", "") or "")[:10]
-        return bool(when) and when == self._now().strftime("%Y-%m-%d")
+        today = self._now().strftime("%Y-%m-%d")
+        if str(state.get("regime_reversal_exit_at", "") or "")[:10] == today:
+            return True
+        # A sell confirmed later by the pending-order sync records its own
+        # reason, so also read the reason the sell order was placed with.
+        return any(
+            str((order or {}).get("timestamp", "") or "")[:10] == today
+            and str((order or {}).get("action", "") or "").upper().startswith("SELL")
+            and str((order or {}).get("reason", "") or "").startswith(self._REGIME_REVERSAL_REASON)
+            for order in list(state.get("orders", []) or [])
+        )
 
     def _regime_trend_stopped(self, state, hours):
         """10-16: 122630 stopped at 10:28, re-entered at 11:33 and stopped again
