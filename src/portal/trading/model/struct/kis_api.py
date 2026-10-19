@@ -2069,6 +2069,9 @@ class KisApi:
             # 시장가라도 price를 그대로 사용 (호출자가 전달한 가격)
         elif order_type == "LOC":
             ord_dvsn = "34"  # LOC (Limit On Close)
+        elif order_type == "MOC":
+            ord_dvsn = "33"  # MOC (Market On Close), US sells only
+            price = 0
         elif order_type == "LIMIT":
             ord_dvsn = "00"
         else:

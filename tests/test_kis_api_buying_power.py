@@ -552,3 +552,13 @@ class KisBuyingPowerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KisMocSellTests(unittest.TestCase):
+    def test_moc_sell_uses_order_division_33_without_a_price(self):
+        api = kis_api.KisApi(_StructStub())
+        calls = []
+        api._request = lambda method, path, tr_id, body=None, **_k: calls.append(body) or {"rt_cd": "0", "output": {"ODNO": "M1"}}
+        api.get_balance = lambda **_k: {"holdings": [{"symbol": "TEST", "qty": 10}]}
+        api.sell_order("TEST", 10, price=31.5, order_type="MOC", exchange="NASD")
+        self.assertEqual((calls[0]["ORD_DVSN"], calls[0]["OVRS_ORD_UNPR"]), ("33", "0"))
