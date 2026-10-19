@@ -2361,13 +2361,13 @@ class Struct:
                     state["reconcile_thread"] = threading.Thread(target=self._account_worker_target(reconcile_history), daemon=True, name="stock8-fill-reconcile")
                     state["reconcile_thread"].start()
                 # PAPER keeps the daily KS minute-bar archive (market data
-                # only; LIVE would just duplicate it). Retries every 10 minutes
+                # only; LIVE would just duplicate it). Passes every 5 minutes
                 # until it is saved.
                 archive_thread = state.get("ks_archive_thread")
                 if (PAPER_MODE and (archive_thread is None or not archive_thread.is_alive())
                         and now_kst.weekday() < 5 and now_kst.hour * 100 + now_kst.minute >= 1540
                         and state.get("ks_archive_day") != now_kst.strftime("%Y-%m-%d")
-                        and now_ts - float(state.get("ks_archive_try_ts", 0) or 0) >= 600):
+                        and now_ts - float(state.get("ks_archive_try_ts", 0) or 0) >= 300):
                     state["ks_archive_try_ts"] = now_ts
                     def archive_minutes():
                         try:
