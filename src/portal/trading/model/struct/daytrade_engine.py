@@ -814,6 +814,13 @@ class DomesticDaytradeEngine:
         if state.get("pending_buy_order_no"):
             self._sync_pending_buy(state, symbol, market)
             self._store_state(state)
+        if state.get("pending_sell_order_no"):
+            # 10-19 LIVE: a 122630 market sell was not confirmed at submit time
+            # and the broker sync then zeroed the position. The exit watch only
+            # reconciles held slots, so the pending sell blocked the ETF for
+            # the rest of the day. Reconcile it here as well.
+            self._sync_pending_sell(state, symbol, market)
+            self._store_state(state)
         session, bar = self._latest_snapshot(symbol, market=market)
         bar = bar or {}
         price = self._safe_float(bar.get("close", 0), 0)
