@@ -799,10 +799,13 @@ class DomesticDaytradeEngine:
         if fs.exists(path):
             return {"status": "done", "day": day}
         payload, errors = {"date": day, "source": "kis_inquire_time_itemchartprice", "bars": {}}, {}
+        # Market data, not an order: use the quotation API directly like the
+        # live minute feed does (the day-trade broker is the order-policy wrapper).
+        api = self.struct.kis_api
         for symbol in self._KS_ARCHIVE_SYMBOLS:
             try:
-                with self._broker().request_options(timeout=8, retries=1):
-                    bars = self._broker().get_domestic_minute_bars(symbol, since_hhmmss="090000")
+                with api.request_options(timeout=8, retries=1):
+                    bars = api.get_domestic_minute_bars(symbol, since_hhmmss="090000")
                 rows = [bar for bar in bars or [] if str(bar.get("date", "")) == day]
                 if rows:
                     payload["bars"][symbol] = rows
@@ -812,10 +815,12 @@ class DomesticDaytradeEngine:
                 errors[symbol] = str(exc)[:200]
         if not payload["bars"]:
             # A holiday or a failed gateway: nothing to keep, retry next pass.
+            self._append_runtime_log("warning", f"국장 분봉 보관 실패: {list(errors.items())[:2]}", dedup_sec=3600)
             return {"status": "empty", "day": day, "errors": errors}
         payload["errors"] = errors
         fs.makedirs(f"{self._data_root()}/ks_minute_archive")
         fs.write.json(path, payload)
+        self._append_runtime_log("info", f"국장 분봉 보관 {day}: {len(payload['bars'])}종목", dedup_sec=3600)
         return {"status": "saved", "day": day, "symbols": sorted(payload["bars"]), "errors": errors}
 
     def _regime_trend_reversed_today(self, state, market="KS"):
