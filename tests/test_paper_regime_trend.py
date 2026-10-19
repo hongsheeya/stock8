@@ -72,6 +72,32 @@ class RegimeTrendTests(unittest.TestCase):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}, state=state)
         self.assertIn("재진입", self._signal(engine)["reason"])
 
+    def test_a_vwap_reversal_exit_blocks_the_day_when_configured(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        reversed_ = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_FULL",
+                           last_exit_watch_at=f"{TODAY} 09:35:00", regime_reversal_exit_at=f"{TODAY} 09:35:00")
+        engine = self._engine(trend, now=(12, 0), state=reversed_)
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+        engine._config = lambda key, default=None: "true" if key == "daytrade_regime_trend_reversal_block" else default
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("VWAP 이탈", signal["reason"])
+        yesterday = dict(reversed_, regime_reversal_exit_at="2026-05-25 14:00:00")
+        engine = self._engine(trend, now=(12, 0), state=yesterday)
+        engine._config = lambda key, default=None: "true" if key == "daytrade_regime_trend_reversal_block" else default
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+
+    def test_reversal_exit_is_recorded_apart_from_the_exit_reason(self):
+        engine = self._engine({})
+        state = {}
+        engine._mark_exit_watch(state, reason="지수 VWAP 회복 — 방향 추세 종료 청산 (x)", action="SELL_FULL")
+        self.assertEqual(state["regime_reversal_exit_at"][:10], TODAY)
+        engine._mark_exit_watch(state, reason="매도 체결 확인")
+        self.assertEqual(state["regime_reversal_exit_at"][:10], TODAY)
+        other = {}
+        engine._mark_exit_watch(other, reason="방향 추세 손절 (평단 -1.5%)", action="SELL_STOP_LOSS")
+        self.assertNotIn("regime_reversal_exit_at", other)
+
     def test_a_stop_loss_blocks_the_rest_of_the_session(self):
         trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
         stopped = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_STOP_LOSS",
