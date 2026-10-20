@@ -5,7 +5,7 @@ import { Service } from '@wiz/libs/portal/season/service';
 
 declare const wiz: any;
 
-// Module-level: WIZ renames `export class Component`, so no static members.
+// Module-level data: WIZ rewrites the component class line, so no static members.
 const QUESTS: any[] = [
     {
         id: 'account', icon: '🧭', title: '모험 시작', goal: '계정 만들기',
