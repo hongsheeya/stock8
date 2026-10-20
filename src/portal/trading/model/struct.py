@@ -97,6 +97,8 @@ USER_SCOPED_CONFIG_KEYS = {
     "crash_buy_ratio",
     "crash_buy_max_per_cycle",
     "onboarding_progress",
+    "infinite_buy_star_sell_ratio",
+    "infinite_buy_target_sell_pct",
 }
 USER_SCOPED_TABLES = {
     "etf_watchlist",

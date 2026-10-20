@@ -1328,7 +1328,26 @@ class Engine:
         gross_required = target_net / max(1 - sell_rate, 0.000001)
         return round(gross_required / total_qty, 2)
 
+    # 10-20: SOXL daily replay 2018-2026 (seed $15k, 20 splits, 0.25%/side):
+    # FireGate's split (1/4 at ★ LOC, 3/4 at +20%) made +254% with a 34% max
+    # drawdown and +27% in the 2021-23 bear; 3/4 at ★ LOC and the rest at +25%
+    # made +164% with a 14% drawdown (+27% in the bear, +38% last year). Early
+    # ★ sells return cash to the split buys in a falling market. Per-user
+    # opt-in; blank keeps FireGate's table.
+    def _firegate_v4_star_sell_ratio(self):
+        try:
+            value = float(self._get_config_value("infinite_buy_star_sell_ratio", "") or 0)
+        except Exception:
+            value = 0.0
+        return value if 0 < value <= 1 else 0.25
+
     def _firegate_v4_target_sell_percent(self, symbol):
+        try:
+            override = float(self._get_config_value("infinite_buy_target_sell_pct", "") or 0)
+        except Exception:
+            override = 0.0
+        if 0 < override <= 100:
+            return override
         return 15.0 if str(symbol or "").upper() == "TQQQ" else 20.0
 
     def _loc_sell_target_price(self, cycle):
@@ -1375,7 +1394,7 @@ class Engine:
         target_price = self._round_nearest_cent(avg_price * (1 + target_percent / 100))
         force_loc_sell = str(self._get_config_value("sell_method", "firegate") or "firegate").lower() == "loc"
 
-        loc_qty = int(math.floor(total_qty / 4))
+        loc_qty = int(math.floor(total_qty * self._firegate_v4_star_sell_ratio()))
         limit_qty = max(0, total_qty - loc_qty)
         orders = []
         if force_loc_sell:

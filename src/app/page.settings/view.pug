@@ -539,10 +539,28 @@ div(*ngIf="tab === 'strategy'")
                                         | LOC 매도 고정
                                 p(class="text-[11px] text-slate-500 ml-5") FireGate의 매도 가격과 수량은 유지하고 주문방식만 모두 LOC로 예약합니다.
 
+            //- FireGate sell split (drives the real reservations)
+            div(class="st-split")
+                strong 분할 매도
+                p FireGate 매도표의 가격은 그대로 두고, ★ LOC로 파는 비중과 나머지 목표가만 바꿉니다. 하락장에서 일찍 판 현금은 다음 분할 매수에 다시 쓰입니다.
+                div(class="st-split-row")
+                    label(for="st-star-ratio") ★ LOC 매도 비중
+                    select(id="st-star-ratio", [(ngModel)]="starSellRatio")
+                        option(value="") FireGate 기본 (1/4)
+                        option(value="0.5") 1/2
+                        option(value="0.75") 3/4 (추천 · 낙폭 감소)
+                        option(value="1") 전량
+                div(class="st-split-row")
+                    label(for="st-target-pct") 나머지 목표가
+                    div(class="st-split-input")
+                        input(id="st-target-pct", [(ngModel)]="targetSellPct", type="number", min="1", max="100", step="1", placeholder="FireGate 기본 (+20%)")
+                        span %
+                small SOXL 2018~2026 일봉 시뮬: 기본 +254% · 최대낙폭 34% / 3/4 · +25% +164% · 최대낙폭 14%
+
             //- Sell Strategy Selection
             div
                 label(class="block text-xs font-medium text-slate-400 mb-1") {{t('set.sell_strategy')}}
-                p(class="st-hint") 실계좌 예약 주문은 FireGate 표의 분할(★ LOC 1/4 · 목표가 3/4)로 나갑니다. 아래 선택은 예약 주문이 아닌 즉시 판단 경로에만 쓰입니다.
+                p(class="st-hint") 실계좌 예약 주문은 위의 분할 매도 설정을 따릅니다. 아래 선택은 예약 주문이 아닌 즉시 판단 경로에만 쓰입니다.
                 div(class="grid grid-cols-1 md:grid-cols-3 gap-3")
                     //- FireGate Default
                     button((click)="setStrategy('firegate')",
