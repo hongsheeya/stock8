@@ -696,3 +696,23 @@
 }
 
 :host-context(.trading-bg:not(.theme-light)) .st-btn.is-primary { color: #181a20; }
+
+.st-mode {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid #f59e0b;
+    background: color-mix(in srgb, #f59e0b 8%, var(--bn-card));
+}
+
+.st-mode.is-default {
+    border-color: rgba(22, 163, 74, 0.4);
+    background: color-mix(in srgb, #16a34a 6%, var(--bn-card));
+}
+
+.st-mode strong { font-size: 14px; color: var(--bn-body); }
+.st-mode p { margin-top: 4px; font-size: 12px; color: var(--bn-muted); }
+.st-hint { margin: 0 0 10px; font-size: 12px; color: var(--bn-muted); }

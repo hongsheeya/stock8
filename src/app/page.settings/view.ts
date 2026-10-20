@@ -242,6 +242,8 @@ export class Component implements OnInit {
                 this.sellStrategy = data.sell_strategy || 'firegate';
                 this.buyMethod = this.normalizeOrderMethod(data.buy_method, true);
                 this.sellMethod = this.normalizeOrderMethod(data.sell_method, false);
+                // Show the advanced section whenever it is what is in effect.
+                this.advancedOrderSettingsOpen = !this.isFiregateDefault();
                 this.partialSellStages = this.normalizePartialSellStages(data.partial_sell_stages);
                 this.crashBuyEnabled = data.crash_buy_enabled === true;
                 this.crashBuyDropPct = data.crash_buy_drop_pct ?? 5;
@@ -312,6 +314,10 @@ export class Component implements OnInit {
         if (disabled) cls += ' is-disabled';
         if (active) cls += ' is-active';
         return cls;
+    }
+
+    public isFiregateDefault(): boolean {
+        return this.buyMethod === 'firegate' && this.sellMethod === 'firegate';
     }
 
     public async selectBrokerById(id: string) {
