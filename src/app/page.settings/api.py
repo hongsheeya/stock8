@@ -585,6 +585,20 @@ def save_api_settings():
 
     _api_settings_response(payload, result, is_real, saved=True)
 
+def _mark_onboarding_connection(trading, result):
+    """The start guide's "연결 테스트" quest, per user; never fails the test."""
+    if not (result or {}).get("success"):
+        return
+    try:
+        import json as _json
+        data = _json.loads(trading.get_config("onboarding_progress", "{}") or "{}")
+        data = data if isinstance(data, dict) else {}
+        if not data.get("connection_ok"):
+            data["connection_ok"] = True
+            trading.set_config("onboarding_progress", _json.dumps(data, ensure_ascii=False), description="Onboarding guide progress")
+    except Exception:
+        pass
+
 def test_connection():
     """API 연결 테스트"""
     _session_user()
@@ -597,6 +611,7 @@ def test_connection():
             result = broker.validate_paper_readiness() if _PAPER_MODE else broker.test_connection()
         except Exception as e:
             result = {"success": False, "message": f"증권사 API 연결 테스트 중 오류가 발생했습니다: {e}"}
+        _mark_onboarding_connection(trading, result)
         _api_settings_response(payload, result, is_real, saved=True)
 
     trading = _trading()
@@ -607,6 +622,7 @@ def test_connection():
         wiz.response.status(200, success=False, message=f"증권사 API 연결 테스트 중 오류가 발생했습니다: {e}")
     if result.get("success", False) is False:
         wiz.response.status(200, success=False, message=result.get("message", "증권사 API 연결에 실패했습니다."))
+    _mark_onboarding_connection(trading, result)
     wiz.response.status(200, **result)
 
 def add_watchlist():
