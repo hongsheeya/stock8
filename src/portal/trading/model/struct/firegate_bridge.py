@@ -590,9 +590,12 @@ def _cycle_from_portfolio(trading, portfolio):
     status = _cycle_status_from_portfolio(portfolio, holding_qty=holding_qty, total_buy=total_buy, total_sell=total_sell)
     started_at = _parse_firegate_datetime((portfolio or {}).get("startDate"), now)
     completed_at = _parse_firegate_datetime((portfolio or {}).get("endDate"), now if status == "COMPLETED" else None)
-    current_price = _safe_float((portfolio or {}).get("sellPrice"), 0)
+    # 10-20: FireGate's sellPrice is its sell-table price, not a quote. A pull
+    # wrote SOXL $164.27 (close $98.65) and the pages showed +22.4%. Keep the
+    # broker-updated price; sellPrice only fills an empty one.
+    current_price = _safe_float((existing or {}).get("current_price"), 0) if holding_qty > 0 else 0.0
     if holding_qty > 0 and current_price <= 0:
-        current_price = _safe_float((existing or {}).get("current_price"), 0)
+        current_price = _safe_float((portfolio or {}).get("sellPrice"), 0)
     if holding_qty > 0 and current_price <= 0:
         current_price = avg_price
     current_eval = round(holding_qty * current_price, 2) if holding_qty > 0 and current_price > 0 else round(total_sell, 2)

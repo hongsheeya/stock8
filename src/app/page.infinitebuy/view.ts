@@ -14,7 +14,12 @@ export class Component implements OnInit {
     public fireGateUrl: string = 'https://fire-gate.app/';
     public loginWindow: Window | null = null;
     public showBridgeTools: boolean = false;
-    public showFireGateFrame: boolean = true;
+    // The embedded FireGate site loses its own login (third-party storage is
+    // blocked in iframes), so the page shows the server-synced data instead.
+    public showFireGateFrame: boolean = false;
+    public portfolioItems: any[] = [];
+    public portfolioLoading: boolean = false;
+    public portfolioUpdated: string = '';
     public activeCycles: any[] = [];
 
     private destroyed: boolean = false;
@@ -54,6 +59,7 @@ export class Component implements OnInit {
         this.loading = false;
         await this.renderIfAlive();
         void this.loadActiveCycles();
+        void this.loadPortfolio(false);
         // Download Firebase after first paint so opening this page and the
         // first click on "FireGate 연결" do not pay the SDK startup serially.
         setTimeout(() => this.loadFirebase().then(async firebase => {
@@ -321,6 +327,28 @@ export class Component implements OnInit {
         }
     }
 
+    public async loadPortfolio(refresh: boolean = false) {
+        if (this.portfolioLoading) return;
+        this.portfolioLoading = true;
+        await this.renderIfAlive();
+        try {
+            const res = await wiz.call('portfolio', { refresh: refresh ? 'true' : 'false' }, { timeout: 40000 });
+            if (res?.code === 200) {
+                this.portfolioItems = (res.data?.items || []).filter((p: any) => p.has_cycle || p.status === 'READY');
+                const at = String(res.data?.refreshed_at || '');
+                this.portfolioUpdated = at ? at.slice(11, 16) + ' 기준' : '';
+            }
+        } catch (e) {
+        }
+        this.portfolioLoading = false;
+        await this.renderIfAlive();
+    }
+
+    public async toggleFireGateFrame() {
+        this.showFireGateFrame = !this.showFireGateFrame;
+        await this.renderIfAlive();
+    }
+
     // Active cycles from the history page (same data as 거래이력 > 무한매수 사이클).
     public async loadActiveCycles() {
         try {
@@ -368,6 +396,7 @@ export class Component implements OnInit {
             this.bridge = data?.fire_gate_bridge || this.bridge;
             this.bridgeMessage = `동기화 완료 · FireGate ${result.firegate_portfolios || 0}, 사이클 ${result.cycles_created || 0}/${result.cycles_updated || 0}`;
             await this.loadBridgeStatus(true);
+            void this.loadPortfolio(true);
         } catch (e: any) {
             this.error = e?.message || 'FireGate 동기화 실패';
         }
