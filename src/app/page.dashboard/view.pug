@@ -479,7 +479,6 @@ div(*ngIf="!legacyMode", class="dx-kpis")
         div(*ngIf="profitSnapshotReady", class="dx-kpi-sub")
             span([class]="profitChangeClass(profitData.total_return)") {{profitData.total_return > 0 ? '+' : ''}}{{profitData.total_return | number:'1.2-2'}}%
             |  · 실현 {{signedKRW(profitData.realized_profit || 0)}} · 미실현 {{signedKRW(profitData.unrealized_profit || 0)}}
-        div(*ngIf="profitSyncMessage && !profitLoading", class="dx-kpi-note") {{profitSyncMessage}}
     div(class="dx-kpi")
         div(class="dx-kpi-label") 주문가능
         div(class="dx-kpi-value") ₩{{formatKRW(buyingPower)}}
