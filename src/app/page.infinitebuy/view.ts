@@ -344,6 +344,14 @@ export class Component implements OnInit {
         await this.renderIfAlive();
     }
 
+    public dipSummary(orders: any[]): string {
+        const dips = (orders || []).slice(1);
+        const prices = dips.map((o: any) => Number(o.loc_price || 0)).filter((v: number) => v > 0);
+        const qty = dips.reduce((sum: number, o: any) => sum + Number(o.order_qty || 0), 0);
+        if (!prices.length) return '';
+        return `하락 매수 ${dips.length}건 · ${qty}주 · $${Math.min(...prices).toFixed(2)}~$${Math.max(...prices).toFixed(2)}`;
+    }
+
     public async toggleFireGateFrame() {
         this.showFireGateFrame = !this.showFireGateFrame;
         await this.renderIfAlive();
