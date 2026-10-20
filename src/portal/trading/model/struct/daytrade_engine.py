@@ -696,6 +696,12 @@ class DomesticDaytradeEngine:
         return {
             "move_pct": max(0.2, min(5.0, self._safe_float(self._config(prefix + "move_pct", "1.0"), 1.0))),
             "stop_pct": max(0.5, min(5.0, self._safe_float(self._config(prefix + "stop_pct", "1.5"), 1.5))),
+            # "vwap": the trend ends when the index crosses back over its VWAP.
+            # "open": hold until the index is back through its day open (the
+            # whole move is gone). 10-20, 60 days of 5m bars, one entry per
+            # ETF per day, -2.5% stop: +63.9% vs +35.2% (H1 +53.1/+22.6, H2
+            # +10.9/+12.6), worst day -11.7% vs -7.4%; last 8 days +7.7 vs +1.7.
+            "exit_mode": "open" if str(self._config(prefix + "exit_mode", "vwap") or "vwap").strip().lower() == "open" else "vwap",
             # KS in KST from 30 minutes after the open; US in ET likewise.
             "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
             "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
@@ -800,6 +806,8 @@ class DomesticDaytradeEngine:
             trend, reversed_ = below and move <= -params["move_pct"], not below
         else:
             trend, reversed_ = (not below) and move >= params["move_pct"], below
+        if params.get("exit_mode") == "open":
+            reversed_ = move > 0 if side == "BEAR" else move < 0
         return {**view, "ok": True, "trend": trend, "reversed": reversed_, "move_pct": round(move, 3),
                 "proxy_close": close, "proxy_vwap": round(vwap, 4), "proxy_open": day_open,
                 "reason": f"지수 {proxy} {move:+.2f}% · VWAP {'아래' if below else '위'}"}
@@ -816,7 +824,8 @@ class DomesticDaytradeEngine:
             return {"action": "SELL_STOP_LOSS", "reason": f"방향 추세 손절 (평단 -{stop_pct:g}%)", "risk_exit": True}
         view = view if view is not None else self._regime_trend_view(symbol, market=market)
         if view.get("ok") and view.get("reversed"):
-            return {"action": "SELL_FULL", "reason": f"{self._REGIME_REVERSAL_REASON} — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
+            label = self._REGIME_OPEN_REASON if self._regime_trend_params(market).get("exit_mode") == "open" else self._REGIME_REVERSAL_REASON
+            return {"action": "SELL_FULL", "reason": f"{label} — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
         return None
 
     def _regime_trend_cooling(self, state, minutes):
@@ -908,7 +917,7 @@ class DomesticDaytradeEngine:
         return any(
             counts((order or {}).get("timestamp", ""))
             and str((order or {}).get("action", "") or "").upper().startswith("SELL")
-            and str((order or {}).get("reason", "") or "").startswith(self._REGIME_REVERSAL_REASON)
+            and str((order or {}).get("reason", "") or "").startswith(self._REGIME_TREND_END_REASONS)
             for order in list(state.get("orders", []) or [])
         )
 
@@ -1608,10 +1617,12 @@ class DomesticDaytradeEngine:
         }
 
     _REGIME_REVERSAL_REASON = "지수 VWAP 회복"
+    _REGIME_OPEN_REASON = "지수 시가 복귀"
+    _REGIME_TREND_END_REASONS = (_REGIME_REVERSAL_REASON, _REGIME_OPEN_REASON)
 
     def _mark_exit_watch(self, state, reason="", action="", order_no=""):
         state["last_exit_watch_at"] = self._timestamp()
-        if str(reason or "").startswith(self._REGIME_REVERSAL_REASON):
+        if str(reason or "").startswith(self._REGIME_TREND_END_REASONS):
             # Kept apart from last_exit_reason, which later fill syncs overwrite.
             state["regime_reversal_exit_at"] = state["last_exit_watch_at"]
         if str(action or "").startswith("SELL") and self._safe_int(state.get("position_qty", 0), 0) <= 0:

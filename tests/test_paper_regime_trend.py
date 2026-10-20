@@ -80,6 +80,23 @@ class RegimeTrendTests(unittest.TestCase):
         engine = self._engine({}, now=(11, 42))
         self.assertEqual(engine._regime_closed_bar(gap, "KS", 5)["close"], 6)  # a later bar closes it
 
+    def test_open_exit_mode_holds_through_vwap_touches(self):
+        configs = {"daytrade_regime_trend_exit_mode": "open"}
+        # BEAR, index back above VWAP but still below its open: keep holding.
+        engine = self._engine({"069500": _snap(100, 99.5, 99.3)})
+        self.assertTrue(engine._regime_trend_view("114800")["reversed"])
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertFalse(engine._regime_trend_view("114800")["reversed"])
+        # The index back above its open: the move is gone, exit.
+        engine = self._engine({"069500": _snap(100, 100.2, 99.3)})
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertTrue(engine._regime_trend_view("114800")["reversed"])
+        exit_signal = engine._regime_trend_exit("114800", 1000, 1000, market="KS")
+        self.assertTrue(exit_signal["reason"].startswith("지수 시가 복귀"))
+        state = {}
+        engine._mark_exit_watch(state, reason=exit_signal["reason"], action="SELL_FULL")
+        self.assertIn("regime_reversal_exit_at", state)  # one entry per day
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
