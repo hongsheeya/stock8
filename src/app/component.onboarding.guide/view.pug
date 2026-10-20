@@ -1,6 +1,5 @@
 div(class="og-root", *ngIf="loaded")
     button(class="og-launcher", type="button", (click)="toggle()", [class.is-done]="allDone", [attr.aria-expanded]="open", aria-label="시작 가이드 열기")
-        span(class="og-launcher-icon") {{allDone ? '🏆' : '🎮'}}
         span(class="og-launcher-text") {{allDone ? '가이드 완료' : '시작 가이드'}}
         span(class="og-launcher-count", *ngIf="!allDone") {{doneCount}}/{{quests.length}}
 
@@ -8,32 +7,31 @@ div(class="og-root", *ngIf="loaded")
         header(class="og-head")
             div(class="og-head-row")
                 div
-                    div(class="og-kicker") 퀘스트 · Lv.{{doneCount}}
-                    h2(class="og-title") {{allDone ? '튜토리얼 클리어!' : '∞stock 시작 가이드'}}
+                    div(class="og-kicker") 사용 안내
+                    h2(class="og-title") {{allDone ? '설정을 모두 마쳤어요' : '∞stock 시작 가이드'}}
                 button(class="og-close", type="button", (click)="toggle()", aria-label="닫기") ✕
             div(class="og-xp")
                 div(class="og-xp-fill", [style.width.%]="percent")
-            div(class="og-xp-label") {{percent}}% · {{doneCount}}/{{quests.length}} 퀘스트
-            p(class="og-lead", *ngIf="!allDone && current") 다음 목표: {{current.icon}} {{current.goal}}
-            p(class="og-lead", *ngIf="allDone") 🏆 모든 퀘스트를 깼어요. 이제 자동매매가 알아서 움직여요.
+            div(class="og-xp-label") {{doneCount}}/{{quests.length}} 단계 완료
+            p(class="og-lead", *ngIf="!allDone && current") 다음 단계: {{current.title}}
+            p(class="og-lead", *ngIf="allDone") 모든 단계를 마쳤습니다. 이제 설정한 대로 자동매매가 진행됩니다.
 
         ol(class="og-list")
             li(*ngFor="let q of quests; let i = index", class="og-quest", [ngClass]="'is-' + state(q)")
                 button(class="og-quest-head", type="button", (click)="select(q)")
-                    span(class="og-badge") {{state(q) === 'done' ? '✓' : (state(q) === 'locked' ? '🔒' : q.icon)}}
+                    span(class="og-badge") {{state(q) === 'done' ? '✓' : (i + 1)}}
                     span(class="og-quest-name")
-                        strong {{i + 1}}. {{q.title}}
+                        strong {{q.title}}
                         small {{q.goal}}
-                    span(class="og-reward", *ngIf="state(q) === 'done'") +{{q.reward}}
+                    span(class="og-reward", *ngIf="state(q) === 'done'") 완료
                 div(class="og-quest-body", *ngIf="isOpen(q)")
                     ol(class="og-how")
                         li(*ngFor="let line of q.how") {{line}}
-                    p(class="og-tip") 💡 {{q.tip}}
-                    div(class="og-actions")
-                        button(class="og-go", type="button", (click)="go(q)", *ngIf="state(q) !== 'done'") 바로 가기 →
-                        span(class="og-cleared", *ngIf="state(q) === 'done'") 클리어! 보상: {{q.reward}}
+                    p(class="og-tip", *ngIf="q.tip") {{q.tip}}
+                    div(class="og-actions", *ngIf="state(q) !== 'done'")
+                        button(class="og-go", type="button", (click)="go(q)") 이동하기 →
 
         footer(class="og-foot")
             button(type="button", (click)="hideForGood()", *ngIf="!dismissed") 자동으로 열지 않기
             button(type="button", (click)="showAgain()", *ngIf="dismissed") 다시 자동으로 열기
-            span 진행 상황은 내 설정을 보고 자동으로 체크돼요
+            span 완료 여부는 설정 상태를 보고 자동으로 확인됩니다
