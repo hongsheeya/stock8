@@ -880,12 +880,21 @@ class DomesticDaytradeEngine:
         an index VWAP exit lifted the replay from +16.2% to +32.3% (0.10% RT
         cost; both halves up: +21.7% / +10.6%; worst day -13.6% -> -7.5%)."""
         today = self._now().strftime("%Y-%m-%d")
-        if str(state.get("regime_reversal_exit_at", "") or "")[:10] == today:
+        # An operator reset (10-20: exits caused by the old live-price check,
+        # see _regime_signal_bar_minutes) forgives reversal exits before it.
+        reset_at = str(self._config("daytrade_regime_trend_reversal_reset_at", "") or "")[:19]
+        reset_at = reset_at if reset_at[:10] == today else ""
+
+        def counts(stamp):
+            stamp = str(stamp or "")[:19]
+            return stamp[:10] == today and stamp > reset_at
+
+        if counts(state.get("regime_reversal_exit_at", "")):
             return True
         # A sell confirmed later by the pending-order sync records its own
         # reason, so also read the reason the sell order was placed with.
         return any(
-            str((order or {}).get("timestamp", "") or "")[:10] == today
+            counts((order or {}).get("timestamp", ""))
             and str((order or {}).get("action", "") or "").upper().startswith("SELL")
             and str((order or {}).get("reason", "") or "").startswith(self._REGIME_REVERSAL_REASON)
             for order in list(state.get("orders", []) or [])
