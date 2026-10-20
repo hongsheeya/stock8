@@ -736,24 +736,36 @@ class DomesticDaytradeEngine:
         return max(0, min(30, self._safe_int(self._config("daytrade_regime_trend_signal_bar_min", "5"), 5)))
 
     def _regime_closed_bar(self, bars, market, minutes):
-        """The last 1-minute bar of the newest finished `minutes` bucket.
+        """The last 1-minute bar of the newest *complete* `minutes` bucket.
 
         Session bars carry the cumulative VWAP, so its close/vwap are the
-        bucket's. None when bars carry no time or no bucket has finished."""
+        bucket's. A bucket counts only when its last minute is in the data or
+        a later bar exists: 10-20 11:40 the session (reused up to 180 s) ended
+        at 11:37, the half-built 11:35 bucket was taken as closed, and 114800
+        was sold 75 s after its entry. None when bars carry no time."""
         now_hm = self._regime_trend_clock(market)[1]
         try:
-            bucket = int(now_hm[:2]) * 60 + (int(now_hm[3:5]) // minutes) * minutes
+            now_bucket = (int(now_hm[:2]) * 60 + int(now_hm[3:5])) // minutes
         except ValueError:
             return None
-        chosen, timed = None, False
+        last_of_bucket, latest_bucket, timed = {}, -1, False
         for row in bars:
             stamp = str(row.get("time") or "") or str(row.get("timestamp") or "")[11:16]
             if len(stamp) < 5 or stamp[2] != ":":
                 continue
             timed = True
-            if int(stamp[:2]) * 60 + int(stamp[3:5]) < bucket:
-                chosen = row
-        return chosen if timed else None
+            minute = int(stamp[:2]) * 60 + int(stamp[3:5])
+            bucket = minute // minutes
+            latest_bucket = max(latest_bucket, bucket)
+            if bucket < now_bucket:
+                last_of_bucket[bucket] = (minute, row)
+        if not timed:
+            return None
+        for bucket in sorted(last_of_bucket, reverse=True):
+            minute, row = last_of_bucket[bucket]
+            if minute % minutes == minutes - 1 or latest_bucket > bucket:
+                return row
+        return None
 
     def _regime_trend_view(self, symbol, market=None):
         """Where the index behind a direction ETF stands: move from its open and
