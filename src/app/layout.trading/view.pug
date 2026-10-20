@@ -8,8 +8,10 @@ div(class="trading-bg h-full flex flex-col", [class.theme-light]="themeMode === 
             div(class="max-w-7xl mx-auto px-4 py-6 min-h-full")
                 router-outlet
 
+    //- Inside the themed wrapper so the guide follows light/dark mode.
+    wiz-component-onboarding-guide
+
 //- Global overlays
-wiz-component-onboarding-guide
 wiz-portal-season-modal
 div(*ngIf="service.status.loading",
     class="fixed w-full h-full top-0 left-0 z-50 flex justify-center items-center bg-black/40 backdrop-blur-md")

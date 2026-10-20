@@ -67,13 +67,16 @@ def progress():
     data = _load(trading)
     visited = data.get("visited") if isinstance(data.get("visited"), dict) else {}
     api = _api_ready(trading)
+    cycle = _has_cycle(trading)
+    auto = _auto_on(trading)
     steps = {
         "account": True,
         "api": api,
-        "connection": api and bool(data.get("connection_ok")),
+        # A running cycle or automation already proves the connection works.
+        "connection": api and (bool(data.get("connection_ok")) or cycle or auto),
         "firegate": _firegate_ready(trading),
-        "cycle": _has_cycle(trading),
-        "auto": _auto_on(trading),
+        "cycle": cycle,
+        "auto": auto,
         "explore": all(visited.get(key) for key in _VISIT_KEYS),
     }
     wiz.response.status(200, steps=steps, visited=visited, dismissed=bool(data.get("dismissed")))
