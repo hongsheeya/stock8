@@ -4035,7 +4035,13 @@ class Engine:
                 })
                 continue
 
-            buy_decision = self.calculate_buy_decision(cycle, prev_close)
+            # FireGate-authoritative plans are priced off the average (prev_close
+            # holds avg_price above). The dip floor is about today's drop, so it
+            # uses the broker price, or no floor when that is unknown.
+            dip_reference = None
+            if firegate_required and firegate_cycle_ready:
+                dip_reference = float(cycle.get("current_price", 0) or 0)
+            buy_decision = self.calculate_buy_decision(cycle, prev_close, dip_reference=dip_reference)
             if not buy_decision.get("should_buy"):
                 continue
             decision_order_type = str(buy_decision.get("order_type", "") or "LOC").upper()

@@ -332,7 +332,7 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 		kis_api = _KisApiStub(buying_power_info, reservation_orders=reservation_orders, order_history=order_history, holdings=holdings)
 		engine._load_kis_api = lambda: kis_api
 		engine.update_cycle_price = lambda cycle_id, price: None
-		engine.calculate_buy_decision = lambda cycle, prev_close: {
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
 			"should_buy": True,
 			"order_type": "LOC",
 			"order_qty": 1,
@@ -838,7 +838,7 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 				{"id": "c1", "symbol": "SOXL", "status": "ACTIVE"},
 			],
 		)
-		engine.calculate_buy_decision = lambda cycle, prev_close: {
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
 			"should_buy": True,
 			"order_type": "LOC",
 			"reason": "FireGate v4 ladder",
@@ -891,7 +891,7 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 				{"id": "c1", "symbol": "SOXL", "status": "ACTIVE"},
 			],
 		)
-		engine.calculate_buy_decision = lambda cycle, prev_close: {
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
 			"should_buy": True,
 			"order_type": "LOC",
 			"reason": "FireGate v4 ladder",
@@ -943,7 +943,7 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 				{"id": "c1", "symbol": "SOXL", "status": "ACTIVE"},
 			],
 		)
-		engine.calculate_buy_decision = lambda cycle, prev_close: {
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
 			"should_buy": True,
 			"order_type": "LOC",
 			"reason": "FireGate v4 ladder",
