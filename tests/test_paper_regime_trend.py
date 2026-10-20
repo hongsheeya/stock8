@@ -122,6 +122,24 @@ class RegimeTrendTests(unittest.TestCase):
         engine._config = lambda key, default=None: "true" if key == "daytrade_regime_trend_reversal_block" else default
         self.assertEqual(self._signal(engine)["action"], "BUY1")
 
+    def test_an_operator_reset_forgives_earlier_reversal_exits(self):
+        trend = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        state = _state("114800", 0, qty=0, strategy_id=STRATEGY, last_exit_action="SELL_FULL",
+                       last_exit_watch_at=f"{TODAY} 09:35:00", regime_reversal_exit_at=f"{TODAY} 09:35:00")
+        configs = {"daytrade_regime_trend_reversal_block": "true",
+                   "daytrade_regime_trend_reversal_reset_at": f"{TODAY} 11:00:00"}
+        engine = self._engine(trend, now=(12, 0), state=state)
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+        later = dict(state, regime_reversal_exit_at=f"{TODAY} 11:30:00")
+        engine = self._engine(trend, now=(12, 0), state=later)
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertIn("VWAP 이탈", self._signal(engine)["reason"])
+        configs["daytrade_regime_trend_reversal_reset_at"] = "2026-05-25 11:00:00"  # yesterday's reset: ignored
+        engine = self._engine(trend, now=(12, 0), state=state)
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertIn("VWAP 이탈", self._signal(engine)["reason"])
+
     def test_reversal_exit_is_recorded_apart_from_the_exit_reason(self):
         engine = self._engine({})
         state = {}
