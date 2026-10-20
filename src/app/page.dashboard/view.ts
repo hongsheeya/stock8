@@ -494,7 +494,7 @@ export class Component implements OnInit {
             const { code, data } = overviewResponse;
             if (this.destroyed || seq !== this.dashboardLoadSeq) return;
             if (code !== 200) throw new Error(data?.message || '계좌 조회 응답 지연');
-            if (data?.degraded) this.addToast('error', '계좌 갱신 지연', '마지막 확인값입니다. 최신 잔고 확인을 기다리고 있습니다.');
+            if (data?.degraded && data?.setup_required !== true && data?.privacy_locked !== true) this.addToast('error', '계좌 갱신 지연', '마지막 확인값입니다. 최신 잔고 확인을 기다리고 있습니다.');
             if (code === 200) {
                 if (this.shouldIgnoreEmptyOverview(data)) {
                     this.lastRefresh = new Date();

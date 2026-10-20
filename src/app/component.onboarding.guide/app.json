@@ -1,0 +1,12 @@
+{
+    "id": "component.onboarding.guide",
+    "mode": "component",
+    "title": "onboarding.guide",
+    "namespace": "onboarding.guide",
+    "category": "trading",
+    "viewuri": "",
+    "preview": "",
+    "controller": "base",
+    "layout": "",
+    "template": "wiz-component-onboarding-guide()"
+}

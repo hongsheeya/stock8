@@ -448,9 +448,9 @@ section(*ngIf="showAdminControls && legacyMode && isMock", class="dash-ops-conso
 //- Alerts: only what needs attention
 div(*ngIf="!legacyMode", class="dx-alerts")
     div(*ngIf="privacyLocked || setupRequired", class="dx-alert is-info")
-        strong 개인정보 보호 잠금
-        span {{setupMessage || '증권사 API 연결 전에는 자산, 수익, 보유 종목을 표시하지 않습니다.'}}
-    div(*ngIf="!balanceSyncOk && balanceSyncMessage", class="dx-alert is-warn")
+        strong 시작하려면 증권사 API를 연결하세요
+        span 오른쪽 아래 '시작 가이드'를 따라 하면 돼요. 연결 전에는 자산·수익·보유 종목을 표시하지 않아요.
+    div(*ngIf="!balanceSyncOk && balanceSyncMessage && !setupRequired && !privacyLocked", class="dx-alert is-warn")
         strong 잔고 조회 실패
         span {{balanceSyncMessage}}
     div(*ngIf="totalAsset > 0 && portfolioValue > totalAsset", class="dx-alert is-danger")
