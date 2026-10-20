@@ -475,6 +475,8 @@ def load_settings():
         crash_buy_max_per_cycle = _get_config("crash_buy_max_per_cycle", "3")
         buy_method = _normalize_order_method(_get_config("buy_method", "firegate"), "firegate", allow_market=True)
         sell_method = _normalize_order_method(_get_config("sell_method", "firegate"), "firegate")
+        star_sell_ratio = str(_get_config("infinite_buy_star_sell_ratio", "") or "")
+        target_sell_pct = str(_get_config("infinite_buy_target_sell_pct", "") or "")
         daytrade_default_seed = _get_config("daytrade_default_seed", "5000000")
         daytrade_us_default_seed = _get_config("daytrade_us_default_seed", daytrade_default_seed or "5000000")
         daytrade_feature_enabled = "true" if _PAPER_DAYTRADE_FULL_ACCESS else ("false" if _DAYTRADE_HARD_LOCKED else _get_config("daytrade_feature_enabled", "false"))
@@ -540,6 +542,8 @@ def load_settings():
         crash_buy_max_per_cycle=_safe_int(crash_buy_max_per_cycle, 3),
         buy_method=buy_method,
         sell_method=sell_method,
+        star_sell_ratio=star_sell_ratio,
+        target_sell_pct=target_sell_pct,
         daytrade_default_seed=_safe_float(daytrade_default_seed, 5000000),
         daytrade_us_default_seed=_safe_float(daytrade_us_default_seed, _safe_float(daytrade_default_seed, 5000000)),
         daytrade_auto_enabled=False if _DAYTRADE_HARD_LOCKED else str(daytrade_auto_enabled).lower() == "true",
@@ -757,6 +761,17 @@ def save_params():
     sell_method = _normalize_order_method(wiz.request.query("sell_method", "firegate"), "firegate")
     _set_config("buy_method", buy_method, "Buy method: firegate, loc or legacy market")
     _set_config("sell_method", sell_method, "Sell method: firegate or loc")
+    # FireGate sell split override (blank = FireGate table: 1/4 ★ LOC, +20%).
+    star_sell_ratio = str(wiz.request.query("star_sell_ratio", "") or "").strip()
+    if star_sell_ratio not in ("", "0.25", "0.5", "0.75", "1"):
+        star_sell_ratio = ""
+    target_sell_pct = str(wiz.request.query("target_sell_pct", "") or "").strip()
+    try:
+        target_sell_pct = "" if target_sell_pct == "" else str(round(min(100.0, max(1.0, float(target_sell_pct))), 2))
+    except ValueError:
+        target_sell_pct = ""
+    _set_config("infinite_buy_star_sell_ratio", star_sell_ratio, "Share of holdings sold at the ★ LOC (blank: FireGate 1/4)")
+    _set_config("infinite_buy_target_sell_pct", target_sell_pct, "Take-profit % for the rest (blank: FireGate default)")
     _set_config("sell_strategy", sell_strategy, "Sell strategy: firegate, full or partial")
     _set_config("crash_buy_enabled", crash_buy_enabled, "Crash buy enabled")
     _set_config("crash_buy_drop_pct", crash_buy_drop_pct, "Crash buy daily drop threshold %")

@@ -55,6 +55,8 @@ export class Component implements OnInit {
     public sellStrategy: string = 'firegate';
     public buyMethod: string = 'firegate';
     public sellMethod: string = 'firegate';
+    public starSellRatio: string = '';
+    public targetSellPct: string = '';
     public advancedOrderSettingsOpen: boolean = false;
     public partialSellStages: any[] = [];
     public crashBuyEnabled: boolean = false;
@@ -242,6 +244,8 @@ export class Component implements OnInit {
                 this.sellStrategy = data.sell_strategy || 'firegate';
                 this.buyMethod = this.normalizeOrderMethod(data.buy_method, true);
                 this.sellMethod = this.normalizeOrderMethod(data.sell_method, false);
+                this.starSellRatio = String(data.star_sell_ratio || '');
+                this.targetSellPct = String(data.target_sell_pct || '');
                 // Show the advanced section whenever it is what is in effect.
                 this.advancedOrderSettingsOpen = !this.isFiregateDefault();
                 this.partialSellStages = this.normalizePartialSellStages(data.partial_sell_stages);
@@ -825,6 +829,8 @@ export class Component implements OnInit {
             sell_strategy: this.sellStrategy,
             buy_method: this.buyMethod,
             sell_method: this.sellMethod,
+            star_sell_ratio: this.starSellRatio,
+            target_sell_pct: this.targetSellPct,
             crash_buy_enabled: this.crashBuyEnabled,
             crash_buy_drop_pct: this.crashBuyDropPct,
             crash_buy_ma_drop_pct: this.crashBuyMaDropPct,
