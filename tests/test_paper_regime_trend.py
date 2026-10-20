@@ -47,6 +47,27 @@ class RegimeTrendTests(unittest.TestCase):
         self.assertFalse(view["reversed"])
         self.assertFalse(engine._regime_trend_view("122630")["trend"])
 
+    def test_index_view_uses_the_last_closed_five_minute_bar(self):
+        # 10-20: a momentary VWAP touch at 09:30:53 closed a 1-minute-old entry.
+        bars = [{"time": "09:00", "open": 100, "close": 100, "vwap": 100},
+                {"time": "09:24", "open": 98.6, "close": 98.5, "vwap": 99.3},   # last bar of 09:20-09:25
+                {"time": "09:26", "open": 99.6, "close": 99.6, "vwap": 99.25}]  # forming bucket: above VWAP
+        snaps = {"069500": ({"date": TODAY, "bars": bars}, {"close": 99.6, "vwap": 99.25})}
+        view = self._engine(snaps, now=(9, 27))._regime_trend_view("114800")
+        self.assertTrue(view["trend"])
+        self.assertFalse(view["reversed"])
+        engine = self._engine(snaps, now=(9, 27))
+        engine._config = lambda key, default=None: "0" if key == "daytrade_regime_trend_signal_bar_min" else default
+        self.assertTrue(engine._regime_trend_view("114800")["reversed"])  # live price: exits at once
+
+    def test_closed_bar_lookup(self):
+        engine = self._engine({}, now=(9, 35))
+        bars = [{"time": "09:33", "close": 1}, {"time": "09:34", "close": 2}, {"time": "09:35", "close": 3}]
+        self.assertEqual(engine._regime_closed_bar(bars, "KS", 5)["close"], 2)
+        self.assertIsNone(engine._regime_closed_bar([{"close": 1}], "KS", 5))
+        self.assertEqual(engine._regime_closed_bar([{"timestamp": "2026-05-26 09:29:00", "close": 7}], "KS", 5)["close"], 7)
+        self.assertEqual(engine._regime_signal_bar_minutes("US"), 0)
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])

@@ -722,6 +722,39 @@ class DomesticDaytradeEngine:
             et = now - datetime.timedelta(hours=13 if self._is_us_dst() else 14)
         return self._us_session_date(now), et.strftime("%H:%M")
 
+    def _regime_signal_bar_minutes(self, market="KS"):
+        """Bar size the index view is judged on (0 = the live price).
+
+        10-20 LIVE: 252670 bought 09:29:50 and sold 09:30:53 on a momentary
+        VWAP touch. The rule was validated on closed 5-minute bars, but live
+        checked the price every ~15 s. Over 10-08..10-20 the same rule made
+        -4.9% judged on 1-minute closes and +9.4% on 5-minute closes; over 60
+        days, buffers or extra confirmation on 5-minute closes only cost
+        (+32.3% -> +17~29%). KS only: US bar timestamps were not checked."""
+        if self._is_us_market(market):
+            return 0
+        return max(0, min(30, self._safe_int(self._config("daytrade_regime_trend_signal_bar_min", "5"), 5)))
+
+    def _regime_closed_bar(self, bars, market, minutes):
+        """The last 1-minute bar of the newest finished `minutes` bucket.
+
+        Session bars carry the cumulative VWAP, so its close/vwap are the
+        bucket's. None when bars carry no time or no bucket has finished."""
+        now_hm = self._regime_trend_clock(market)[1]
+        try:
+            bucket = int(now_hm[:2]) * 60 + (int(now_hm[3:5]) // minutes) * minutes
+        except ValueError:
+            return None
+        chosen, timed = None, False
+        for row in bars:
+            stamp = str(row.get("time") or "") or str(row.get("timestamp") or "")[11:16]
+            if len(stamp) < 5 or stamp[2] != ":":
+                continue
+            timed = True
+            if int(stamp[:2]) * 60 + int(stamp[3:5]) < bucket:
+                chosen = row
+        return chosen if timed else None
+
     def _regime_trend_view(self, symbol, market=None):
         """Where the index behind a direction ETF stands: move from its open and
         side of its VWAP. A BEAR ETF trends while the index is below its VWAP
@@ -741,6 +774,12 @@ class DomesticDaytradeEngine:
         day_open = self._safe_float(bars[0].get("open", 0), 0) or self._safe_float(bars[0].get("close", 0), 0)
         close = self._safe_float((bar or {}).get("close", 0), 0)
         vwap = self._safe_float((bar or {}).get("vwap", 0), 0)
+        minutes = self._regime_signal_bar_minutes(market)
+        if minutes > 0:
+            closed = self._regime_closed_bar(bars, market, minutes)
+            if closed is not None and self._safe_float(closed.get("vwap", 0), 0) > 0:
+                close = self._safe_float(closed.get("close", 0), 0)
+                vwap = self._safe_float(closed.get("vwap", 0), 0)
         if min(day_open, close, vwap) <= 0:
             return {**view, "reason": f"지수 {proxy} 시가/VWAP 확인 불가"}
         move = (close / day_open - 1) * 100
