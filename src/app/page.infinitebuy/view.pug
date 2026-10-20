@@ -82,8 +82,9 @@ div(class="firegate-page dx-page")
                             td(class="num") {{p.current_price > 0 ? '$' + (p.current_price | number:'1.2-2') : '-'}}
                             td(class="num", [class]="tone(p.profit_rate)") {{p.has_cycle ? ((p.profit_rate > 0 ? '+' : '') + (p.profit_rate | number:'1.2-2') + '%') : '-'}}
                             td
-                                div(*ngFor="let o of p.buy_orders", class="ib-order") {{o.order_qty}}주 · ${{o.loc_price | number:'1.2-2'}}
+                                div(*ngFor="let o of (p.buy_orders || []).slice(0, 1)", class="ib-order") {{o.order_qty}}주 · ${{o.loc_price | number:'1.2-2'}}
                                     small(class="dx-muted") {{o.label}}
+                                div(*ngIf="p.buy_orders?.length > 1", class="ib-order dx-muted") {{dipSummary(p.buy_orders)}}
                                 span(*ngIf="!p.buy_orders?.length", class="dx-muted") -
                             td
                                 div(*ngFor="let o of p.sell_orders", class="ib-order") {{o.order_qty}}주 · ${{o.price | number:'1.2-2'}}
