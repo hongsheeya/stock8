@@ -68,6 +68,18 @@ class RegimeTrendTests(unittest.TestCase):
         self.assertEqual(engine._regime_closed_bar([{"timestamp": "2026-05-26 09:29:00", "close": 7}], "KS", 5)["close"], 7)
         self.assertEqual(engine._regime_signal_bar_minutes("US"), 0)
 
+    def test_a_half_built_bucket_from_a_stale_session_is_not_closed(self):
+        # 10-20 11:40:35: the reused session ended at 11:37.
+        engine = self._engine({}, now=(11, 40))
+        stale = [{"time": "11:33", "close": 1}, {"time": "11:34", "close": 2},
+                 {"time": "11:36", "close": 3}, {"time": "11:37", "close": 4}]
+        self.assertEqual(engine._regime_closed_bar(stale, "KS", 5)["close"], 2)
+        fresh = stale + [{"time": "11:39", "close": 5}]
+        self.assertEqual(engine._regime_closed_bar(fresh, "KS", 5)["close"], 5)
+        gap = [{"time": "11:33", "close": 1}, {"time": "11:38", "close": 6}, {"time": "11:41", "close": 7}]
+        engine = self._engine({}, now=(11, 42))
+        self.assertEqual(engine._regime_closed_bar(gap, "KS", 5)["close"], 6)  # a later bar closes it
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
