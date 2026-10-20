@@ -362,7 +362,36 @@ class DomesticDaytradeEngine:
     def _state_key(self, symbol, market="KS"):
         return f"{symbol}.{market}"
 
+    _STATE_VISIBILITY_CACHE = {}
+
+    def _daytrade_state_visible(self):
+        """PAPER keeps one day-trade state file for the whole server.
+
+        10-20 isolation test: a freshly registered PAPER user saw the admin's
+        32 PAPER day trades in 거래이력, read from that shared file. Day trading
+        is admin-only, so on PAPER only admins (and session-less workers) may
+        read or write it. LIVE files are per broker account already."""
+        if not _PAPER_MODE:
+            return True
+        try:
+            uid = str(self.struct._current_user_id() or "").strip()
+        except Exception:
+            uid = ""
+        if not uid:
+            return True
+        cached = type(self)._STATE_VISIBILITY_CACHE.get(uid)
+        if cached and _clock.time() - cached[1] < 60:
+            return cached[0]
+        try:
+            visible = bool(self.struct._current_user_is_admin(uid))
+        except Exception:
+            visible = False
+        type(self)._STATE_VISIBILITY_CACHE[uid] = (visible, _clock.time())
+        return visible
+
     def _load_state_map(self):
+        if not self._daytrade_state_visible():
+            return {}
         with self._global_lock("state_io"):
             fs = self._fs()
             if fs.exists(self._state_path()) == False:
@@ -370,6 +399,9 @@ class DomesticDaytradeEngine:
             return fs.read.json(self._state_path(), default={}) or {}
 
     def _save_state_map(self, payload):
+        if not self._daytrade_state_visible():
+            # Never let a non-admin request write (and so wipe) the shared file.
+            raise RuntimeError("단타 상태는 관리자만 변경할 수 있습니다.")
         with self._global_lock("state_io"):
             fs = self._fs()
             fs.makedirs(self._data_root())
