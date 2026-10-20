@@ -314,6 +314,11 @@ export class Component implements OnInit {
         return cls;
     }
 
+    public async selectBrokerById(id: string) {
+        const options = this.brokerOptions?.length ? this.brokerOptions : this.defaultBrokerOptions();
+        await this.selectBrokerOption(options.find((item: any) => item.id === id));
+    }
+
     public async toggleBrokerDropdown() {
         this.brokerDropdownOpen = !this.brokerDropdownOpen;
         await this.service.render();
