@@ -8,60 +8,60 @@ declare const wiz: any;
 // Module-level data: WIZ rewrites the component class line, so no static members.
 const QUESTS: any[] = [
     {
-        id: 'account', icon: '🧭', title: '모험 시작', goal: '계정 만들기',
-        how: ['회원가입을 마치면 자동으로 클리어돼요.'],
-        tip: '환영해요! 첫 퀘스트는 이미 깼어요.', link: '/dashboard', reward: '모험가 등록',
+        id: 'account', title: '계정 만들기', goal: '회원가입',
+        how: ['회원가입을 마치면 이 단계는 완료돼요.'],
+        tip: '', link: '/dashboard',
     },
     {
-        id: 'api', icon: '🔑', title: '열쇠 얻기', goal: '증권사 API 키 등록',
+        id: 'api', title: '증권사 API 키 등록', goal: '앱키·시크릿·계좌번호 입력',
         how: [
-            '한국투자증권 KIS Developers(apiportal.koreainvestment.com)에 로그인해요.',
-            'API 신청에서 앱키(App Key)와 시크릿(App Secret)을 발급받아요. 연습은 모의투자용으로 받으면 돼요.',
-            '설정 → 증권사 API에 앱키, 시크릿, 계좌번호(8자리-2자리)를 넣고 저장해요.',
+            '한국투자증권 KIS Developers(apiportal.koreainvestment.com)에 로그인합니다.',
+            'API 신청 메뉴에서 앱키(App Key)와 시크릿(App Secret)을 발급받습니다. 연습용이라면 모의투자용으로 발급받으세요.',
+            '설정 → 증권사 API에 앱키, 시크릿, 계좌번호(8자리-2자리)를 입력하고 저장합니다.',
         ],
-        tip: '키는 내 계정에만 저장돼요. 다른 사용자는 볼 수 없어요.', link: '/settings', reward: '증권사 열쇠',
+        tip: 'API 키는 내 계정에만 저장되며 다른 사용자에게 보이지 않습니다.', link: '/settings',
     },
     {
-        id: 'connection', icon: '🔌', title: '전원 연결', goal: '연결 테스트 통과',
+        id: 'connection', title: '연결 테스트', goal: '잔고·시세 조회 확인',
         how: [
-            '설정 → 증권사 API에서 연결 테스트를 눌러요.',
-            '잔고·시세·주문가능금액 조회가 성공하면 클리어예요.',
+            '설정 → 증권사 API에서 연결 테스트를 누릅니다.',
+            '잔고, 시세, 주문가능금액 조회가 성공하면 완료됩니다.',
         ],
-        tip: '연결만으로는 주문이 나가지 않아요. 안심하고 눌러도 돼요.', link: '/settings', reward: '계좌 연결 배지',
+        tip: '연결 테스트만으로는 주문이 나가지 않습니다.', link: '/settings',
     },
     {
-        id: 'firegate', icon: '🔥', title: 'FireGate 동맹', goal: 'FireGate 계정 연결',
+        id: 'firegate', title: 'FireGate 연결', goal: 'FireGate 계정 연동',
         how: [
-            '무한매수 메뉴로 가요.',
-            'Google 계정 연결을 눌러 FireGate에 로그인해요.',
-            '연결되면 동기화 버튼으로 내 포트폴리오를 불러와요.',
+            '무한매수 메뉴로 이동합니다.',
+            'Google 계정 연결을 눌러 FireGate에 로그인합니다.',
+            '연결 후 동기화 버튼으로 포트폴리오를 불러옵니다.',
         ],
-        tip: 'FireGate에서 정한 계획표 그대로 주문해요.', link: '/infinite-buy', reward: '전략 지도',
+        tip: '주문은 FireGate의 계획표를 그대로 따릅니다.', link: '/infinite-buy',
     },
     {
-        id: 'cycle', icon: '📈', title: '첫 출정', goal: '무한매수 사이클 만들기',
+        id: 'cycle', title: '무한매수 사이클 만들기', goal: '첫 사이클 시작',
         how: [
-            'FireGate에서 종목(예: SOXL)과 시드를 정해 포트폴리오를 만들어요.',
-            '무한매수 메뉴에서 동기화하면 진행 중 사이클이 생겨요.',
+            'FireGate에서 종목(예: SOXL)과 시드를 정해 포트폴리오를 만듭니다.',
+            '무한매수 메뉴에서 동기화하면 진행 중 사이클이 생성됩니다.',
         ],
-        tip: '시드는 잃어도 괜찮은 금액부터 작게 시작하세요.', link: '/infinite-buy', reward: '첫 사이클',
+        tip: '처음에는 감당 가능한 작은 금액으로 시작하는 것을 권장합니다.', link: '/infinite-buy',
     },
     {
-        id: 'auto', icon: '⚡', title: '자동 모드', goal: '무한매수 자동매매 켜기',
+        id: 'auto', title: '자동매매 켜기', goal: '무한매수 자동매매 ON',
         how: [
-            '대시보드 상단의 무한매수 스위치를 ON으로 바꿔요.',
-            '위험 안내를 읽고 확인을 눌러요.',
-            '이후 평일 10:00부터 LOC 예약이 자동으로 걸려요.',
+            '대시보드 상단의 무한매수 스위치를 ON으로 변경합니다.',
+            '위험 안내를 확인합니다.',
+            '이후 평일 10:00부터 LOC 예약 주문이 자동으로 접수됩니다.',
         ],
-        tip: '실투자는 실제 돈이 움직여요. 처음이라면 모의투자에서 먼저 연습하세요.', link: '/dashboard', reward: '자동 운전 면허',
+        tip: '실투자는 실제 자금으로 주문됩니다. 처음이라면 모의투자로 먼저 연습하세요.', link: '/dashboard',
     },
     {
-        id: 'explore', icon: '🗺️', title: '지도 익히기', goal: '대시보드와 거래이력 둘러보기',
+        id: 'explore', title: '화면 살펴보기', goal: '대시보드와 거래이력 확인',
         how: [
-            '대시보드: 총자산·손익·주문가능금액과 LOC 예약 상태를 봐요.',
-            '거래이력: 성과, 체결 내역, 사이클, 주문 로그 탭을 하나씩 눌러봐요.',
+            '대시보드: 총자산, 손익, 주문가능금액과 LOC 예약 상태를 확인합니다.',
+            '거래이력: 성과, 체결 내역, 사이클, 주문 로그 탭을 확인합니다.',
         ],
-        tip: '두 화면을 모두 열어보면 클리어돼요.', link: '/history', reward: '튜토리얼 클리어',
+        tip: '두 화면을 한 번씩 열면 완료됩니다.', link: '/history',
     },
 ];
 
