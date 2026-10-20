@@ -562,3 +562,12 @@ class KisMocSellTests(unittest.TestCase):
         api.get_balance = lambda **_k: {"holdings": [{"symbol": "TEST", "qty": 10}]}
         api.sell_order("TEST", 10, price=31.5, order_type="MOC", exchange="NASD")
         self.assertEqual((calls[0]["ORD_DVSN"], calls[0]["OVRS_ORD_UNPR"]), ("33", "0"))
+
+
+class KisEmptyQuoteTests(unittest.TestCase):
+    def test_empty_overseas_quote_fields_are_no_price_not_an_error(self):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *a, **k: {"rt_cd": "0", "output": {"last": "", "diff": "", "rate": "", "open": "",
+                                                                 "high": "", "low": "", "base": "", "tvol": ""}}
+        quote = api._get_current_price_once("SOXL", exchange="AMS")
+        self.assertEqual((quote["price"], quote["prev_close"], quote["volume"]), (0.0, 0.0, 0))
