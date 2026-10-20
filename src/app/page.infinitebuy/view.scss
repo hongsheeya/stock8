@@ -62,3 +62,9 @@
 .bridge-onboarding p { line-height:1.8; font-size:14px; color:#475569; margin:16px 0; }
 .bridge-onboarding button { background:#2563eb; color:white; font-weight:650; border-radius:10px; padding:14px 20px; width:100%; }
 .bridge-onboarding button:disabled { background:#64748b; }
+
+.ib-portfolios { margin-top: 12px; }
+.ib-sub { display: block; font-size: 11px; }
+.ib-order { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ib-order small { margin-left: 6px; font-size: 11px; }
+.ib-note { margin-top: 10px; font-size: 12px; color: var(--bn-muted); }

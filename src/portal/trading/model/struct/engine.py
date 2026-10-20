@@ -4891,13 +4891,36 @@ class Engine:
     # 로그 기록
     # =========================================================================
 
+    # 10-20: a reservation mismatch was logged every minute (925 identical
+    # IB_LOC_BUY_PRICE_MISMATCH rows in a day). Repeats of the same event and
+    # message on the same day update one row's counter instead of inserting.
+    _LOG_REPEATS = sys.__dict__.setdefault("_stock8_ib_log_repeats", {})
+
     def _log_event(self, symbol, cycle_id, event_type, action="", message="", order_no="", order_price=0, order_qty=0):
         """trade_log에 이벤트 기록"""
         log_db = self._log_db()
         event_type = str(event_type or "").upper().strip()
         if event_type.startswith("IB_") is False:
             event_type = f"IB_{event_type}" if event_type else "IB_EVENT"
-        log_db.insert({
+        now = self._now()
+        try:
+            uid = str(self.struct._current_user_id() or "")
+        except Exception:
+            uid = ""
+        key = (uid, str(cycle_id or ""), str(symbol or ""), event_type, str(action or ""))
+        signature = (now.strftime("%Y-%m-%d"), str(message or ""), str(order_no or ""),
+                     float(order_price or 0), int(order_qty or 0))
+        previous = self._LOG_REPEATS.get(key)
+        if previous and previous["signature"] == signature and previous.get("id"):
+            previous["count"] += 1
+            try:
+                log_db.update({"raw_response": json.dumps({"repeat": previous["count"],
+                                                           "last_at": now.strftime("%Y-%m-%d %H:%M:%S")})},
+                              id=previous["id"])
+                return
+            except Exception:
+                pass  # fall through to a fresh row
+        row_id = log_db.insert({
             "cycle_id": cycle_id or "",
             "symbol": symbol,
             "event_type": event_type,
@@ -4909,8 +4932,9 @@ class Engine:
             "filled_qty": 0,
             "message": message,
             "raw_response": "",
-            "created": self._now(),
+            "created": now,
         })
+        self._LOG_REPEATS[key] = {"signature": signature, "id": row_id, "count": 1}
 
 
 Model = Engine

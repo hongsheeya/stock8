@@ -219,3 +219,14 @@ select:focus {
     .dx-card { padding: 14px; }
     .hx-search { width: 100%; }
 }
+
+.hx-repeat {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid var(--bn-hairline);
+    font-size: 11px;
+    color: var(--bn-muted);
+    font-variant-numeric: tabular-nums;
+}

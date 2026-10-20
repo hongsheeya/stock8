@@ -1441,6 +1441,35 @@ def _event_label(event_type=""):
         tone = "info"
     return label, tone, "무한매수" if event.startswith("IB_") else "시스템"
 
+# Identical events of one day show as one row with a count (10-20: 925
+# reservation-mismatch rows a day buried the real order events).
+_LOG_GROUP_KEY = "substr(created, 1, 10), symbol, event_type, action, message, order_price, order_qty"
+_LOG_REPEAT_SQL = ("sum(CASE WHEN json_valid(raw_response) AND json_extract(raw_response, '$.repeat') IS NOT NULL "
+                   "THEN json_extract(raw_response, '$.repeat') ELSE 1 END)")
+
+
+def _grouped_log_rows(trading, where, params, limit, offset):
+    columns = ("id", "created", "first_created", "symbol", "event_type", "action", "order_price", "order_qty",
+               "filled_price", "filled_qty", "message", "repeat")
+
+    def rows_sql(users):
+        where_sql, args = _where_sql(users, where, params)
+        inner = (f'SELECT max(id) AS id, max(created) AS created, min(created) AS first_created, symbol, event_type, '
+                 f'action, order_price, order_qty, max(filled_price) AS filled_price, max(filled_qty) AS filled_qty, '
+                 f'message, {_LOG_REPEAT_SQL} AS repeat FROM "trade_log"{where_sql} GROUP BY {_LOG_GROUP_KEY} '
+                 f'ORDER BY created DESC LIMIT {int(limit)} OFFSET {max(0, int(offset or 0))}')
+        pairs = ", ".join(f"'{column}', {column}" for column in columns)
+        return f"SELECT json_group_array(json_object({pairs})) FROM ({inner})", args
+
+    def count_sql(users):
+        where_sql, args = _where_sql(users, where, params)
+        return f'SELECT count(*) FROM (SELECT 1 FROM "trade_log"{where_sql} GROUP BY {_LOG_GROUP_KEY})', args
+
+    row = _execute_one(trading, "trade_log", rows_sql)
+    count = _execute_one(trading, "trade_log", count_sql)
+    return (int(count[0] or 0) if count else 0), (json.loads(row[0]) if row and row[0] else [])
+
+
 def trade_logs():
     """주문·체결 로그 (종류 + 종목 + 검색 + 페이징)"""
     trading = struct.trading
@@ -1464,15 +1493,16 @@ def trade_logs():
         params.extend([f"%{search}%"] * 3)
     where = " AND ".join(clauses)
     try:
-        total = _json_count(trading, "trade_log", where, params)
-        rows = _json_rows(trading, "trade_log", _LOG_COLUMNS, where=where, params=params,
-                          limit=dump, offset=(page - 1) * dump)
+        total, rows = _grouped_log_rows(trading, where, params, dump, (page - 1) * dump)
     except Exception as e:
         _read_fallback("trade_log", e)
         wiz.response.status(503, message="로그를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
 
     rows.sort(key=lambda r: str(r.get("created", "") or ""), reverse=True)
     for row in rows:
+        row["repeat"] = max(1, _safe_int(row.get("repeat", 1), 1))
+        if row.get("first_created"):
+            row["first_created"] = _to_kst_string(row.get("first_created", ""), fmt="%H:%M")
         event = str(row.get("event_type", "") or "")
         row["created"] = _to_kst_string(row.get("created", ""), fmt="%Y-%m-%d %H:%M:%S")
         row["label"], row["tone"], row["lane"] = _event_label(event)

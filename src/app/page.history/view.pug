@@ -366,5 +366,7 @@ ng-container(*ngIf="tab === 'logs'")
                                 | {{r.filled_qty || r.order_qty}}주
                                 small(class="dx-muted") {{price(r.filled_price || r.order_price, r.market)}}
                             span(*ngIf="!((r.filled_qty || r.order_qty) > 0)", class="dx-muted") -
-                        td(class="hx-message", [class.is-open]="expandedLog === r.id") {{r.message || '-'}}
+                        td(class="hx-message", [class.is-open]="expandedLog === r.id")
+                            span(*ngIf="r.repeat > 1", class="hx-repeat", [attr.title]="r.first_created + '부터 반복'") ×{{r.repeat | number}}
+                            | {{r.message || '-'}}
         button(*ngIf="logHasMore", class="hx-more", [disabled]="loadingMore", (click)="moreLogs()") {{loadingMore ? '불러오는 중' : '더보기'}} ({{logTotal - logs.length | number}})
