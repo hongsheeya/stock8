@@ -113,25 +113,6 @@ div(*ngIf="tab === 'account' && accountContext")
         div(class="st-actions")
             button(type="button", class="st-btn is-primary", (click)="saveAccountProfile()") 저장
 
-    section(class="st-card")
-        header(class="st-card-head")
-            div
-                h2 비밀번호 변경
-        div(class="st-form")
-            div(class="st-row")
-                label(for="st-pw-now") 현재 비밀번호
-                div(class="st-field")
-                    input(id="st-pw-now", [(ngModel)]="currentPassword", type="password", autocomplete="current-password")
-            div(class="st-row")
-                label(for="st-pw-new") 새 비밀번호
-                div(class="st-field")
-                    input(id="st-pw-new", [(ngModel)]="newPassword", type="password", autocomplete="new-password")
-            div(class="st-row")
-                label(for="st-pw-confirm") 새 비밀번호 확인
-                div(class="st-field")
-                    input(id="st-pw-confirm", [(ngModel)]="confirmPassword", type="password", autocomplete="new-password")
-        div(class="st-actions")
-            button(type="button", class="st-btn", (click)="changeAccountPassword()", [disabled]="changingPassword") {{changingPassword ? '변경 중…' : '비밀번호 변경'}}
 
 //- ============================================================
 //- TAB: Risk Settings
