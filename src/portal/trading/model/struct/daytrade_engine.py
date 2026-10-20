@@ -2819,7 +2819,10 @@ class DomesticDaytradeEngine:
         if amount <= 0:
             return 0.0
         now = self._now()
-        if now.weekday() >= 5 or now.hour * 100 + now.minute >= self._RESERVE_BORROW_END_HHMM:
+        hhmm = now.hour * 100 + now.minute
+        # 08:00 start: overnight the KS market is shut and the page showed a
+        # borrowed seed at 02:00 that nothing could use.
+        if now.weekday() >= 5 or hhmm < 800 or hhmm >= self._RESERVE_BORROW_END_HHMM:
             return 0.0
         return amount
 

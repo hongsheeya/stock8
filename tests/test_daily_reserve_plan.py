@@ -103,7 +103,7 @@ class DailyReserveTests(unittest.TestCase):
         self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 0)
         self.assertAlmostEqual(budget['remaining_seed_krw'], 1161700)
         self.assertEqual(engine.shared_budget_status(2000000, market='US')['infinite_buy_reserve_borrowed_krw'], 0)
-        for now in (datetime.datetime(2026, 10, 19, 15, 30), datetime.datetime(2026, 10, 18, 10, 0)):
+        for now in (datetime.datetime(2026, 10, 19, 15, 30), datetime.datetime(2026, 10, 18, 10, 0), datetime.datetime(2026, 10, 20, 2, 0)):
             engine._now = lambda now=now: now
             budget = engine.shared_budget_status(2000000)
             self.assertEqual(budget['infinite_buy_reserve_borrowed_krw'], 0)
