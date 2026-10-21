@@ -112,6 +112,8 @@ class SeasonalAndPendingTests(unittest.TestCase):
         self.assertGreaterEqual(p["pending"]["pay_date"], TODAY)          # Q3 (record 9/30) paid in November
         self.assertAlmostEqual(p["pending"]["amount"], 374 * 370 / 367, places=3)
         self.assertGreater(p["next"]["amount"], 500)                       # year-end slot ~ 374 x 566/367
+        self.assertEqual(p["next"]["pay_date"].month, 4)                   # year-end dividends are paid in April
+        self.assertEqual(p["pending"]["pay_date"].month, 11)               # Q3 within ~2 months
         flows = D.schedule(p, TODAY, 12)
         self.assertTrue(flows[0].get("unannounced"))
         self.assertEqual(flows[1]["ex_date"], p["next"]["ex_date"])

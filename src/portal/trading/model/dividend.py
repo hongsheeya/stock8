@@ -103,6 +103,19 @@ def _seasonal_amount(history, per_year, ex, last_amount):
     return last_amount
 
 
+def _slot_lag(history, ex, default):
+    """Days from ex-date to payment for the same slot a year earlier
+    (Korean year-end dividends are paid in April, quarterly ones within
+    ~2 months); the median lag otherwise."""
+    target = ex - datetime.timedelta(days=365)
+    paid = [h for h in history or [] if h.get("pay_date") and not h.get("special")]
+    if paid:
+        best = min(paid, key=lambda h: abs((h["ex_date"] - target).days))
+        if abs((best["ex_date"] - target).days) <= 45:
+            return (best["pay_date"] - best["ex_date"]).days
+    return default
+
+
 def analyze(events, today):
     """events: [{"ex_date", "amount", "pay_date"?, "record_date"?, "confirmed"?,
     "special"?}] in any order. Returns the dividend profile used by the page."""
@@ -161,16 +174,18 @@ def analyze(events, today):
         ex = past[-1]["ex_date"] + datetime.timedelta(days=round(gap))
         while ex < today:
             ex += datetime.timedelta(days=round(gap))
-        history = [{"ex_date": e["ex_date"], "amount": float(e["amount"]), "special": bool(e.get("special"))} for e in rows]
+        history = [{"ex_date": e["ex_date"], "amount": float(e["amount"]), "pay_date": e.get("pay_date"),
+                    "special": bool(e.get("special"))} for e in rows]
         last_amount = float(past[-1]["amount"])
         skipped = ex - datetime.timedelta(days=round(gap))
         if skipped > past[-1]["ex_date"] + datetime.timedelta(days=round(gap * 0.5)):
-            pay = skipped + datetime.timedelta(days=lag if lag is not None else 21)
+            pay = skipped + datetime.timedelta(days=_slot_lag(history, skipped, lag if lag is not None else 21))
             if pay >= today:
                 out["pending"] = {"ex_date": skipped, "pay_date": pay, "amount": _seasonal_amount(history, per_year, skipped, last_amount),
                                   "confirmed": False, "projected": True, "unannounced": True}
+        slot_lag = _slot_lag(history, ex, lag)
         out["next"] = {"ex_date": ex, "amount": _seasonal_amount(history, per_year, ex, last_amount),
-                       "pay_date": ex + datetime.timedelta(days=lag) if lag else None,
+                       "pay_date": ex + datetime.timedelta(days=slot_lag) if slot_lag else None,
                        "record_date": None, "confirmed": False, "projected": True}
         # Expected payment missing for more than a full cycle and a month.
         if (today - past[-1]["ex_date"]).days > gap + 45:
@@ -206,7 +221,7 @@ def schedule(profile, today, months=12):
     ex, amount, pay = nxt["ex_date"], float(nxt["amount"]), nxt.get("pay_date")
     first = True
     while ex <= end:
-        pay_day = pay if first and pay else ex + datetime.timedelta(days=default_lag)
+        pay_day = pay if first and pay else ex + datetime.timedelta(days=_slot_lag(profile.get("history"), ex, default_lag))
         confirmed = bool(first and nxt.get("confirmed") and not nxt.get("projected"))
         out.append({"ex_date": ex, "pay_date": pay_day, "amount": amount, "confirmed": confirmed})
         first = False
