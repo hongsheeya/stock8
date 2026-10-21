@@ -11,6 +11,7 @@ import hashlib
 import os
 import time
 import threading
+import collections
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -49,6 +50,39 @@ _GATEWAY_STATE = sys.__dict__.setdefault("_stock8_kis_gateway_v1", {
     "lock": threading.RLock(), "last": 0.0, "blocked_until": 0.0,
     "token_lock": threading.RLock(), "cache_lock": threading.RLock(), "cache": {},
 })
+
+
+# 10-21: which work spends the gateway budget (PAPER allows ~1 call / 1.1 s
+# for everything). One bounded, process-wide record of network calls: time,
+# TR id, path, limiter wait, outcome and thread. No parameters or replies.
+_CALL_LOG = sys.__dict__.setdefault("_stock8_kis_call_log", collections.deque(maxlen=6000))
+_CALL_COUNTS = sys.__dict__.setdefault("_stock8_kis_cache_hits", {"hits": 0})
+
+
+def kis_call_stats(minutes=10):
+    cutoff = time.time() - max(1, float(minutes)) * 60
+    rows = [row for row in list(_CALL_LOG) if row[0] >= cutoff]
+    by_key = {}
+    for ts, tr_id, path, waited, outcome, thread in rows:
+        key = f"{tr_id} {path.rsplit('/', 1)[-1]}"
+        item = by_key.setdefault(key, {"calls": 0, "wait_sec": 0.0, "timeouts": 0, "errors": 0, "threads": {}})
+        item["calls"] += 1
+        item["wait_sec"] += waited
+        item["timeouts"] += outcome == "timeout"
+        item["errors"] += outcome == "error"
+        item["threads"][thread] = item["threads"].get(thread, 0) + 1
+    span = max(1.0, min(float(minutes) * 60, time.time() - (rows[0][0] if rows else time.time())))
+    top = sorted(by_key.items(), key=lambda kv: -kv[1]["calls"])
+    return {
+        "minutes": minutes,
+        "calls": len(rows),
+        "calls_per_min": round(len(rows) / span * 60, 1),
+        "timeouts": sum(1 for r in rows if r[4] == "timeout"),
+        "avg_wait_sec": round(sum(r[3] for r in rows) / len(rows), 2) if rows else 0.0,
+        "max_wait_sec": round(max((r[3] for r in rows), default=0.0), 2),
+        "paper_cache_hits_total": _CALL_COUNTS["hits"],
+        "by_call": [{"call": k, **{kk: (round(vv, 1) if isinstance(vv, float) else vv) for kk, vv in v.items()}} for k, v in top[:25]],
+    }
 
 
 @contextmanager
@@ -588,6 +622,7 @@ class KisApi:
             with KisApi._paper_get_cache_lock:
                 cached = KisApi._paper_get_cache.get(cache_key)
                 if isinstance(cached, dict) and (time.monotonic() - float(cached.get("ts", 0) or 0)) < 20.0:
+                    _CALL_COUNTS["hits"] += 1
                     return copy.deepcopy(cached.get("data"))
         headers = self._headers(tr_id)
         if tr_cont:
@@ -614,7 +649,13 @@ class KisApi:
         while attempt <= retries:
             try:
                 # Rate limiting 적용
-                self._rate_limit_wait()
+                waited_from = time.time()
+                try:
+                    self._rate_limit_wait()
+                except TimeoutError:
+                    _CALL_LOG.append((time.time(), str(tr_id), str(path), time.time() - waited_from, "timeout", threading.current_thread().name[:40]))
+                    raise
+                _CALL_LOG.append((time.time(), str(tr_id), str(path), time.time() - waited_from, "ok", threading.current_thread().name[:40]))
 
                 if method.upper() == "GET":
                     client = self._session or requests
