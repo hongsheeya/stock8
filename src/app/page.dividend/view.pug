@@ -46,7 +46,7 @@ div(*ngIf="!loading", class="dx-page div-page")
         div(class="dx-kpi")
             div(class="dx-kpi-label") 원/달러
             div(class="dx-kpi-value is-muted") {{krw(data?.fx)}}
-            div(class="dx-kpi-sub") {{data?.fx_estimated ? '잔고 환율을 아직 못 받아 임시값' : '증권사 잔고 기준'}}
+            div(class="dx-kpi-sub") {{data?.fx_estimated ? '환율을 아직 못 받아 임시값' : (data?.fx_source === 'yahoo' ? '야후 파이낸스 기준 (모의투자)' : '증권사 잔고 기준')}}
 
     section(class="dx-card")
         div(class="dx-card-head")

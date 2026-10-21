@@ -116,12 +116,24 @@ def _refresh_job(uid, refresh_holdings=True, only=None, force=False):
         with wiz.server.app.flask.test_request_context("/"):
             flask.session["id"] = uid
             trading = _trading()
+            import yfinance as yf
             if refresh_holdings:
                 holdings, fx, errors = _fetch_holdings(trading)
+                source = "broker"
+                if fx <= 0:
+                    # KIS mock accounts do not serve the present-balance TR
+                    # (환율); use Yahoo's USD/KRW instead of a fixed guess.
+                    try:
+                        closes = yf.Ticker("KRW=X").history(period="5d")["Close"].dropna()
+                        fx = float(closes.iloc[-1]) if len(closes) else 0.0
+                        source = "yahoo"
+                        errors = [e for e in errors if not e.startswith("환율")]
+                    except Exception:
+                        fx = 0.0
                 state.update(holdings=holdings, holdings_at=_time.time(), holdings_errors=errors)
                 if fx > 0:
                     state["fx"] = fx
-            import yfinance as yf
+                    state["fx_source"] = source
             dividend, data_cls = _models()
             data = data_cls(_cache_dir(), dividend, yf=yf)
             kis = getattr(trading, "kis_api", None)
@@ -221,7 +233,7 @@ def overview():
     cashflow = dividend.monthly_cashflow(items, today)
     fin = dividend.financial_income_year(items, today)
     payload = {
-        "mode": _TRADING_MODE, "today": today, "fx": fx, "fx_estimated": fx_estimated,
+        "mode": _TRADING_MODE, "today": today, "fx": fx, "fx_estimated": fx_estimated, "fx_source": state.get("fx_source", ""),
         "holdings": rows, "watchlist": watch_rows, "cashflow": cashflow, "financial_income": fin,
         "totals": {"annual_net_krw": sum(r.get("annual_net_krw") or 0 for r in rows),
                    "annual_gross_krw": sum(r.get("annual_gross_krw") or 0 for r in rows),
