@@ -73,41 +73,10 @@ def generate_daily_trade_summary(trade_date):
 
 
 def archive_old_trade_logs(days_to_keep=30):
-    """
-    지정된 기간보다 오래된 거래 로그를 삭제한다.
-    
-    Args:
-        days_to_keep: 유지할 일수 (기본값: 30일)
-    
-    Returns:
-        삭제된 레코드 수
-    """
-    if str(os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper() == "PAPER":
-        _log("info", "PAPER retention policy preserved all trade_log rows")
-        return 0
-    try:
-        trading = wiz.model("portal/trading/trading")
-        trade_log_db = trading.db("trade_log")
-        
-        cutoff_date = (_TIME.now() - datetime.timedelta(days=days_to_keep)).replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # 해당 날짜 이전의 거래 로그 조회
-        old_logs = trade_log_db.rows() or []
-        old_logs = [log for log in old_logs if (log.get("created", _TIME.now()) < cutoff_date)]
-        
-        deleted_count = 0
-        for log in old_logs:
-            try:
-                trade_log_db.delete(id=log.get("id"))
-                deleted_count += 1
-            except Exception as e:
-                _log("warn", f"Failed to delete trade_log {log.get('id')}: {e}")
-        
-        _log("info", f"Archived {deleted_count} old trade logs (older than {cutoff_date})")
-        return deleted_count
-    except Exception as e:
-        _log("error", f"Failed to archive old trade logs: {e}")
-        return 0
+    """Retired 10-21: it deleted every trade_log row older than the cutoff,
+    including the day-trade fills 거래이력 is built from, one row at a time.
+    Struct._trim_trade_logs keeps order/fill events and archives what it trims."""
+    return 0
 
 
 def cleanup_old_simulations(days_to_keep=90):

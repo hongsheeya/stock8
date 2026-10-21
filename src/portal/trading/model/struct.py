@@ -1108,6 +1108,8 @@ class Struct:
                     registry['error'] = ''
                 except Exception as exc:
                     registry['error'] = str(exc)[:200]
+                # LIVE has no PAPER maintenance loop; trim the order log here.
+                self._maybe_trim_trade_logs()
                 time.sleep(5)
         thread = threading.Thread(target=dispatch, daemon=True, name='stock8-live-policy-dispatch')
         registry['thread'] = thread
@@ -2312,10 +2314,75 @@ class Struct:
         except Exception:
             return 21600
 
+    # 10-21 order-log retention. Benchmark on a copy of the PAPER DB: the
+    # grouped 주문 로그 page (count + 30 rows) took 0.5 s at 100k rows, 1.1 s
+    # at 250k, 1.8 s at 500k and 5.7 s at 1M. Only automation noise and old
+    # errors are trimmed; order and fill events (거래이력 is built from DT_
+    # fills) are never deleted. Trimmed rows go to log-archive/*.jsonl.gz.
+    _LOG_NOISE_SQL = ("(event_type LIKE '%\\_RUN' ESCAPE '\\' OR event_type LIKE '%SKIPPED%' "
+                      "OR event_type LIKE '%ALREADY\\_SCHEDULED%' ESCAPE '\\' OR event_type LIKE '%MISSING\\_FOR\\_REBUILD%' ESCAPE '\\' "
+                      "OR event_type LIKE '%MISMATCH%')")
+    _LOG_ERROR_SQL = "(event_type LIKE '%ERROR%')"
+    _LOG_NOISE_DAYS = 14
+    _LOG_ERROR_DAYS = 60
+    _LOG_SOFT_CAP = 60000
+    _LOG_CAP_NOISE_DAYS = 3
+
+    def _trim_trade_logs(self, now=None):
+        import gzip
+        now = now or _kst_now()
+        db = self.db("trade_log")
+        raw = getattr(db, "_db", db)
+        database = raw.orm._meta.database
+
+        def cutoff(days):
+            return (now - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+
+        plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_NOISE_DAYS)), (self._LOG_ERROR_SQL, cutoff(self._LOG_ERROR_DAYS))]
+        archive_dir = _os.path.join(_os.path.dirname(_os.path.abspath(database.database)), "log-archive")
+        removed = 0
+        raw._db_enter()
+        try:
+            for step in range(2):
+                for where, before in plans:
+                    cursor = database.execute_sql(f'SELECT * FROM "trade_log" WHERE {where} AND created < ?', (before,))
+                    columns = [c[0] for c in cursor.description]
+                    rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
+                    if not rows:
+                        continue
+                    _os.makedirs(archive_dir, exist_ok=True)
+                    path = _os.path.join(archive_dir, f"trade_log-{now.strftime('%Y%m%d')}.jsonl.gz")
+                    with gzip.open(path, "at", encoding="utf-8") as fh:
+                        for row in rows:
+                            fh.write(_json.dumps(row, ensure_ascii=False, default=str) + "\n")
+                    database.execute_sql(f'DELETE FROM "trade_log" WHERE {where} AND created < ?', (before,))
+                    removed += len(rows)
+                total = database.execute_sql('SELECT count(*) FROM "trade_log"').fetchone()[0]
+                if step == 0 and total > self._LOG_SOFT_CAP:
+                    plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_CAP_NOISE_DAYS))]
+                    continue
+                break
+        finally:
+            raw._close_connection()
+            raw._db_exit()
+        return {"removed": removed, "remaining": total}
+
+    def _maybe_trim_trade_logs(self):
+        """At most every 6 hours per process."""
+        stamp = _sys.__dict__.setdefault("_stock8_log_trim", {"ts": 0.0})
+        if time.time() - stamp["ts"] < 6 * 3600:
+            return None
+        stamp["ts"] = time.time()
+        try:
+            return self._trim_trade_logs()
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+
     def _run_background_maintenance(self):
         try:
             maintenance = self.model("maintenance")
             result = maintenance.database_maintenance() or {}
+            result["trade_log_trim"] = self._maybe_trim_trade_logs()
             return {
                 "enabled": True,
                 "executed": True,
