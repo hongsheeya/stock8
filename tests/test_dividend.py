@@ -130,6 +130,21 @@ class SeasonalAndPendingTests(unittest.TestCase):
         self.assertEqual(fin["expected_krw"], october)  # 10-31 payment once; the next (2027-01) is next year
 
 
+class ReinvestMathTests(unittest.TestCase):
+    def test_received_counts_payments_in_the_window_after_tax(self):
+        events = quarterly(dt.date(2026, 6, 1), 2, 1.0, lag=30)          # paid 07-01 and 09-30
+        p = D.analyze(events, TODAY)
+        got = D.received([({"symbol": "KO", "market": "US", "qty": 10}, p, 1400.0)], TODAY, days=30)
+        self.assertEqual(got[0]["net"], 8.5)                              # 1.0 x 10 x 0.85, only 09-30
+        self.assertEqual(got[0]["currency"], "USD")
+        self.assertEqual(D.received([({"symbol": "KO", "market": "US", "qty": 10}, p, 1400.0)], TODAY, days=7), [])
+
+    def test_krx_ticks_and_limit_prices(self):
+        self.assertEqual([D.krx_tick(p) for p in (1999, 2000, 19990, 49950, 199900, 499500, 600000)], [1, 5, 10, 50, 100, 500, 1000])
+        self.assertEqual(D.limit_price("KS", 194000), 194600.0)            # 194,582 rounded up to a 100 tick
+        self.assertEqual(D.limit_price("US", 34.62), 34.73)
+
+
 class FakeKis:
     def get_domestic_dividend_schedule(self, symbol, f, t):
         return [{"sht_cd": symbol, "record_date": "20261231", "per_sto_divi_amt": "1,200", "divi_pay_dt": "20270420", "divi_kind": "결산"},

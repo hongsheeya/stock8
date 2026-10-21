@@ -12,6 +12,7 @@ import re as _re
 import sys as _sys
 import threading as _threading
 import time as _time
+import uuid as _uuid
 
 _TRADING_MODE = str(_os.environ.get("TRADING_MODE", "PAPER") or "PAPER").strip().upper()
 _STATE = _sys.__dict__.setdefault("_stock8_dividend_state", {})  # uid -> holdings, fx, refresh flags
@@ -21,6 +22,13 @@ _MAX_WATCH = 40
 _FX_FALLBACK = 1400.0
 _US_SYMBOL = _re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _KR_SYMBOL = _re.compile(r"^[0-9A-Z]{6}$")
+_PROPOSAL_TTL_SEC = 180
+_ORDER_LOCK = _sys.__dict__.setdefault("_stock8_dividend_order_lock", _threading.Lock())
+# Reinvestment orders: PAPER only until the user enables LIVE explicitly
+# (LIVE orders would also need an order_policy lane, which does not exist).
+_LIVE_REINVEST_LOCK_MESSAGE = "실투자 재투자 주문은 아직 잠겨 있습니다. 모의투자에서 먼저 검증한 뒤 켤 수 있어요."
+_US_COMMISSION = 0.0025
+_KR_COMMISSION = 0.00015
 
 
 def _trading():
@@ -88,7 +96,7 @@ def _fetch_holdings(trading):
             for h in (overseas() or {}).get("holdings", []) or []:
                 holdings.append({"symbol": str(h.get("symbol", "")).upper(), "market": "US", "name": h.get("name", ""),
                                  "qty": float(h.get("qty") or 0), "avg_price": float(h.get("avg_price") or 0),
-                                 "current_price": float(h.get("current_price") or 0)})
+                                 "current_price": float(h.get("current_price") or 0), "exchange": h.get("exchange", "")})
         except Exception as exc:
             errors.append(f"해외 잔고: {str(exc)[:120]}")
     present = getattr(broker, "get_present_balance", None)
@@ -255,3 +263,135 @@ def remove_watch():
     rows = [r for r in _watchlist(trading, uid) if not (r["symbol"] == symbol and r["market"] == market)]
     _save_watchlist(trading, uid, rows)
     wiz.response.status(200, watchlist=rows)
+
+
+# ---------------------------------------------------------------- 재투자 도우미
+def _quote(broker, symbol, market, exchange=""):
+    """(price, order_exchange) from the broker; 0 when unavailable."""
+    if market == "US":
+        data = broker.get_current_price(symbol, exchange={"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}.get(exchange, exchange or "NAS")) or {}
+        return float(data.get("price") or 0), str(data.get("order_exchange") or exchange or "NASD")
+    data = broker.get_domestic_current_price(symbol) or {}
+    return float(data.get("price") or 0), "KRX"
+
+
+def _cash_for(broker, symbol, market, price, exchange):
+    if market == "US":
+        info = broker.get_buying_power_info(symbol=symbol, price=price, exchange=exchange) or {}
+        return float(info.get("executable_amount", info.get("amount", 0)) or 0)
+    info = broker.get_domestic_buying_power_info(symbol=symbol, price=price, order_type="LIMIT") or {}
+    return float(info.get("amount", 0) or 0)
+
+
+def reinvest_plan():
+    """Dividends paid in the last N days -> buy proposals for the same stock.
+    Live quotes and cash are read only here (on demand), never on polling."""
+    uid = _uid()
+    trading = _trading()
+    state = _STATE.setdefault(uid, {})
+    try:
+        days = max(7, min(180, int(float(wiz.request.query("days", "30") or 30))))
+    except (TypeError, ValueError):
+        days = 30
+    dividend, data_cls = _models()
+    data = data_cls(_cache_dir(), dividend)
+    today = _today()
+    items = []
+    for h in state.get("holdings") or []:
+        profile = dividend.analyze(data_cls.parse_events(data.cached(h["symbol"], h["market"])), today)
+        items.append((h, profile, state.get("fx") or 0))
+    broker = getattr(trading, "broker_api", None) or trading.kis_api
+    proposals, errors = [], []
+    exchanges = {h["symbol"]: h.get("exchange", "") for h in state.get("holdings") or []}
+    for got in dividend.received(items, today, days):
+        symbol, market = got["symbol"], got["market"]
+        row = {"symbol": symbol, "market": market, "currency": got["currency"], "dividend_net": got["net"],
+               "payments": got["payments"], "qty": 0, "price": 0, "limit_price": 0, "cost": 0, "fee": 0, "cash": None,
+               "notes": [], "token": ""}
+        try:
+            price, exchange = _quote(broker, symbol, market, exchanges.get(symbol, ""))
+        except Exception as exc:
+            errors.append(f"{symbol} 시세: {str(exc)[:100]}")
+            price, exchange = 0.0, exchanges.get(symbol, "")
+        if price <= 0:
+            row["notes"].append("시세를 받지 못해 제안할 수 없습니다.")
+            proposals.append(row)
+            continue
+        limit = dividend.limit_price(market, price)
+        fee_rate = _US_COMMISSION if market == "US" else _KR_COMMISSION
+        qty = int(float(got["net"]) // (limit * (1 + fee_rate)))
+        try:
+            cash = _cash_for(broker, symbol, market, limit, exchange)
+            row["cash"] = cash
+            qty = min(qty, int(cash // (limit * (1 + fee_rate))))
+        except Exception as exc:
+            row["notes"].append(f"주문 가능 금액 확인 실패: {str(exc)[:80]}")
+        row.update(price=price, limit_price=limit, qty=qty, cost=round(qty * limit, 2), fee=round(qty * limit * fee_rate, 2), exchange=exchange)
+        if qty <= 0:
+            short = limit * (1 + fee_rate) - float(got["net"])
+            row["notes"].append(f"1주에 {short:,.2f}{'달러' if market == 'US' else '원'} 더 모이면 살 수 있어요 (적립 중)."
+                                if short > 0 else "주문 가능 현금이 부족합니다.")
+        profile = next((p for h, p, _fx in items if h["symbol"] == symbol and h["market"] == market), {})
+        nxt = (profile or {}).get("next") or {}
+        if market == "US" and nxt.get("ex_date") and dividend.buy_deadline("US", nxt["ex_date"]) == today:
+            row["notes"].append(f"오늘이 배당락({nxt['ex_date'].isoformat()}) 전날입니다. 배당락 전날 매수는 평균 0.26%p 불리했으니 배당락일 이후 매수를 권합니다.")
+        if qty > 0:
+            token = _uuid.uuid4().hex
+            state.setdefault("proposals", {})[token] = {"symbol": symbol, "market": market, "qty": qty, "limit": limit,
+                                                        "exchange": exchange, "expires": _time.time() + _PROPOSAL_TTL_SEC}
+            row["token"] = token
+        proposals.append(row)
+    # forget expired proposals
+    state["proposals"] = {k: v for k, v in (state.get("proposals") or {}).items() if v["expires"] > _time.time()}
+    wiz.response.status(200, **_jsonable({
+        "days": days, "proposals": proposals, "errors": errors, "orders_enabled": _TRADING_MODE != "LIVE",
+        "locked_message": "" if _TRADING_MODE != "LIVE" else _LIVE_REINVEST_LOCK_MESSAGE, "ttl_sec": _PROPOSAL_TTL_SEC}))
+
+
+def _log_reinvest(trading, event, proposal, message, order_no="", raw=None):
+    try:
+        trading.db("trade_log").insert({
+            "cycle_id": f"dividend:{proposal['market'].lower()}:{proposal['symbol']}", "symbol": proposal["symbol"],
+            "event_type": event, "action": "BUY" if event.endswith("_BUY") else "ERROR", "order_no": str(order_no or ""),
+            "order_price": float(proposal["limit"]), "order_qty": int(proposal["qty"]), "filled_price": 0, "filled_qty": 0,
+            "message": message[:1000], "raw_response": _json.dumps(raw or {}, ensure_ascii=False, default=str)[:4000],
+        })
+    except Exception:
+        pass
+
+
+def reinvest_order():
+    """Place one proposed reinvestment order (limit buy) after the user's
+    confirmation. The proposal is single-use and expires in 3 minutes."""
+    uid = _uid()
+    if _TRADING_MODE == "LIVE":
+        wiz.response.status(403, message=_LIVE_REINVEST_LOCK_MESSAGE)
+    token = str(wiz.request.query("token", "") or "")
+    state = _STATE.setdefault(uid, {})
+    proposal = (state.get("proposals") or {}).pop(token, None)
+    if not proposal or proposal["expires"] < _time.time():
+        wiz.response.status(400, message="제안이 만료됐어요. '재투자 계산'을 다시 눌러 주세요.")
+    if not _ORDER_LOCK.acquire(blocking=False):
+        wiz.response.status(409, message="다른 재투자 주문을 처리 중입니다.")
+    trading = _trading()
+    result, error = None, ""
+    try:
+        broker = getattr(trading, "broker_api", None) or trading.kis_api
+        if proposal["market"] == "US":
+            result = broker.buy_order(proposal["symbol"], int(proposal["qty"]), price=proposal["limit"], order_type="LIMIT",
+                                      exchange=proposal["exchange"] or "NASD", allow_auto_exchange_attempt=False)
+        else:
+            result = broker.buy_domestic_order(proposal["symbol"], int(proposal["qty"]), price=int(proposal["limit"]), order_type="LIMIT")
+    except Exception as exc:
+        error = str(exc)[:300]
+    finally:
+        _ORDER_LOCK.release()
+    if error:
+        _log_reinvest(trading, "DIV_REINVEST_ERROR", proposal, f"배당 재투자 주문 실패: {proposal['symbol']} {proposal['qty']}주 @ {proposal['limit']} | {error}")
+        wiz.response.status(400, message=f"주문 실패: {error}")
+    order_no = str((result or {}).get("order_no", "") or "")
+    _log_reinvest(trading, "DIV_REINVEST_BUY", proposal,
+                  f"배당 재투자 주문 접수: {proposal['symbol']} {proposal['qty']}주 지정가 {proposal['limit']} (주문번호 {order_no or '-'})",
+                  order_no=order_no, raw={k: v for k, v in (result or {}).items() if k in ("order_no", "status", "message", "rt_cd", "msg1")})
+    wiz.response.status(200, order_no=order_no, symbol=proposal["symbol"], qty=proposal["qty"], limit=proposal["limit"])
+

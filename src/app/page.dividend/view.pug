@@ -151,6 +151,52 @@ div(*ngIf="!loading", class="dx-page div-page")
                             button(class="dx-tag", (click)="removeWatch(r)", [disabled]="busy") 삭제
 
     section(class="dx-card")
+        div(class="dx-card-head")
+            h2 재투자 도우미
+            small 받은 배당(세후 추정)으로 같은 종목을 다시 사는 주문을 제안합니다. 주문은 확인을 눌러야만 나갑니다.
+        div(class="div-add")
+            select(class="dx-select", [(ngModel)]="reinvestDays")
+                option([ngValue]="30") 최근 30일 입금
+                option([ngValue]="60") 최근 60일 입금
+                option([ngValue]="90") 최근 90일 입금
+            button(class="dx-tool is-primary", (click)="planReinvest()", [disabled]="reinvesting") {{reinvesting ? '계산 중…' : '재투자 계산'}}
+            span(class="dx-muted", *ngIf="reinvest?.locked_message") {{reinvest.locked_message}}
+        div(class="dx-empty", *ngIf="reinvest && !reinvest.proposals?.length") 최근 {{reinvest.days}}일 동안 들어온 배당이 없습니다.
+        div(class="dx-empty", *ngIf="!reinvest") '재투자 계산'을 누르면 현재가와 주문 가능 금액을 확인해 제안합니다.
+        div(class="dx-table-wrap", *ngIf="reinvest?.proposals?.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 종목
+                        th(class="num") 받은 배당 (세후)
+                        th(class="num") 현재가
+                        th(class="num") 지정가
+                        th(class="num") 수량
+                        th(class="num") 예상 금액 + 수수료
+                        th 안내
+                        th
+                tbody
+                    tr(*ngFor="let r of reinvest.proposals")
+                        td
+                            div(class="dx-sym")
+                                strong {{r.symbol}}
+                                small {{marketLabel(r.market)}}
+                        td(class="num") {{amount(r.dividend_net, r.market)}}
+                        td(class="num") {{r.price ? amount(r.price, r.market) : '-'}}
+                        td(class="num") {{r.limit_price ? amount(r.limit_price, r.market) : '-'}}
+                        td(class="num dx-strong") {{r.qty}}주
+                        td(class="num")
+                            | {{r.qty ? amount(r.cost, r.market) : '-'}}
+                            small(*ngIf="r.qty") 수수료 {{amount(r.fee, r.market)}}
+                        td(class="dx-wrap dx-muted")
+                            div(*ngFor="let n of r.notes") {{n}}
+                        td(class="num")
+                            span(class="dx-tag is-ok", *ngIf="r.ordered") 주문함
+                            button(class="dx-tool is-primary", *ngIf="!r.ordered && r.qty > 0 && reinvest.orders_enabled",
+                                (click)="orderReinvest(r)", [disabled]="!!ordering") {{ordering === r.token ? '주문 중' : '주문'}}
+        p(class="dx-muted div-note", *ngIf="reinvest?.proposals?.length") 제안은 {{reinvest.ttl_sec / 60}}분 동안 유효합니다. 미국은 지정가(현재가 +0.3%), 한국은 호가 단위에 맞춘 지정가로 주문하며, 배당락 전날 매수는 피하도록 안내합니다.
+
+    section(class="dx-card")
         div(class="dx-card-head div-research-head", (click)="showResearch = !showResearch")
             h2 배당락 매매 검증과 타이밍 안내
             small {{showResearch ? '접기' : '펼치기'}}

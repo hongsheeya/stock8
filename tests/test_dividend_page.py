@@ -65,8 +65,9 @@ class DividendPageTests(unittest.TestCase):
             env[name]()
         return ctx.exception
 
-    def seed_cache(self, symbol, market, events, price):
-        cache_dir = os.path.join(self.tmp.name, "data", "live", "dividend", "cache")
+    def seed_cache(self, symbol, market, events, price, mode="live"):
+        cache_dir = os.path.join(self.tmp.name, "data", mode, "dividend", "cache")
+        os.makedirs(cache_dir, exist_ok=True)
         data = DATA.DividendData(cache_dir, DIVIDEND, now=lambda: 0)
         with open(data._path(symbol, market), "w", encoding="utf-8") as handle:
             json.dump({"symbol": symbol, "market": market, "fetched_at": 9e12, "price": price, "events": events}, handle)
@@ -108,6 +109,74 @@ class DividendPageTests(unittest.TestCase):
         self.query = {"symbol": "SCHD", "market": "US"}
         self.call(env, "remove_watch")
         self.assertEqual(json.loads(self.config["user:u1:dividend_watchlist"]), [])
+
+    def reinvest_env(self, mode):
+        os.environ["TRADING_MODE"] = mode
+        env = self.load()
+        os.environ["TRADING_MODE"] = mode
+        env["_TRADING_MODE"] = mode
+        self.orders = []
+        broker = NS(
+            get_current_price=lambda symbol, exchange="NAS": {"price": 34.62, "order_exchange": "AMEX"},
+            get_domestic_current_price=lambda symbol: {"price": 194000},
+            get_buying_power_info=lambda symbol, price, exchange: {"executable_amount": 1000.0},
+            get_domestic_buying_power_info=lambda symbol, price, order_type: {"amount": 10000000},
+            buy_order=lambda *a, **k: self.orders.append((a, k)) or {"order_no": "A1"},
+            buy_domestic_order=lambda *a, **k: self.orders.append((a, k)) or {"order_no": "K1"},
+        )
+        env["wiz"].model("struct").trading.broker_api = broker
+        env["wiz"].model("struct").trading.db = lambda name: NS(insert=lambda row: self.logged.append(row))
+        self.logged = []
+        env["_STATE"].clear()
+        env["_STATE"]["u1"] = {"holdings": [{"symbol": "SCHD", "market": "US", "qty": 300, "exchange": "AMEX"}], "fx": 1400.0}
+        # SCHD paid 0.267 on 2026-09-29 (ex 09-23): 300 x 0.267 x 0.85 = $68.09 -> 1 share at $34.73
+        self.seed_cache("SCHD", "US", [{"ex_date": "2026-06-24", "amount": 0.26, "pay_date": "2026-06-29"},
+                                        {"ex_date": "2026-09-23", "amount": 0.267, "pay_date": "2026-09-29"}], 34.62,
+                        mode="live" if mode == "LIVE" else "paper")
+        return env
+
+    def test_reinvest_plan_and_single_use_order_on_paper(self):
+        env = self.reinvest_env("PAPER")
+        self.query = {"days": "30"}
+        plan = self.call(env, "reinvest_plan").data
+        self.assertTrue(plan["orders_enabled"])
+        row = plan["proposals"][0]
+        self.assertEqual((row["symbol"], row["qty"], row["limit_price"]), ("SCHD", 1, 34.73))
+        self.assertAlmostEqual(row["dividend_net"], 68.09, places=2)
+        self.query = {"token": row["token"]}
+        res = self.call(env, "reinvest_order")
+        self.assertEqual(res.code, 200)
+        args, kwargs = self.orders[0]
+        self.assertEqual(args[:2], ("SCHD", 1))
+        self.assertEqual((kwargs["order_type"], kwargs["price"], kwargs["exchange"]), ("LIMIT", 34.73, "AMEX"))
+        self.assertEqual(self.logged[0]["event_type"], "DIV_REINVEST_BUY")
+        self.assertEqual(self.call(env, "reinvest_order").code, 400)     # the token is single use
+        self.assertEqual(len(self.orders), 1)
+
+    def test_live_server_never_orders(self):
+        env = self.reinvest_env("LIVE")
+        self.query = {"days": "30"}
+        plan = self.call(env, "reinvest_plan").data
+        self.assertFalse(plan["orders_enabled"])
+        self.query = {"token": plan["proposals"][0]["token"]}
+        self.assertEqual(self.call(env, "reinvest_order").code, 403)
+        self.assertEqual(self.orders, [])
+
+    def test_expired_proposal_is_refused_and_small_dividends_accumulate(self):
+        env = self.reinvest_env("PAPER")
+        self.query = {"days": "30"}
+        plan = self.call(env, "reinvest_plan").data
+        token = plan["proposals"][0]["token"]
+        env["_STATE"]["u1"]["proposals"][token]["expires"] = 0
+        self.query = {"token": token}
+        self.assertEqual(self.call(env, "reinvest_order").code, 400)
+        self.assertEqual(self.orders, [])
+        env["_STATE"]["u1"]["holdings"][0]["qty"] = 100   # $22.70 < one share
+        self.query = {"days": "30"}
+        row = self.call(env, "reinvest_plan").data["proposals"][0]
+        self.assertEqual(row["qty"], 0)
+        self.assertIn("적립", " ".join(row["notes"]))
+        self.assertEqual(row["token"], "")
 
     def test_login_required(self):
         self.uid = ""
