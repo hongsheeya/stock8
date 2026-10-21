@@ -756,6 +756,12 @@ class DomesticDaytradeEngine:
             "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
             "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
             "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "10"), 10)),
+            # 10-21, a year of KIS 1m bars (2025-10-16..2026-10-20, 613 trades):
+            # the 09:15 rule made +14.1% on the seed (quarters -5.6/0.0/-6.1/
+            # +28.9). Entries from 10:00 and no new entries on days the index
+            # gapped up >= 1%: +35.5%, max drawdown -18.9% -> -13.1%, quarters
+            # -3.5/+11.5/+12.8/+11.6. Gap-up days fade after the open.
+            "skip_gap_up_pct": max(0.0, self._safe_float(self._config(prefix + "skip_gap_up_pct", "0"), 0)),
             # A stop-loss shuts the ETF for the rest of its session (12 h covers
             # either market's day without reaching the next one).
             "stop_block_hours": max(0, self._safe_int(self._config(prefix + "stop_block_hours", "12"), 12)),
@@ -842,6 +848,10 @@ class DomesticDaytradeEngine:
         day_open = self._safe_float(bars[0].get("open", 0), 0) or self._safe_float(bars[0].get("close", 0), 0)
         close = self._safe_float((bar or {}).get("close", 0), 0)
         vwap = self._safe_float((bar or {}).get("vwap", 0), 0)
+        # The official previous close (KIS quote) first: earlier sessions come
+        # from Yahoo bars that stop at 15:00, before the closing auction.
+        prev_close = self._safe_float((bar or {}).get("quote_prev_close", 0), 0) or self._safe_float((session or {}).get("prev_close", 0), 0)
+        gap_pct = round((day_open / prev_close - 1) * 100, 3) if prev_close > 0 and day_open > 0 else None
         minutes = self._regime_signal_bar_minutes(market)
         if minutes > 0:
             closed = self._regime_closed_bar(bars, market, minutes)
@@ -865,6 +875,7 @@ class DomesticDaytradeEngine:
                  and str(self._config("daytrade_ks_kis_minute_bars", "true") or "true").strip().lower() in ("1", "true", "yes", "on")
                  and str((bars[-1] or {}).get("bar_source", "") or "") != "kis_minute")
         return {**view, "ok": True, "trend": trend, "reversed": reversed_, "move_pct": round(move, 3), "stale": stale,
+                "gap_pct": gap_pct,
                 "proxy_close": close, "proxy_vwap": round(vwap, 4), "proxy_open": day_open,
                 "reason": f"지수 {proxy} {move:+.2f}% · VWAP {'아래' if below else '위'}"}
 
@@ -1102,6 +1113,8 @@ class DomesticDaytradeEngine:
             pass
         elif view.get("stale"):
             signal["reason"] = f"지수 {view.get('proxy', '')} 실시간 분봉 지연(대체 데이터) — 신규 진입 보류"
+        elif params.get("skip_gap_up_pct", 0) > 0 and view.get("gap_pct") is not None and view["gap_pct"] >= params["skip_gap_up_pct"]:
+            signal["reason"] = f"갭상승일(지수 {view.get('proxy', '')} 시가 {view['gap_pct']:+.2f}%) — 오늘은 신규 진입 쉬기"
         elif not (params["start"] <= now_hm <= params["end"]):
             signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
         elif self._regime_trend_stopped(state, params["stop_block_hours"]):
