@@ -114,6 +114,12 @@ _LOC_RESERVATION_END_STANDARD_HHMM = 2320
 _LOC_RESERVATION_END_SUMMER_HHMM = 2220
 _LOC_RESERVATION_VERIFY_VERSION = "firegate-authoritative-v3"
 _LOC_RESERVATION_PROCESS_LOCK = _sys.__dict__.setdefault('_stock8_loc_reservation_process_lock', threading.Lock())
+# 10-22 coin automation (admin only, LIVE process only; see coin_engine.py).
+COIN_HARD_LOCKED = str(_os.environ.get("STOCK8_COIN_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
+_COIN_POLICY_KEY = "coin_policy_v1"
+_COIN_WORKER_KEY = "_stock8_live_coin_worker"
+_COIN_WORKER_LOCK = _sys.__dict__.setdefault("_stock8_live_coin_worker_lock", threading.Lock())
+_COIN_POLICY_LOCK = _sys.__dict__.setdefault("_stock8_coin_policy_lock", threading.RLock())
 _PAPER_WORKER_OWNER_KEY = "paper_worker_owner_user_id"
 
 
@@ -942,6 +948,10 @@ class Struct:
             return
         if not PAPER_MODE:
             self._ensure_live_policy_workers()
+            try:
+                self._ensure_live_coin_worker()
+            except Exception as exc:
+                print(f"Stock8 coin worker start failed: {type(exc).__name__}")
             return
         owner = str(owner or self._current_user_id() or "").strip()
         if not owner:
@@ -1131,6 +1141,190 @@ class Struct:
                 time.sleep(5)
         thread = threading.Thread(target=dispatch, daemon=True, name='stock8-live-policy-dispatch')
         registry['thread'] = thread
+        thread.start()
+
+    # ------------------------------------------------------------------ coin
+    def coin_policy_read(self):
+        """The coin policy row, read straight from the DB (never the cache)."""
+        engine_cls = self.model("coin_engine")
+        row = self.orm.use("trading_config", module="trading").get(key=_COIN_POLICY_KEY)
+        try:
+            raw = _json.loads((row or {}).get("value", "") or "{}")
+        except (ValueError, TypeError):
+            raw = {}
+        return engine_cls.normalize_policy(raw)
+
+    def coin_policy_write(self, updates):
+        """Merge updates into the policy row; stamps the session owner."""
+        uid = str(self._current_user_id() or "")
+        if not uid or not self._current_user_is_admin(uid):
+            raise PermissionError("코인 설정은 관리자만 바꿀 수 있습니다.")
+        if PAPER_MODE:
+            raise PermissionError("코인 자동매매는 실투자 서버(3001)에서만 관리합니다.")
+        engine_cls = self.model("coin_engine")
+        with _COIN_POLICY_LOCK:
+            policy = self.coin_policy_read()
+            policy.update(updates or {})
+            policy["owner_user_id"] = uid
+            policy["updated_at"] = _kst_now().strftime("%Y-%m-%d %H:%M:%S")
+            policy = engine_cls.normalize_policy(policy)
+            self._write_config_value(_COIN_POLICY_KEY, _json.dumps(policy, ensure_ascii=False), "Coin automation policy (admin)", False)
+        registry = _sys.__dict__.get(_COIN_WORKER_KEY) or {}
+        wake = registry.get("wake")
+        if wake is not None:
+            wake.set()
+        return policy
+
+    def coin_keys(self, owner):
+        owner = str(owner or "").strip()
+        if not owner:
+            return "", ""
+        access = self._lookup_config_value(self._user_config_key(owner, "upbit_access_key"), "")
+        secret = self._lookup_config_value(self._user_config_key(owner, "upbit_secret_key"), "")
+        return str(access or ""), str(secret or "")
+
+    def coin_save_keys(self, owner, access_key, secret_key):
+        for name, value in (("upbit_access_key", access_key), ("upbit_secret_key", secret_key)):
+            self._write_config_value(self._user_config_key(owner, name), str(value or ""), f"Upbit {name} (encrypted)", True)
+
+    def coin_data_dirs(self, owner):
+        root = wiz.project.fs().abspath("data/live/coin")
+        engine_cls = self.model("coin_engine")
+        return _os.path.join(root, engine_cls.owner_scope(owner)), _os.path.join(root, "candles"), root
+
+    def _coin_order_guard(self, method, path, params, info):
+        """Re-checked before every Upbit POST/DELETE (UpbitApi fails closed without it)."""
+        if PAPER_MODE or COIN_HARD_LOCKED:
+            raise PermissionError("이 서버에서는 코인 주문이 잠겨 있습니다.")
+        policy = self.coin_policy_read()
+        owner = str(self._current_user_id() or "")
+        if policy["mode"] != "live":
+            raise PermissionError("코인 실거래 모드가 아닙니다.")
+        if not owner or owner != policy["owner_user_id"] or not self._current_user_is_admin(owner):
+            raise PermissionError("코인 실거래 소유자(관리자) 확인 실패")
+        access, _secret = self.coin_keys(owner)
+        engine_cls = self.model("coin_engine")
+        if not policy["account_fp"] or engine_cls.account_fingerprint(access) != policy["account_fp"]:
+            raise PermissionError("업비트 키가 실거래 승인 때와 다릅니다. 다시 승인해주세요.")
+        market = str((info or {}).get("market") or (params or {}).get("market") or "")
+        if market and market not in engine_cls.ALL_MARKETS:
+            raise PermissionError(f"허용되지 않은 마켓: {market}")
+        if (info or {}).get("side") == "bid":
+            if market not in policy["markets"]:
+                raise PermissionError(f"운용 대상이 아닌 마켓 매수: {market}")
+            if float((info or {}).get("krw") or 0) > float(policy["max_order_krw"]) + 1:
+                raise PermissionError(f"1회 주문 한도 ₩{policy['max_order_krw']:,} 초과")
+
+    def _coin_log(self, event, market, action, message, payload, price=0.0, order_no=""):
+        self.db("trade_log").insert({
+            "cycle_id": f"coin:{market or 'all'}",
+            "symbol": market or "COIN",
+            "event_type": event,
+            "action": action,
+            "order_no": str(order_no or ""),
+            "order_price": float(price or 0),
+            "order_qty": 0,
+            "filled_price": float(price or 0) if action in ("BUY", "SELL") else 0,
+            "filled_qty": 0,
+            "message": str(message or "")[:2000],
+            "raw_response": _json.dumps({"market": "COIN", "exchange": "UPBIT", "currency": "KRW", **(payload or {})}, ensure_ascii=False, default=str),
+        })
+
+    def coin_build_engine(self, policy, owner):
+        engine_cls = self.model("coin_engine")
+        api_cls = self.model("upbit_api")
+        strategy = self.model("coin_strategy")
+        access, secret = self.coin_keys(owner)
+        if policy["mode"] == "live" and not (access and secret):
+            raise RuntimeError("업비트 API 키가 없어 실거래를 시작할 수 없습니다.")
+        guard = self._coin_order_guard if policy["mode"] == "live" else None
+        api = api_cls(access, secret, order_guard=guard)
+        state_dir, candle_dir, _root = self.coin_data_dirs(owner)
+        return engine_cls(api, state_dir, candle_dir, policy, strategy, log=self._coin_log, error_cls=api_cls.Error)
+
+    def coin_worker_status(self):
+        registry = _sys.__dict__.get(_COIN_WORKER_KEY) or {}
+        thread = registry.get("thread")
+        return {
+            "process": "LIVE" if not PAPER_MODE else "PAPER",
+            "hard_locked": COIN_HARD_LOCKED,
+            "alive": bool(thread and thread.is_alive()),
+            **{k: v for k, v in registry.items() if k not in ("thread", "wake", "lock_handle")},
+        }
+
+    def _coin_process_lock(self):
+        """Non-blocking OS file lock held for the worker's lifetime: a second
+        LIVE process on the same data never trades (released on exit)."""
+        _state_dir, _candles, root = self.coin_data_dirs("lock")
+        _os.makedirs(root, exist_ok=True)
+        handle = open(_os.path.join(root, "worker.lock"), "a+")
+        try:
+            if _os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except OSError:
+            handle.close()
+            return None
+
+    def _ensure_live_coin_worker(self):
+        if PAPER_MODE or COIN_HARD_LOCKED:
+            return
+        with _COIN_WORKER_LOCK:
+            if _sys.__dict__.get(_COIN_WORKER_KEY) is not None:
+                return
+            registry = {"status": "starting", "error": "", "last_check": "", "wake": threading.Event()}
+            _sys.__dict__[_COIN_WORKER_KEY] = registry
+
+        def coin_job():
+            import flask
+            # Every pass runs inside a request context (wiz.model / fs / ORM
+            # need one); the session owner is set only when the policy is ON.
+            with wiz.server.app.flask.test_request_context("/"):
+                registry["lock_handle"] = self._coin_process_lock()
+            if registry["lock_handle"] is None:
+                registry["status"] = "locked_elsewhere"
+                return
+            engine, engine_sig, trading = None, None, None
+            while True:
+                delay = 15.0
+                try:
+                    with wiz.server.app.flask.test_request_context("/"):
+                        policy = self.coin_policy_read()
+                        owner = policy["owner_user_id"]
+                        if policy["mode"] == "off" or not owner or not self.orm.use("user").get(id=owner) \
+                                or not self._current_user_is_admin(owner):
+                            registry["status"] = "off"  # strict no-op: no Upbit call at all
+                            engine, engine_sig = None, None
+                        else:
+                            flask.session["id"] = owner
+                            if trading is None:
+                                trading = Struct()
+                            sig = (owner, policy["mode"], policy["account_fp"])
+                            if engine is None or engine_sig != sig:
+                                engine = trading.coin_build_engine(policy, owner)
+                                engine_sig = sig
+                            else:
+                                engine.update_policy(policy)
+                            result = engine.step()
+                            delay = float(result.get("next_delay", 10) or 10)
+                            registry["status"] = policy["mode"]
+                    registry["last_check"] = _kst_now().isoformat()
+                    registry["error"] = ""
+                except Exception as exc:
+                    registry["status"] = "error"
+                    registry["error"] = str(exc)[:200]
+                    engine, engine_sig = None, None
+                    delay = 30.0
+                registry["wake"].wait(delay)
+                registry["wake"].clear()
+
+        thread = threading.Thread(target=coin_job, daemon=True, name="stock8-live-coin")
+        registry["thread"] = thread
         thread.start()
 
     def _worker_interval_sec(self):

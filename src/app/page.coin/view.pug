@@ -1,0 +1,199 @@
+div(*ngIf="loading", class="dx-page")
+    div(class="dx-empty") 코인 화면을 준비하고 있습니다…
+
+div(*ngIf="!loading", class="dx-page coin-page")
+    div(class="dx-head")
+        div(class="dx-title")
+            h1 코인 자동매매
+            span(class="dx-chip", [class.is-off]="mode === 'off'", [class.is-warn]="mode === 'shadow'", [class.is-live]="mode === 'live'")
+                i
+                | {{modeLabel}}
+            span(class="dx-chip is-off") 업비트 · 관리자 전용
+        div(class="dx-tools")
+            span(class="dx-updated", *ngIf="engine?.updated_at") {{kst(engine.updated_at)}} 기준
+            button(class="dx-tool", (click)="load(false)", [disabled]="refreshing") {{refreshing ? '갱신 중' : '새로고침'}}
+
+    div(class="dx-alerts")
+        div(class="dx-alert is-danger", *ngIf="errorMessage")
+            strong 확인 필요
+            span {{errorMessage}}
+            button((click)="errorMessage = ''") 닫기
+        div(class="dx-alert is-ok", *ngIf="notice")
+            strong 완료
+            span {{notice}}
+            button((click)="notice = ''") 닫기
+        div(class="dx-alert is-warn", *ngIf="data && !data.available")
+            strong 실투자 서버 전용
+            span 코인 자동매매는 실투자 서버에서만 설정하고 실행합니다.
+            a(class="dx-tool", [href]="data.live_url") 실투자 화면으로
+        div(class="dx-alert is-danger", *ngIf="workerStatus")
+            strong 실행 상태
+            span {{workerStatus}}
+        div(class="dx-alert is-danger", *ngIf="activeLedger?.halted || engine?.halted")
+            strong 신규 진입 중단
+            span {{engine?.halt_reason || activeLedger?.halt_reason}}
+            button(class="dx-tool", (click)="resume()", [disabled]="!!busy") 다시 허용
+        div(class="dx-alert is-warn", *ngIf="mode !== 'live' && liveOpenPositions.length")
+            strong 실거래 보유 코인
+            span {{liveOpenPositions.join(', ')}} — 실거래 모드가 아니라 자동 손절 관리가 멈춰 있습니다. 업비트에서 직접 관리하거나 실거래를 다시 켜세요.
+        div(class="dx-alert is-info", *ngIf="mode === 'off'")
+            strong 꺼짐
+            span 업비트를 전혀 호출하지 않습니다. 먼저 '모의 운용'으로 신호와 가상 체결을 지켜본 뒤 실거래를 켜는 것을 권장합니다.
+
+    div(class="dx-kpis")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 평가금액
+            div(class="dx-kpi-value") {{krw(engine?.equity || activeLedger?.equity || data?.policy?.seed_krw)}}
+            div(class="dx-kpi-sub") 시드 {{krw(data?.policy?.seed_krw)}} · {{modeLabel}} 장부
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 손익
+            div(class="dx-kpi-value", [class]="tone(equityChange())") {{signedKrw(equityChange())}}
+            div(class="dx-kpi-sub") 실현 {{signedKrw(activeLedger?.realized_krw || 0)}} · 거래 {{activeLedger?.trades || 0}}회
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 보유 코인
+            div(class="dx-kpi-value") {{(activeLedger?.open_positions || []).length}}개
+            div(class="dx-kpi-sub") {{(activeLedger?.open_positions || []).join(', ') || '모두 현금 대기'}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 다음 판단
+            div(class="dx-kpi-value is-muted") {{mode === 'off' ? '-' : kst(engine?.next_decision_at)}}
+            div(class="dx-kpi-sub") 4시간봉 마감 직후 (09·13·17·21·01·05시)
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 코인별 현황
+                span(class="dx-count") {{sleeves.length}}
+            small 55개 4시간봉 고점을 넘고 50일선 위에서 마감하면 매수, 손절가 아래로 내려가면 매도
+        div(class="dx-empty", *ngIf="!sleeves.length") {{mode === 'off' ? '모드를 켜면 현황이 표시됩니다.' : '첫 판단을 준비하고 있습니다.'}}
+        div(class="dx-table-wrap", *ngIf="sleeves.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 코인
+                        th 상태
+                        th(class="num") 현재가·종가
+                        th(class="num") 55봉 고점
+                        th(class="num") 50일선
+                        th(class="num") 손절가
+                        th(class="num") 평가
+                        th 최근 판단
+                tbody
+                    tr(*ngFor="let r of sleeves; trackBy: trackByMarket")
+                        td
+                            div(class="dx-sym")
+                                strong {{r.market.replace('KRW-', '')}}
+                                small {{coinName(r.market)}}
+                        td
+                            span(class="dx-tag", [class.is-buy]="r.long", [class.is-warn]="r.pending") {{stateLabel(r)}}
+                        td(class="num") {{price(r.price)}}
+                        td(class="num") {{price(r.indicators?.donchian_high)}}
+                        td(class="num") {{price(r.indicators?.sma50d)}}
+                        td(class="num") {{r.long ? price(r.stop) : '-'}}
+                        td(class="num")
+                            | {{krw(r.value)}}
+                            small([class]="tone(r.unrealized_krw)", *ngIf="r.long") {{signedKrw(r.unrealized_krw)}}
+                        td(class="dx-wrap dx-muted") {{r.last_reason || '-'}}
+
+    div(class="dx-grid-2")
+        section(class="dx-card")
+            div(class="dx-card-head")
+                h2 운용 설정
+                small 꺼짐은 아무 것도 하지 않습니다
+            div(class="coin-field")
+                label 모드
+                div(class="dx-seg")
+                    button([class.is-on]="mode === 'off'", (click)="setMode('off')", [disabled]="!!busy || !data?.available") 꺼짐
+                    button([class.is-on]="mode === 'shadow'", (click)="setMode('shadow')", [disabled]="!!busy || !data?.available") 모의 운용
+                    button([class.is-on]="mode === 'live'", (click)="setMode('live')", [disabled]="!!busy || !data?.available") 실거래
+            div(class="coin-confirm", *ngIf="showLiveConfirm")
+                p 실거래를 켜면 시드 {{krw(data?.policy?.seed_krw)}} 안에서 업비트에 실제 시장가 주문을 냅니다. 업비트에는 서버 손절 주문이 없어서, 이 PC가 꺼져 있으면 손절도 멈춥니다.
+                p 확인 문구 '{{data?.live_confirm_text}}'를 입력하세요. 30분 안에 통과한 연결 테스트가 필요합니다.
+                div(class="coin-row")
+                    input(class="dx-input", [(ngModel)]="liveConfirm", placeholder="실거래 시작")
+                    button(class="dx-tool is-danger", (click)="confirmLive()", [disabled]="!!busy") 실거래 켜기
+                    button(class="dx-tool", (click)="showLiveConfirm = false") 취소
+            div(class="coin-field")
+                label 시드 (원)
+                input(class="dx-input", type="number", [(ngModel)]="form.seed_krw", min="50000", step="10000")
+            div(class="coin-field")
+                label 1회 주문 한도 (원)
+                input(class="dx-input", type="number", [(ngModel)]="form.max_order_krw", min="0", step="10000", placeholder="0 = 코인당 시드의 2배")
+            div(class="coin-field")
+                label 운용 코인
+                div(class="coin-markets")
+                    label(*ngFor="let m of data?.all_markets || []")
+                        input(type="checkbox", [(ngModel)]="form.markets[m]")
+                        span {{m.replace('KRW-', '')}}
+                        small(*ngIf="m === 'KRW-DOGE'") 호가 단위가 커서 비용 큼
+            div(class="coin-actions")
+                button(class="dx-tool is-primary", (click)="saveSettings()", [disabled]="!!busy || !data?.available") 저장
+                small 시드는 코인 수로 똑같이 나눠 코인마다 따로 운용합니다.
+
+        section(class="dx-card")
+            div(class="dx-card-head")
+                h2 업비트 연결
+                span(class="dx-tag", [class.is-ok]="keysConfigured") {{keysConfigured ? '등록됨 ' + (data?.keys?.access_hint || '') : '미등록'}}
+            div(class="coin-field")
+                label Access Key
+                input(class="dx-input", type="password", autocomplete="off", [(ngModel)]="keyForm.access_key", placeholder="업비트 Open API Access Key")
+            div(class="coin-field")
+                label Secret Key
+                input(class="dx-input", type="password", autocomplete="off", [(ngModel)]="keyForm.secret_key", placeholder="업비트 Open API Secret Key")
+            div(class="coin-actions")
+                button(class="dx-tool is-primary", (click)="saveKeys()", [disabled]="!!busy || !data?.available || !keyForm.access_key || !keyForm.secret_key") 키 저장
+                button(class="dx-tool", (click)="testConnection()", [disabled]="!!busy || !keysConfigured") {{busy === 'test' ? '확인 중' : '연결 테스트'}}
+                button(class="dx-tool is-danger", (click)="deleteKeys()", [disabled]="!!busy || !keysConfigured") 삭제
+            div(class="coin-conn", *ngIf="data?.connection?.at")
+                div(*ngIf="data.connection.ok")
+                    | 연결 성공 · {{kst(data.connection.at)}} · 주문 가능 원화 {{krw(data.connection.krw)}}
+                    span(*ngIf="data.connection.coins?.length")  · 보유 코인 {{data.connection.coins.length}}종
+                div(class="dx-down", *ngIf="!data.connection.ok") {{data.connection.message}}
+            ul(class="coin-notes")
+                li 키는 암호화해서 저장하고 화면에 다시 보여주지 않습니다.
+                li 업비트에서 키를 만들 때 이 PC의 공인 IP를 허용 IP로 등록하세요.
+                li 권한은 자산조회·주문조회·주문하기만 켜고, 출금은 꼭 끄세요.
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 최근 기록
+                span(class="dx-count") {{data?.events?.length || 0}}
+            small 매수·매도·보류·오류 (모의 운용 기록은 '모의'로 표시)
+        div(class="dx-empty", *ngIf="!data?.events?.length") 아직 기록이 없습니다.
+        div(class="dx-table-wrap", *ngIf="data?.events?.length")
+            table(class="dx-table")
+                tbody
+                    tr(*ngFor="let e of data.events")
+                        td(class="dx-muted") {{e.created}}
+                        td
+                            span(class="dx-tag", [ngClass]="eventTone(e.event_type)") {{eventLabel(e.event_type)}}
+                        td(class="dx-wrap") {{e.message}}
+
+    section(class="dx-card dx-details")
+        div(class="dx-card-head coin-research-head", (click)="showResearch = !showResearch")
+            h2 전략 검증 요약
+            small {{showResearch ? '접기' : '펼치기'}}
+        div(*ngIf="showResearch", class="coin-research")
+            p 규칙: 4시간봉 종가가 직전 55개 봉의 고점을 넘고 일봉 50일선 위면 매수합니다. 매수 뒤 최고가에서 ATR(14)×2를 뺀 손절가를 올려가며 그 아래로 내려가면 매도합니다. 설정값은 검증 전에 고정했고 바꾸지 않습니다.
+            table(class="dx-table")
+                thead
+                    tr
+                        th 구간
+                        th(class="num") 수익
+                        th(class="num") 최대 낙폭
+                        th 비고
+                tbody
+                    tr
+                        td 2019-10 ~ 2025-10 (처음 보는 6년)
+                        td(class="num dx-up") 연 +20.0%
+                        td(class="num") -14.6%
+                        td 6년 중 5년 플러스 · 비용 0.1%+호가 반 칸
+                    tr
+                        td 2025-10 ~ 2026-10 (하락장 1년)
+                        td(class="num") +1.2%
+                        td(class="num") -7.7%
+                        td 같은 기간 단순 보유 -47.8%
+                    tr
+                        td 비용 2배 가정 (6년)
+                        td(class="num") 연 +14.8%
+                        td(class="num") -16.7%
+                        td 낙폭 기준(-15%)은 넘음
+            p(class="dx-muted") 하락장에서는 대부분 현금으로 기다리고, 상승장의 일부를 가져가는 추세 추종입니다. 손실 나는 달이 더 많고 수익은 큰 상승 몇 번에 몰립니다. 미리 정한 계획은 모의 운용 8주(진입 15회 이상)로 실제 신호가 검증과 같은지 확인한 뒤 소액 실거래입니다.
