@@ -115,6 +115,18 @@ class RegimeTrendTests(unittest.TestCase):
         self.assertEqual(signal["action"], "HOLD")
         self.assertIn("지연", signal["reason"])
 
+    def test_gap_up_day_skips_new_entries_when_configured(self):
+        snaps = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        snaps["069500"][1]["quote_prev_close"] = 98.8  # opened +1.21% above the previous close
+        engine = self._engine(snaps)
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+        engine._config = lambda key, default=None: "1.0" if key == "daytrade_regime_trend_skip_gap_up_pct" else default
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("갭상승일", signal["reason"])
+        snaps["069500"][1]["quote_prev_close"] = 99.5  # +0.5% gap: trades
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
