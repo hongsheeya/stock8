@@ -1126,6 +1126,38 @@ class KisApi:
             cursor = (_dt.datetime.strptime(oldest, "%H%M%S") - _dt.timedelta(minutes=1)).strftime("%H%M%S")
         return [bars[key] for key in sorted(bars)]
 
+    # =========================================================================
+    # 배당 일정 (10-22, 배당 관리 화면). Real-account-only quotations: the
+    # mock domain does not serve them, so PAPER falls back to yfinance.
+    # =========================================================================
+    def get_domestic_dividend_schedule(self, symbol, from_ymd, to_ymd):
+        """예탁원정보(배당일정) [국내주식-145]: record dates, cash dividend per
+        share and pay dates. Returns [] on the mock account."""
+        if not self.is_real:
+            return []
+        params = {"CTS": "", "GB1": "0", "F_DT": str(from_ymd), "T_DT": str(to_ymd),
+                  "SHT_CD": str(symbol or ""), "HIGH_GB": ""}
+        data = self._request("GET", "/uapi/domestic-stock/v1/ksdinfo/dividend", "HHKDB669102C0", params=params, retries=1)
+        if not data or data.get("rt_cd") != "0":
+            msg = data.get("msg1", "Unknown error") if data else "No response"
+            raise Exception(f"국내 배당일정 조회 실패 [{symbol}]: {msg}")
+        rows = data.get("output1") or []
+        return rows if isinstance(rows, list) else [rows]
+
+    def get_overseas_rights_schedule(self, symbol, from_ymd="", to_ymd="", country="US"):
+        """해외주식 권리종합 [해외주식-050]: ex-date (div_lock_dt), record and
+        pay dates (default window -3..+3 months). Returns [] on mock."""
+        if not self.is_real:
+            return []
+        params = {"NCOD": str(country or "US"), "SYMB": str(symbol or "").upper(),
+                  "ST_YMD": str(from_ymd or ""), "ED_YMD": str(to_ymd or "")}
+        data = self._request("GET", "/uapi/overseas-price/v1/quotations/rights-by-ice", "HHDFS78330900", params=params, retries=1)
+        if not data or data.get("rt_cd") != "0":
+            msg = data.get("msg1", "Unknown error") if data else "No response"
+            raise Exception(f"해외 권리일정 조회 실패 [{symbol}]: {msg}")
+        rows = data.get("output1") or []
+        return rows if isinstance(rows, list) else [rows]
+
     def get_domestic_minute_bars_for_day(self, symbol, day, since_hhmmss="090000", max_pages=6):
         """A past day's domestic 1-minute bars, oldest first (KIS 주식일별분봉조회).
 

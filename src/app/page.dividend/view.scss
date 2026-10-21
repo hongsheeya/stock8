@@ -1,0 +1,129 @@
+:host {
+    display: block;
+    height: 100%;
+}
+
+.div-page .dx-kpi-value {
+    font-variant-numeric: tabular-nums;
+}
+
+.div-meter {
+    height: 6px;
+    margin-top: 8px;
+    border-radius: 999px;
+    background: var(--bn-elevated);
+    overflow: hidden;
+}
+
+.div-meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--bn-primary);
+
+    &.is-high {
+        background: #d97706;
+    }
+}
+
+.div-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.div-bars {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 6px;
+    align-items: end;
+    padding-top: 4px;
+}
+
+.div-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 0;
+}
+
+.div-bar-value {
+    min-height: 16px;
+    font-size: 10px;
+    text-align: center;
+    color: var(--bn-muted-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+}
+
+.div-bar-track {
+    position: relative;
+    height: 120px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bn-elevated) 60%, transparent);
+    display: flex;
+    align-items: flex-end;
+}
+
+.div-bar-fill {
+    width: 100%;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bn-primary) 35%, transparent);
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+}
+
+.div-bar-confirmed {
+    width: 100%;
+    background: var(--bn-primary);
+}
+
+.div-bar-label {
+    font-size: 11px;
+    text-align: center;
+    color: var(--bn-muted);
+}
+
+.div-add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+
+    .dx-input {
+        min-width: 160px;
+    }
+}
+
+.div-research-head {
+    cursor: pointer;
+    margin-bottom: 0;
+}
+
+.div-research {
+    margin-top: 10px;
+
+    p {
+        margin: 0 0 10px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--bn-muted-strong);
+    }
+
+    .dx-table {
+        margin-bottom: 10px;
+    }
+}
+
+@media (max-width: 720px) {
+    .div-bars {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .div-bar-value {
+        display: none;
+    }
+}

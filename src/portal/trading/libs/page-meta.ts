@@ -18,6 +18,7 @@ const PAGES: { pattern: RegExp; meta: PageMeta }[] = [
     { pattern: /^\/access\/?$/, meta: { title: '로그인 · 회원가입', description: SITE_DESCRIPTION, index: true } },
     { pattern: /^\/dashboard\/?$/, meta: { title: '대시보드', trail: [] } },
     { pattern: /^\/infinite-buy\/?$/, meta: { title: '무한매수', trail: [HOME] } },
+    { pattern: /^\/dividend\/?$/, meta: { title: '배당', trail: [HOME] } },
     { pattern: /^\/daytrade\/us\/?$/, meta: { title: '미국 단타', trail: [HOME, { label: '단타', path: '/daytrade' }] } },
     { pattern: /^\/daytrade\/?$/, meta: { title: '단타', trail: [HOME] } },
     { pattern: /^\/history\/?$/, meta: { title: '거래 이력', trail: [HOME] } },

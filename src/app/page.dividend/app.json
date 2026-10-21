@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.dividend",
+    "title": "/dividend",
+    "namespace": "dividend",
+    "viewuri": "/dividend",
+    "category": "dividend",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-dividend()"
+}
