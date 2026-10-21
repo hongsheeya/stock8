@@ -16,7 +16,7 @@ STRATEGY = "paper_regime_trend"
 
 
 def _snap(open_price, close, vwap, date=TODAY):
-    session = {"date": date, "bars": [{"open": open_price, "close": open_price}]}
+    session = {"date": date, "bars": [{"open": open_price, "close": open_price, "bar_source": "kis_minute"}]}
     return session, {"close": close, "vwap": vwap, "price_source": "kis_domestic_quote"}
 
 
@@ -106,6 +106,14 @@ class RegimeTrendTests(unittest.TestCase):
         self.assertIn("449450", [r["symbol"] for r in engine._with_regime_trend_candidates([], {}, market="KS")])
         with patch.object(daytrade_engine, "_PAPER_MODE", False):
             self.assertNotIn("449450", engine._regime_trend_pairs("KS"))
+
+    def test_delayed_index_bars_hold_new_entries(self):
+        snaps = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        self.assertEqual(self._signal(self._engine(snaps))["action"], "BUY1")
+        snaps["069500"][0]["bars"][-1].pop("bar_source")  # Yahoo fallback bars carry no source
+        signal = self._signal(self._engine(snaps))
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("지연", signal["reason"])
 
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})

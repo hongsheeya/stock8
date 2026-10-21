@@ -858,7 +858,13 @@ class DomesticDaytradeEngine:
             trend, reversed_ = (not below) and move >= params["move_pct"], below
         if params.get("exit_mode") == "open":
             reversed_ = move > 0 if side == "BEAR" else move < 0
-        return {**view, "ok": True, "trend": trend, "reversed": reversed_, "move_pct": round(move, 3),
+        # 10-21 PAPER 12:37: the KIS minute fetch hit the shared call limit and
+        # the index fell back to Yahoo bars (about 20 minutes late). Exits may
+        # still use them (stops run on the live quote), new entries may not.
+        stale = (not self._is_us_market(market)
+                 and str(self._config("daytrade_ks_kis_minute_bars", "true") or "true").strip().lower() in ("1", "true", "yes", "on")
+                 and str((bars[-1] or {}).get("bar_source", "") or "") != "kis_minute")
+        return {**view, "ok": True, "trend": trend, "reversed": reversed_, "move_pct": round(move, 3), "stale": stale,
                 "proxy_close": close, "proxy_vwap": round(vwap, 4), "proxy_open": day_open,
                 "reason": f"지수 {proxy} {move:+.2f}% · VWAP {'아래' if below else '위'}"}
 
@@ -1036,6 +1042,8 @@ class DomesticDaytradeEngine:
             signal["reason"] = "이 시장은 방향 추세 " + ("롱" if "BULL" in self._regime_trend_sides(market) else "인버스") + " ETF만 진입합니다"
         elif not view.get("ok"):
             pass
+        elif view.get("stale"):
+            signal["reason"] = f"지수 {view.get('proxy', '')} 실시간 분봉 지연(대체 데이터) — 신규 진입 보류"
         elif not (params["start"] <= now_hm <= params["end"]):
             signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
         elif self._regime_trend_stopped(state, params["stop_block_hours"]):
