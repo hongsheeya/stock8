@@ -317,6 +317,46 @@ def financial_income_year(items, today):
             "limit_krw": FIN_INCOME_LIMIT_KRW, "used_pct": round(total / FIN_INCOME_LIMIT_KRW * 100, 1)}
 
 
+def received(items, today, days=30):
+    """Dividends paid in (today - days, today] per holding, after tax, in
+    the listing currency (USD for US, KRW for Korea). An estimate: the
+    current quantity stands in for the quantity held on each ex-date."""
+    start = today - datetime.timedelta(days=days)
+    out = []
+    for holding, profile, _fx in items:
+        market = holding.get("market") or "KS"
+        qty = float(holding.get("qty") or 0)
+        lag = profile.get("lag_days") or 21
+        paid = []
+        for e in profile.get("history") or []:
+            pay = e.get("pay_date") or (e["ex_date"] + datetime.timedelta(days=lag))
+            if start < pay <= today:
+                paid.append({"ex_date": e["ex_date"], "pay_date": pay, "amount": float(e["amount"])})
+        net = sum(p["amount"] for p in paid) * qty * (1 - tax_rate(market))
+        if paid and net > 0:
+            out.append({"symbol": holding.get("symbol"), "market": market, "currency": "USD" if is_us(market) else "KRW",
+                        "net": round(net, 2 if is_us(market) else 0), "payments": paid, "qty_held": qty})
+    return out
+
+
+def krx_tick(price):
+    """KRX tick size (2023 rules, stocks)."""
+    price = float(price)
+    for limit, tick in ((2000, 1), (5000, 5), (20000, 10), (50000, 50), (200000, 100), (500000, 500)):
+        if price < limit:
+            return tick
+    return 1000
+
+
+def limit_price(market, price, buffer=0.003):
+    """A buy limit a little above the last price so a normal market fills it."""
+    raw = float(price) * (1 + buffer)
+    if is_us(market):
+        return round(raw + 0.004999, 2)
+    tick = krx_tick(raw)
+    return float(int(-(-raw // tick)) * tick)
+
+
 class Dividend:
     US_TAX = US_TAX
     KR_TAX = KR_TAX
@@ -331,6 +371,9 @@ class Dividend:
     holding_view = staticmethod(holding_view)
     monthly_cashflow = staticmethod(monthly_cashflow)
     financial_income_year = staticmethod(financial_income_year)
+    received = staticmethod(received)
+    krx_tick = staticmethod(krx_tick)
+    limit_price = staticmethod(limit_price)
 
 
 Model = Dividend

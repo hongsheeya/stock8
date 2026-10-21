@@ -15,6 +15,10 @@ export class Component implements OnInit, OnDestroy {
     public fetching: boolean = false;
     public showResearch: boolean = false;
     public watchForm: any = { market: 'US', symbol: '', name: '' };
+    public reinvestDays: number = 30;
+    public reinvest: any = null;
+    public reinvesting: boolean = false;
+    public ordering: string = '';
     private timer: any = null;
 
     constructor(public service: Service) { }
@@ -79,6 +83,55 @@ export class Component implements OnInit, OnDestroy {
         await this.api('remove_watch', { symbol: row.symbol, market: row.market });
         this.busy = false;
         await this.load(false);
+    }
+
+    // ---- 재투자 도우미
+    public async planReinvest() {
+        if (this.reinvesting) return;
+        this.reinvesting = true;
+        this.errorMessage = '';
+        await this.service.render();
+        try {
+            const { code, data } = await this.api('reinvest_plan', { days: this.reinvestDays });
+            if (code === 200) this.reinvest = data;
+            else this.errorMessage = data?.message || '재투자 계산에 실패했습니다.';
+        } catch (e) {
+            this.errorMessage = '재투자 계산에 실패했습니다.';
+        }
+        this.reinvesting = false;
+        await this.service.render();
+    }
+
+    public async orderReinvest(row: any) {
+        if (this.ordering || !row?.token) return;
+        const unit = this.isUs(row.market) ? '$' : '₩';
+        const ok = await this.service.modal.show({
+            title: '배당 재투자 주문',
+            message: `${row.symbol} ${row.qty}주를 지정가 ${unit}${Number(row.limit_price).toLocaleString()}에 매수합니다. 예상 금액 ${unit}${Number(row.cost).toLocaleString()} + 수수료 약 ${unit}${Number(row.fee).toLocaleString()}. 체결되지 않으면 장 마감 후 취소됩니다.`,
+            action: '주문', cancel: '취소', status: 'warning', actionBtn: 'warning',
+        });
+        if (ok !== true) return;
+        this.ordering = row.token;
+        await this.service.render();
+        const { code, data } = await this.api('reinvest_order', { token: row.token });
+        this.ordering = '';
+        if (code === 200) {
+            this.notice = `${data.symbol} ${data.qty}주 재투자 주문을 넣었습니다 (주문번호 ${data.order_no || '-'}).`;
+            row.token = '';
+            row.ordered = true;
+        } else {
+            this.errorMessage = data?.message || '주문에 실패했습니다.';
+        }
+        await this.service.render();
+    }
+
+    public reinvestUnit(row: any): string { return this.isUs(row?.market) ? '$' : '₩'; }
+
+    public amount(v: any, market: string): string {
+        const n = Number(v);
+        if (!isFinite(n)) return '-';
+        return this.isUs(market) ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '₩' + Math.round(n).toLocaleString('ko-KR');
     }
 
     // ---- view helpers
