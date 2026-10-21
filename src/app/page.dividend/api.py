@@ -329,8 +329,8 @@ def reinvest_plan():
         row.update(price=price, limit_price=limit, qty=qty, cost=round(qty * limit, 2), fee=round(qty * limit * fee_rate, 2), exchange=exchange)
         if qty <= 0:
             short = limit * (1 + fee_rate) - float(got["net"])
-            row["notes"].append(f"1주에 {short:,.2f}{'달러' if market == 'US' else '원'} 더 모이면 살 수 있어요 (적립 중)."
-                                if short > 0 else "주문 가능 현금이 부족합니다.")
+            amount = f"{short:,.2f}달러" if market == "US" else f"{short:,.0f}원"
+            row["notes"].append(f"1주에 {amount} 더 모이면 살 수 있어요 (적립 중)." if short > 0 else "주문 가능 현금이 부족합니다.")
         profile = next((p for h, p, _fx in items if h["symbol"] == symbol and h["market"] == market), {})
         nxt = (profile or {}).get("next") or {}
         if market == "US" and nxt.get("ex_date") and dividend.buy_deadline("US", nxt["ex_date"]) == today:
