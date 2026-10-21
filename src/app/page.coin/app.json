@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.coin",
+    "title": "/coin",
+    "namespace": "coin",
+    "viewuri": "/coin",
+    "category": "coin",
+    "controller": "coin",
+    "layout": "layout.trading",
+    "template": "wiz-page-coin()"
+}
