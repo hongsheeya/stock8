@@ -1,9 +1,19 @@
 {$STOCK8_SITE_ADDRESS::80} {
     encode zstd gzip
 
+    # The WIZ IDE edits and runs project code: never expose it publicly.
+    @ide path /wiz /wiz/ /wiz/ide /wiz/ide/*
+    respond @ide 404
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
     reverse_proxy stock8:3000 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
     }
 }
-

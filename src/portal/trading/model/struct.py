@@ -602,11 +602,29 @@ class Struct:
         if not Struct._cfg_ready:
             self._load_config_cache()
         self._seal_daytrade_runtime()
+        self._encrypt_plain_secrets()
         self._initialize_paper_full_access()
         self._initialize_paper_watchlist()
 
         # 서버 상주형 단타 자동매매 워커 시작
         self._ensure_background_worker()
+
+    def _encrypt_plain_secrets(self):
+        """10-21: secret rows written before encryption at rest still hold
+        plain text; re-save them once per process (see secret_box)."""
+        if _sys.__dict__.get("_stock8_secrets_sealed"):
+            return
+        _sys.__dict__["_stock8_secrets_sealed"] = True
+        try:
+            db = self.orm.use("trading_config", module="trading")
+            rows = db.rows(query=lambda m, q: q.where((m.is_secret == True) & (m.value != "")
+                                                      & ~(m.value.startswith("enc:v1:"))), dump=5000)
+            for row in rows or []:
+                db.update({"value": row.get("value", ""), "is_secret": True}, id=row["id"])
+            if rows:
+                print(f"Stock8 encrypted {len(rows)} stored secret settings")
+        except Exception as exc:
+            print(f"Stock8 secret encryption skipped: {type(exc).__name__}")
 
     def _load_config_cache(self):
         """trading_config 전체를 한 번에 로드 — 수십 회 DB 쿼리를 0회로 줄임"""

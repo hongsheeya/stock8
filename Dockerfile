@@ -33,6 +33,8 @@ RUN wiz create app
 
 COPY . /opt/app/project/main/
 COPY deploy/boot.py /opt/app/config/boot.py
+COPY deploy/web_hooks.py /opt/app/config/web_hooks.py
+COPY deploy/ide.py /opt/app/config/ide.py
 COPY deploy/docker-entrypoint.sh /usr/local/bin/stock8-entrypoint
 
 WORKDIR /opt/app

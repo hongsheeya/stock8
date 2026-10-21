@@ -5,6 +5,7 @@ import time
 
 def bootstrap(app, config):
     """Initialize the in-process PAPER worker without requiring a page visit."""
+    _web_hooks.apply_flask_settings(app.flask)
 
     def write_bootstrap_log(message):
         try:
@@ -48,11 +49,28 @@ def bootstrap(app, config):
     ).start()
 
 
-secret_key = os.environ.get("WIZ_SECRET_KEY", "season-wiz-secret").strip()
+def _load_web_hooks():
+    # deploy/web_hooks.py is installed next to this file (the WIZ config dir).
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_hooks.py")
+    spec = importlib.util.spec_from_file_location("stock8_web_hooks", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_web_hooks = _load_web_hooks()
+_web_hooks.load_into(globals())
+
+# 10-21: the framework default ("season-wiz-secret") is public, so anyone
+# could sign a session cookie as any user. Use WIZ_SECRET_KEY, else a random
+# key kept in ~/.stock8 (shared by the LIVE and PAPER processes).
+secret_key = os.environ.get("WIZ_SECRET_KEY", "").strip() or _web_hooks.persistent_secret("wiz_secret_key")
 
 socketio = {
     "async_mode": "threading",
-    "cors_allowed_origins": "*",
+    "cors_allowed_origins": [o for o in (os.environ.get("STOCK8_LIVE_ORIGIN", "http://127.0.0.1:3001"),
+                                         os.environ.get("STOCK8_PAPER_ORIGIN", "http://127.0.0.1:3002")) if o],
     "async_handlers": True,
     "always_connect": False,
     "manage_session": True,
