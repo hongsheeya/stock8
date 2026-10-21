@@ -1870,3 +1870,27 @@ for _daytrade_api_name in [
     "us_execute_exit_watch",
 ]:
     _guard_daytrade_api(_daytrade_api_name)
+
+
+def kis_call_stats():
+    """Admin: KIS gateway calls by TR id over the last N minutes (no parameters or replies)."""
+    import sys as _sys
+    if not _is_admin_user(_session_user()):
+        wiz.response.status(403, message="관리자만 볼 수 있습니다.")
+    minutes = max(1, min(240, int(float(wiz.request.query("minutes", "10") or 10))))
+    cutoff = _time.time() - minutes * 60
+    rows = [row for row in list(_sys.__dict__.get("_stock8_kis_call_log") or []) if row[0] >= cutoff]
+    by_key = {}
+    for ts, tr_id, path, waited, outcome, thread in rows:
+        item = by_key.setdefault(f"{tr_id} {path.rsplit('/', 1)[-1]}", {"calls": 0, "wait_sec": 0.0, "timeouts": 0, "threads": {}})
+        item["calls"] += 1
+        item["wait_sec"] = round(item["wait_sec"] + waited, 1)
+        item["timeouts"] += outcome == "timeout"
+        item["threads"][thread] = item["threads"].get(thread, 0) + 1
+    span = max(60.0, min(minutes * 60.0, _time.time() - (rows[0][0] if rows else _time.time())))
+    wiz.response.status(200, minutes=minutes, calls=len(rows), calls_per_min=round(len(rows) / span * 60, 1),
+                        timeouts=sum(1 for r in rows if r[4] == "timeout"),
+                        avg_wait_sec=round(sum(r[3] for r in rows) / len(rows), 2) if rows else 0.0,
+                        max_wait_sec=round(max((r[3] for r in rows), default=0.0), 2),
+                        cache_hits_total=(_sys.__dict__.get("_stock8_kis_cache_hits") or {}).get("hits", 0),
+                        by_call=[{"call": k, **v} for k, v in sorted(by_key.items(), key=lambda kv: -kv[1]["calls"])[:25]])
