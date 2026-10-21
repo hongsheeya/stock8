@@ -1894,3 +1894,31 @@ def kis_call_stats():
                         max_wait_sec=round(max((r[3] for r in rows), default=0.0), 2),
                         cache_hits_total=(_sys.__dict__.get("_stock8_kis_cache_hits") or {}).get("hits", 0),
                         by_call=[{"call": k, **v} for k, v in sorted(by_key.items(), key=lambda kv: -kv[1]["calls"])[:25]])
+
+
+def ks_minute_backfill():
+    """Admin: start (action=start) or read the one-year KS minute-bar backfill."""
+    import sys as _sys
+    import threading as _threading
+    if not _is_admin_user(_session_user()):
+        wiz.response.status(403, message="관리자만 실행할 수 있습니다.")
+    state = _sys.__dict__.setdefault("_stock8_ks_backfill", {"running": False})
+    if str(wiz.request.query("action", "") or "") == "start" and not state.get("running"):
+        owner = str(_session_user().get("id") or "")
+        days_back = max(1, min(400, int(float(wiz.request.query("days", "370") or 370))))
+        state["running"] = True  # claim before the thread starts
+
+        def job():
+            # Broker keys are per user: run under the starting admin's session.
+            import flask
+            with wiz.server.app.flask.test_request_context('/'):
+                flask.session['id'] = owner
+                state["running"] = False
+                try:
+                    _engine().backfill_ks_minute_archive(days_back=days_back)
+                except Exception as exc:
+                    state.update(running=False, last_error=str(exc)[:200])
+
+        _threading.Thread(target=job, daemon=True, name="stock8-ks-backfill").start()
+    wiz.response.status(200, **{k: v for k, v in state.items()})
+
