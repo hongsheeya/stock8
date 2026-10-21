@@ -1,0 +1,180 @@
+div(*ngIf="loading", class="dx-page")
+    div(class="dx-empty") 배당 정보를 준비하고 있습니다…
+
+div(*ngIf="!loading", class="dx-page div-page")
+    div(class="dx-head")
+        div(class="dx-title")
+            h1 배당
+            span(class="dx-chip", [class.is-live]="data?.mode === 'LIVE'", [class.is-warn]="data?.mode !== 'LIVE'")
+                i
+                | {{data?.mode === 'LIVE' ? '실투자 계좌' : '모의투자 계좌'}}
+        div(class="dx-tools")
+            span(class="dx-updated", *ngIf="data?.refreshing || data?.pending") 잔고·배당 정보 갱신 중…
+            button(class="dx-tool", (click)="load(true)", [disabled]="fetching || data?.refreshing") 새로고침
+
+    div(class="dx-alerts")
+        div(class="dx-alert is-danger", *ngIf="errorMessage")
+            strong 확인 필요
+            span {{errorMessage}}
+            button((click)="errorMessage = ''") 닫기
+        div(class="dx-alert is-ok", *ngIf="notice")
+            strong 완료
+            span {{notice}}
+            button((click)="notice = ''") 닫기
+        div(class="dx-alert is-warn", *ngIf="data?.holdings_errors?.length")
+            strong 잔고 조회
+            span {{data.holdings_errors.join(' · ')}}
+        div(*ngFor="let a of data?.alerts || []", class="dx-alert", [class.is-danger]="a.level === 'danger'", [class.is-warn]="a.level === 'warn'", [class.is-info]="a.level === 'info'")
+            strong {{a.level === 'danger' ? '주의' : a.level === 'warn' ? '확인' : '안내'}}
+            span {{a.text}}
+
+    div(class="dx-kpis")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 연 예상 배당 (세후)
+            div(class="dx-kpi-value") {{krw(data?.totals?.annual_net_krw)}}
+            div(class="dx-kpi-sub") 세전 {{krw(data?.totals?.annual_gross_krw)}} · 최근 12개월 기준
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 앞으로 12개월 입금 (세후)
+            div(class="dx-kpi-value") {{krw(data?.totals?.next12_net_krw)}}
+            div(class="dx-kpi-sub") 이번 달 {{krw(data?.totals?.this_month_net_krw)}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") {{data?.financial_income?.year}}년 금융소득 (세전 추정)
+            div(class="dx-kpi-value") {{krw(data?.financial_income?.total_krw)}}
+            div(class="div-meter")
+                div(class="div-meter-fill", [style.width.%]="finPct", [class.is-high]="finPct >= 70")
+            div(class="dx-kpi-sub") 종합과세 기준 ₩20,000,000의 {{data?.financial_income?.used_pct || 0}}% · 이자 제외
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 원/달러
+            div(class="dx-kpi-value is-muted") {{krw(data?.fx)}}
+            div(class="dx-kpi-sub") {{data?.fx_estimated ? '잔고 환율을 아직 못 받아 임시값' : '증권사 잔고 기준'}}
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 보유 종목 배당
+                span(class="dx-count") {{data?.holdings?.length || 0}}
+            small 세후 = 미국 85% (원천징수 15%) · 한국 84.6% (15.4%)
+        div(class="dx-empty", *ngIf="!data?.holdings?.length") {{data?.refreshing ? '잔고를 불러오는 중입니다.' : '보유 종목이 없습니다.'}}
+        div(class="dx-table-wrap", *ngIf="data?.holdings?.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 종목
+                        th 주기
+                        th(class="num") 최근 주당배당
+                        th(class="num") 배당률
+                        th(class="num") 매입가 대비
+                        th(class="num") 다음 배당락
+                        th(class="num") 지급일
+                        th(class="num") 다음 수령 (세후)
+                        th(class="num") 연간 (세후)
+                        th 상태
+                tbody
+                    tr(*ngFor="let r of data.holdings; trackBy: trackBySymbol")
+                        td
+                            div(class="dx-sym")
+                                strong {{r.name}}
+                                small {{marketLabel(r.market)}} · {{r.symbol}} · {{r.qty}}주
+                        td {{r.frequency}}
+                        td(class="num") {{money(r.last_amount, r.market)}}
+                        td(class="num") {{pct(r.yield_pct)}}
+                        td(class="num") {{pct(r.yoc_pct)}}
+                        td(class="num")
+                            | {{shortDate(r.next_ex_date)}}
+                            small {{dday(r.next_ex_date)}}
+                        td(class="num") {{shortDate(r.next_pay_date)}}
+                        td(class="num")
+                            | {{krw(r.next_net_krw)}}
+                            small(*ngIf="r.next_amount_estimated") 금액 추정
+                        td(class="num dx-strong") {{krw(r.annual_net_krw)}}
+                        td
+                            div(class="div-tags")
+                                span(*ngFor="let t of statusTags(r)", class="dx-tag", [ngClass]="t.tone") {{t.text}}
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 12개월 배당 입금 (세후, 원화)
+            small 진한 부분은 회사가 발표한 확정 일정, 나머지는 지난 주기로 추정
+        div(class="dx-empty", *ngIf="!data?.totals?.next12_net_krw") 예상되는 배당 입금이 없습니다.
+        div(class="div-bars", *ngIf="data?.totals?.next12_net_krw")
+            div(class="div-bar", *ngFor="let b of data.cashflow")
+                div(class="div-bar-value") {{b.net_krw ? krw(b.net_krw) : ''}}
+                div(class="div-bar-track")
+                    div(class="div-bar-fill", [style.height.%]="barHeight(b.net_krw)")
+                        div(class="div-bar-confirmed", [style.height.%]="b.net_krw ? (b.confirmed_krw / b.net_krw * 100) : 0")
+                div(class="div-bar-label") {{monthLabel(b.month)}}
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 관심 종목
+                span(class="dx-count") {{data?.watchlist?.length || 0}}
+            small 배당을 받으려면 '매수 마감'일 장 마감까지 보유해야 합니다
+        div(class="div-add")
+            select(class="dx-select", [(ngModel)]="watchForm.market")
+                option(value="US") 미국
+                option(value="KS") 코스피
+                option(value="KQ") 코스닥
+            input(class="dx-input", [(ngModel)]="watchForm.symbol", placeholder="종목코드 (SCHD, 033780)", (keyup.enter)="addWatch()")
+            input(class="dx-input", [(ngModel)]="watchForm.name", placeholder="이름 (선택)")
+            button(class="dx-tool is-primary", (click)="addWatch()", [disabled]="busy || !watchForm.symbol") 추가
+        div(class="dx-empty", *ngIf="!data?.watchlist?.length") 관심 종목을 추가하면 배당 일정과 매수 마감일을 보여줍니다.
+        div(class="dx-table-wrap", *ngIf="data?.watchlist?.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 종목
+                        th 주기
+                        th(class="num") 배당률
+                        th(class="num") 다음 배당락
+                        th(class="num") 매수 마감
+                        th(class="num") 주당 세후
+                        th 상태
+                        th
+                tbody
+                    tr(*ngFor="let r of data.watchlist; trackBy: trackBySymbol")
+                        td
+                            div(class="dx-sym")
+                                strong {{r.name}}
+                                small {{marketLabel(r.market)}} · {{r.symbol}}
+                        td {{r.frequency}}
+                        td(class="num") {{pct(r.yield_pct)}}
+                        td(class="num")
+                            | {{shortDate(r.next_ex_date)}}
+                            small {{dday(r.next_ex_date)}}
+                        td(class="num")
+                            | {{shortDate(r.buy_by)}}
+                            small {{isUs(r.market) ? '미국 장 마감' : '15:30'}}
+                        td(class="num") {{money(r.net_per_share, r.market)}}
+                        td
+                            div(class="div-tags")
+                                span(*ngFor="let t of statusTags(r)", class="dx-tag", [ngClass]="t.tone") {{t.text}}
+                        td(class="num")
+                            button(class="dx-tag", (click)="removeWatch(r)", [disabled]="busy") 삭제
+
+    section(class="dx-card")
+        div(class="dx-card-head div-research-head", (click)="showResearch = !showResearch")
+            h2 배당락 매매 검증과 타이밍 안내
+            small {{showResearch ? '접기' : '펼치기'}}
+        div(class="div-research", *ngIf="showResearch")
+            p
+                strong 배당락 직전에 사서 직후에 파는 매매는 평균 손해였습니다.
+                |  2015~2026년 실제 데이터로 따져 보니, 미국 주식은 배당락일 시가에 배당의 약 95%(최근 3년 99.5%)만큼 빠지는데 한국 거주자는 15% 원천징수로 85%만 받습니다. 그래서 수수료가 0.07%로 낮아도 건당 평균 -0.32%였습니다. 한국 주식은 세금 15.4%·거래세 0.20%를 빼면 +0.01%로 본전입니다.
+            table(class="dx-table")
+                thead
+                    tr
+                        th 어차피 사고팔 때 쓰는 규칙
+                        th 근거 (세금 반영, 평균)
+                tbody
+                    tr
+                        td 미국 종목은 배당락 전날 사지 않기 (배당락일 이후에 사기)
+                        td 배당락 전날 종가 매수가 -0.26%p 불리 · 2015~2026 네 구간 모두 같은 방향
+                    tr
+                        td 미국 종목을 팔 계획이면 배당락 전에 팔기
+                        td 2023~2026 배당락일 시가 매도가 -0.12%p 불리
+                    tr
+                        td 한국 종목을 팔 계획이면 배당을 받고 배당락일 시가(동시호가)에 팔기
+                        td 전날 매도보다 +0.34%p 유리 · 사흘 미루면 -0.65%p
+                    tr
+                        td 원가 회복까지 버티지 않기
+                        td 승률은 77%지만 평균은 시장보다 -0.37%p
+            p(class="dx-muted") 커버드콜 ETF(QYLD·XYLD 등) 분배금 일부는 원금을 돌려받는 성격이라 가격은 장기적으로 내려갔습니다(연 -1.5%). 배당 삭감은 미국 개별주 지급의 1.9%, 커버드콜의 30%에서 있었습니다. 세법(분리과세 특례·거래세)은 해마다 바뀌니 큰 금액은 세무 확인을 권합니다.
+            p(class="dx-muted") 데이터: 실투자 서버는 한국투자증권 배당 일정(예탁원·해외 권리)을 먼저 쓰고, 모의 서버와 과거 이력은 야후 파이낸스를 씁니다. 지난 배당은 현재 보유 수량으로 계산한 추정치입니다.
