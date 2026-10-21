@@ -762,6 +762,12 @@ class DomesticDaytradeEngine:
             # gapped up >= 1%: +35.5%, max drawdown -18.9% -> -13.1%, quarters
             # -3.5/+11.5/+12.8/+11.6. Gap-up days fade after the open.
             "skip_gap_up_pct": max(0.0, self._safe_float(self._config(prefix + "skip_gap_up_pct", "0"), 0)),
+            # 10-21, same year: on gap-up days the leverage side still made
+            # money when it caught the morning continuation (from 09:15: +21.0%
+            # on the seed over 81 trades; 09:05-09:25 starts +10.8..+21.0%;
+            # from 09:30 or later ~0), while the inverse side lost. With it:
+            # +33.0% -> +54.0%, max drawdown -13.9% -> -10.9%. Blank = skip.
+            "gap_up_bull_start": str(self._config(prefix + "gap_up_bull_start", "") or "").strip(),
             # A stop-loss shuts the ETF for the rest of its session (12 h covers
             # either market's day without reaching the next one).
             "stop_block_hours": max(0, self._safe_int(self._config(prefix + "stop_block_hours", "12"), 12)),
@@ -1089,6 +1095,10 @@ class DomesticDaytradeEngine:
         qty = self._safe_int(state.get("position_qty", 0), 0)
         avg_price = self._safe_float(state.get("avg_price", 0), 0)
         now_hm = self._regime_trend_clock(market)[1]
+        gap_up = (params.get("skip_gap_up_pct", 0) > 0 and view.get("gap_pct") is not None
+                  and view["gap_pct"] >= params["skip_gap_up_pct"])
+        gap_up_bull = params.get("gap_up_bull_start", "")
+        entry_start = gap_up_bull if gap_up and gap_up_bull else params["start"]
         # The order path refuses a buy without a live price source; carry the
         # snapshot's (KIS quote) one, which also blocks buys on stale bars.
         signal = {"action": "HOLD", "order_qty": 0, "strategy_id": strategy_id, "current_price": price,
@@ -1113,10 +1123,11 @@ class DomesticDaytradeEngine:
             pass
         elif view.get("stale"):
             signal["reason"] = f"지수 {view.get('proxy', '')} 실시간 분봉 지연(대체 데이터) — 신규 진입 보류"
-        elif params.get("skip_gap_up_pct", 0) > 0 and view.get("gap_pct") is not None and view["gap_pct"] >= params["skip_gap_up_pct"]:
-            signal["reason"] = f"갭상승일(지수 {view.get('proxy', '')} 시가 {view['gap_pct']:+.2f}%) — 오늘은 신규 진입 쉬기"
-        elif not (params["start"] <= now_hm <= params["end"]):
-            signal["reason"] = f"방향 추세 진입 시간 외 ({params['start']}~{params['end']}{' ET' if market == 'US' else ''})"
+        elif gap_up and not (gap_up_bull and self._regime_trend_pairs(market)[symbol][0] == "BULL"):
+            signal["reason"] = (f"갭상승일(지수 {view.get('proxy', '')} 시가 {view['gap_pct']:+.2f}%) — "
+                                + ("인버스 신규 진입 쉬기" if gap_up_bull else "오늘은 신규 진입 쉬기"))
+        elif not (entry_start <= now_hm <= params["end"]):
+            signal["reason"] = f"방향 추세 진입 시간 외 ({entry_start}~{params['end']}{' ET' if market == 'US' else ''})"
         elif self._regime_trend_stopped(state, params["stop_block_hours"]):
             signal["reason"] = "오늘 손절한 종목 · 같은 장중 재진입 차단"
         elif params["reversal_block"] and self._regime_trend_reversed_today(state, market):

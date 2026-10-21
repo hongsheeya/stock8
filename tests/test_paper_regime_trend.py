@@ -127,6 +127,31 @@ class RegimeTrendTests(unittest.TestCase):
         snaps["069500"][1]["quote_prev_close"] = 99.5  # +0.5% gap: trades
         self.assertEqual(self._signal(engine)["action"], "BUY1")
 
+    def test_gap_up_day_allows_the_leverage_side_early_when_configured(self):
+        configs = {"daytrade_regime_trend_skip_gap_up_pct": "1.0", "daytrade_regime_trend_start": "10:00",
+                   "daytrade_regime_trend_gap_up_bull_start": "09:15"}
+        bull = {"069500": _snap(100, 101.5, 100.8), "122630": _snap(1000, 1010, 1000)}
+        bull["069500"][1]["quote_prev_close"] = 98.8  # +1.21% gap up
+        engine = self._engine(bull, now=(9, 20))
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertEqual(self._signal(engine, "122630")["action"], "BUY1")
+        engine = self._engine(bull, now=(9, 10))
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertIn("09:15~", self._signal(engine, "122630")["reason"])
+        # The inverse side still sits out the gap-up day.
+        bear = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        bear["069500"][1]["quote_prev_close"] = 98.8
+        engine = self._engine(bear, now=(10, 30))
+        engine._config = lambda key, default=None: configs.get(key, default)
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("인버스 신규 진입 쉬기", signal["reason"])
+        # A normal day keeps the 10:00 start for both sides.
+        bull["069500"][1]["quote_prev_close"] = 99.8
+        engine = self._engine(bull, now=(9, 20))
+        engine._config = lambda key, default=None: configs.get(key, default)
+        self.assertIn("10:00~", self._signal(engine, "122630")["reason"])
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
