@@ -95,6 +95,39 @@ class DividendMathTests(unittest.TestCase):
         self.assertEqual(fin["limit_krw"], 20000000)
 
 
+class SeasonalAndPendingTests(unittest.TestCase):
+    def samsung_like(self):
+        rows = []
+        for year in (2024, 2025):
+            for ex, amount, pay in ((f"{year}-03-28", 361, f"{year}-05-20"), (f"{year}-06-27", 361 if year == 2024 else 367, f"{year}-08-20"),
+                                    (f"{year}-09-27", 361 if year == 2024 else 370, f"{year}-11-20"), (f"{year}-12-27", 361 if year == 2024 else 566, f"{year + 1}-04-17")):
+                rows.append({"ex_date": dt.date.fromisoformat(ex), "amount": amount, "pay_date": dt.date.fromisoformat(pay)})
+        rows.append({"ex_date": dt.date(2026, 3, 30), "amount": 372, "pay_date": dt.date(2026, 5, 29)})
+        rows.append({"ex_date": dt.date(2026, 6, 29), "amount": 374, "pay_date": dt.date(2026, 8, 28)})
+        return rows
+
+    def test_unannounced_quarter_is_pending_and_year_end_follows_last_year(self):
+        p = D.analyze(self.samsung_like(), TODAY)
+        self.assertTrue(p["pending"]["unannounced"])
+        self.assertGreaterEqual(p["pending"]["pay_date"], TODAY)          # Q3 (record 9/30) paid in November
+        self.assertAlmostEqual(p["pending"]["amount"], 374 * 370 / 367, places=3)
+        self.assertGreater(p["next"]["amount"], 500)                       # year-end slot ~ 374 x 566/367
+        flows = D.schedule(p, TODAY, 12)
+        self.assertTrue(flows[0].get("unannounced"))
+        self.assertEqual(flows[1]["ex_date"], p["next"]["ex_date"])
+
+    def test_ex_date_passed_but_unpaid_is_still_expected(self):
+        events = quarterly(dt.date(2025, 10, 15), 5, 0.5, lag=17)        # last ex 2026-10-14, paid 10-31
+        p = D.analyze(events, TODAY)
+        flows = D.schedule(p, TODAY, 12)
+        self.assertEqual(flows[0]["ex_date"], dt.date(2026, 10, 14))
+        self.assertEqual(flows[0]["pay_date"], dt.date(2026, 10, 31))
+        self.assertTrue(flows[0]["confirmed"])
+        fin = D.financial_income_year([({"symbol": "X", "market": "US", "qty": 10}, p, 1000.0)], TODAY)
+        october = 0.5 * 10 * 1000
+        self.assertEqual(fin["expected_krw"], october)  # 10-31 payment once; the next (2027-01) is next year
+
+
 class FakeKis:
     def get_domestic_dividend_schedule(self, symbol, f, t):
         return [{"sht_cd": symbol, "record_date": "20261231", "per_sto_divi_amt": "1,200", "divi_pay_dt": "20270420", "divi_kind": "결산"},

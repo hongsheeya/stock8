@@ -84,6 +84,25 @@ def _frequency(intervals):
     return 1, "연 1회"
 
 
+def _seasonal_amount(history, per_year, ex, last_amount):
+    """Last amount scaled by the same slot a year earlier vs the payment a
+    year before the last one: keeps growth, restores seasonal patterns
+    (e.g. a larger year-end dividend). Monthly payers use the last amount."""
+    regular = [h for h in history or [] if not h.get("special")]
+    if not regular or per_year not in (1, 2, 4) or last_amount <= 0:
+        return last_amount
+
+    def near(day):
+        best = min(regular, key=lambda h: abs((h["ex_date"] - day).days))
+        return float(best["amount"]) if abs((best["ex_date"] - day).days) <= 45 else 0.0
+
+    slot = near(ex - datetime.timedelta(days=365))
+    base = near(regular[-1]["ex_date"] - datetime.timedelta(days=365))
+    if slot > 0 and base > 0:
+        return round(last_amount * slot / base, 6)
+    return last_amount
+
+
 def analyze(events, today):
     """events: [{"ex_date", "amount", "pay_date"?, "record_date"?, "confirmed"?,
     "special"?}] in any order. Returns the dividend profile used by the page."""
@@ -142,36 +161,58 @@ def analyze(events, today):
         ex = past[-1]["ex_date"] + datetime.timedelta(days=round(gap))
         while ex < today:
             ex += datetime.timedelta(days=round(gap))
-        out["next"] = {"ex_date": ex, "amount": float(past[-1]["amount"]),
+        history = [{"ex_date": e["ex_date"], "amount": float(e["amount"]), "special": bool(e.get("special"))} for e in rows]
+        last_amount = float(past[-1]["amount"])
+        skipped = ex - datetime.timedelta(days=round(gap))
+        if skipped > past[-1]["ex_date"] + datetime.timedelta(days=round(gap * 0.5)):
+            pay = skipped + datetime.timedelta(days=lag if lag is not None else 21)
+            if pay >= today:
+                out["pending"] = {"ex_date": skipped, "pay_date": pay, "amount": _seasonal_amount(history, per_year, skipped, last_amount),
+                                  "confirmed": False, "projected": True, "unannounced": True}
+        out["next"] = {"ex_date": ex, "amount": _seasonal_amount(history, per_year, ex, last_amount),
                        "pay_date": ex + datetime.timedelta(days=lag) if lag else None,
                        "record_date": None, "confirmed": False, "projected": True}
         # Expected payment missing for more than a full cycle and a month.
         if (today - past[-1]["ex_date"]).days > gap + 45:
             out["missed"] = True
-    out["history"] = [{"ex_date": e["ex_date"], "amount": float(e["amount"]), "pay_date": e.get("pay_date")} for e in rows[-12:]]
+    out["history"] = [{"ex_date": e["ex_date"], "amount": float(e["amount"]), "pay_date": e.get("pay_date"),
+                       "special": bool(e.get("special"))} for e in rows[-12:]]
     out["lag_days"] = lag
     out["interval_days"] = round(statistics.median(intervals)) if intervals else None
     return out
 
 
 def schedule(profile, today, months=12):
-    """Projected payments within `months` (announced first, then cadence)."""
-    nxt = profile.get("next")
-    if not nxt:
-        return []
+    """Payments still to come within `months`: ex-dates already passed but
+    not yet paid, an unannounced payment the cadence expects, then the next
+    announced or projected ex-date repeated at the usual interval."""
     end = today + datetime.timedelta(days=round(months * 30.44))
     gap = profile.get("interval_days") or round(365 / max(1, profile.get("per_year") or 1))
     lag = profile.get("lag_days")
+    default_lag = lag if lag is not None else 21
     out = []
+    for h in profile.get("history") or []:
+        if h["ex_date"] < today:
+            pay = h.get("pay_date") or (h["ex_date"] + datetime.timedelta(days=default_lag))
+            if today <= pay <= end:
+                out.append({"ex_date": h["ex_date"], "pay_date": pay, "amount": float(h["amount"]), "confirmed": True})
+    pending = profile.get("pending")
+    if pending and pending["pay_date"] <= end:
+        out.append({"ex_date": pending["ex_date"], "pay_date": pending["pay_date"], "amount": float(pending["amount"]),
+                    "confirmed": False, "unannounced": True})
+    nxt = profile.get("next")
+    if not nxt:
+        return out
     ex, amount, pay = nxt["ex_date"], float(nxt["amount"]), nxt.get("pay_date")
     first = True
     while ex <= end:
-        pay_day = pay if first and pay else (ex + datetime.timedelta(days=lag) if lag is not None else ex + datetime.timedelta(days=21))
-        out.append({"ex_date": ex, "pay_date": pay_day, "amount": amount,
-                    "confirmed": bool(first and nxt.get("confirmed") and not nxt.get("projected"))})
+        pay_day = pay if first and pay else ex + datetime.timedelta(days=default_lag)
+        confirmed = bool(first and nxt.get("confirmed") and not nxt.get("projected"))
+        out.append({"ex_date": ex, "pay_date": pay_day, "amount": amount, "confirmed": confirmed})
         first = False
         ex = ex + datetime.timedelta(days=gap)
-        amount = float(profile.get("last_amount") or amount) if not out[-1]["confirmed"] else amount
+        amount = _seasonal_amount(profile.get("history"), profile.get("per_year") or 0, ex,
+                                  float(profile.get("last_amount") or amount) if not confirmed else amount)
     return out
 
 
@@ -201,6 +242,7 @@ def holding_view(holding, profile, today, fx=1.0):
         "buy_by": buy_deadline(market, nxt["ex_date"]) if nxt.get("ex_date") else None,
         "cut": profile.get("cut"), "variable": profile.get("variable", False), "missed": profile.get("missed", False),
         "frequency_changed": profile.get("frequency_changed"),
+        "pending": profile.get("pending"),
     }
     return view
 

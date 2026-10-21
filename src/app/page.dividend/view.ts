@@ -130,6 +130,7 @@ export class Component implements OnInit, OnDestroy {
         if (r.frequency_changed) tags.push({ text: `${r.frequency_changed.from}→${r.frequency_changed.to}`, tone: 'is-warn' });
         if (r.variable) tags.push({ text: '금액 변동', tone: 'is-warn' });
         if (r.missed) tags.push({ text: '지급 지연?', tone: 'is-warn' });
+        if (r.pending) tags.push({ text: `${this.shortDate(r.pending.pay_date)} 지급 예상 (발표 대기)`, tone: 'is-warn' });
         if (r.has_data && r.next_ex_date) tags.push({ text: r.next_confirmed ? '일정 확정' : '예상', tone: r.next_confirmed ? 'is-ok' : '' });
         return tags;
     }
