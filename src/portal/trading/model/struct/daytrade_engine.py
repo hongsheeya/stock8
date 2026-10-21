@@ -950,6 +950,64 @@ class DomesticDaytradeEngine:
             return {"status": "saved", "day": day, "symbols": sorted(payload["bars"])}
         return {"status": "partial" if payload.get("bars") else "empty", "day": day, "missing": left, "errors": errors}
 
+    # 10-21: the trend rule's evidence was 60 days of Yahoo 5m bars; Yahoo's
+    # hourly history disagreed (-13.8% vs +63.9% on the same days) because it
+    # is too coarse. A year of KIS 1-minute bars (real account history) lets
+    # the rule and day-type variants be re-validated. Read-only quotations.
+    _BACKFILL_STATE = sys.__dict__.setdefault("_stock8_ks_backfill", {"running": False})
+
+    def backfill_ks_minute_archive(self, days_back=370, symbols=None, sleep_between=0.0):
+        """Fill ks_minute_archive/<date>.json for past weekdays; resumable."""
+        state = self._BACKFILL_STATE
+        if state.get("running"):
+            return dict(state)
+        state.clear()
+        state.update(running=True, started_at=self._timestamp(), done_days=0, skipped_days=0, empty_days=0,
+                     errors=0, last_day="", last_error="")
+        symbols = list(symbols or self._KS_ARCHIVE_SYMBOLS)
+        api = self.struct.kis_api
+        fs = self._fs()
+        try:
+            fs.makedirs(f"{self._data_root()}/ks_minute_archive")
+            today = self._now().date()
+            for back in range(1, int(days_back) + 1):
+                day = today - datetime.timedelta(days=back)
+                if day.weekday() >= 5:
+                    continue
+                key = day.strftime("%Y-%m-%d")
+                path = self._ks_minute_archive_path(key)
+                payload = {"date": key, "source": "kis_inquire_time_dailychartprice", "bars": {}, "errors": {}}
+                if fs.exists(path):
+                    payload = fs.read.json(path, default=None) or payload
+                missing = [sym for sym in symbols if sym not in payload.get("bars", {})]
+                if not missing:
+                    state["skipped_days"] += 1
+                    continue
+                got = 0
+                for sym in missing:
+                    try:
+                        rows = api.get_domestic_minute_bars_for_day(sym, key)
+                        if rows:
+                            payload.setdefault("bars", {})[sym] = rows
+                            got += 1
+                    except Exception as exc:
+                        state["errors"] += 1
+                        state["last_error"] = f"{key} {sym}: {str(exc)[:120]}"
+                    if sleep_between:
+                        _clock.sleep(sleep_between)
+                if got:
+                    fs.write.json(path, payload)
+                    state["done_days"] += 1
+                else:
+                    state["empty_days"] += 1  # holiday, or older than the API keeps
+                state["last_day"] = key
+                if state["empty_days"] >= 15 and state["done_days"] == 0 and back > 30:
+                    break  # the account cannot reach history; stop early
+        finally:
+            state["running"] = False
+            state["finished_at"] = self._timestamp()
+        return dict(state)
+
     def _regime_trend_reversed_today(self, state, market="KS"):
         """10-19: KOSDAQ150 gapped +2% and then ranged around its VWAP, so the
         rule bought every pop above VWAP and sold every dip (PAPER 1 win / 5
