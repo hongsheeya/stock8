@@ -8,6 +8,12 @@ services:
       TZ: ${TZ:-Asia/Seoul}
       WIZ_DB_MAX_CONCURRENCY: ${WIZ_DB_MAX_CONCURRENCY:-4}
       WIZ_SECRET_KEY: ${WIZ_SECRET_KEY:?Set WIZ_SECRET_KEY in .env}
+      # Fernet key for broker keys/tokens stored in trading_config. Keep a
+      # backup: losing it means every user enters their API keys again.
+      STOCK8_CONFIG_KEY: ${STOCK8_CONFIG_KEY:?Set STOCK8_CONFIG_KEY in .env}
+      STOCK8_PUBLIC_ORIGIN: ${STOCK8_PUBLIC_ORIGIN:-}
+      STOCK8_COOKIE_SECURE: ${STOCK8_COOKIE_SECURE:-false}
+      STOCK8_IDE_ENABLED: ${STOCK8_IDE_ENABLED:-false}
       TRADING_MODE: ${TRADING_MODE:-PAPER}
       STOCK8_PAPER_DB_PATH: ${STOCK8_PAPER_DB_PATH:-project/main/data/paper/trading.db}
       STOCK8_DAYTRADE_HARD_LOCK: ${STOCK8_DAYTRADE_HARD_LOCK:-false}

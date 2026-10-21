@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.notfound",
+    "title": "/not-found",
+    "namespace": "notfound",
+    "viewuri": "/not-found",
+    "category": "",
+    "controller": "base",
+    "layout": "layout.empty",
+    "template": "wiz-page-notfound()"
+}

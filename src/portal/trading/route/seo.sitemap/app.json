@@ -1,0 +1,8 @@
+{
+    "id": "seo.sitemap",
+    "title": "/sitemap.xml",
+    "route": "/sitemap.xml",
+    "viewuri": "/sitemap.xml",
+    "category": "seo",
+    "controller": ""
+}

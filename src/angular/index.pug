@@ -1,9 +1,30 @@
 doctype html
-html(lang="en")
+html(lang="ko")
     head
         meta(charset="utf-8")
         title ∞stock
         base(href="/")
+        //- 10-21 pre-launch: search and share metadata. Pages update title,
+        //- description and robots on navigation (portal/trading/libs/page-meta).
+        //- og:image / og:url are completed to absolute URLs by the server
+        //- (deploy/web_hooks.py) because share scrapers do not run scripts.
+        meta(name="description" content="한국투자증권 API로 무한매수와 국내·미국 단타를 자동으로 실행하고 기록하는 투자 자동화 도구입니다. 모의투자로 먼저 검증하세요.")
+        meta(property="og:type" content="website")
+        meta(property="og:site_name" content="∞stock")
+        meta(property="og:locale" content="ko_KR")
+        meta(property="og:title" content="∞stock — 반복은 시스템에게, 판단은 투자자에게")
+        meta(property="og:description" content="한국투자증권 API로 무한매수와 국내·미국 단타를 자동으로 실행하고 기록하는 투자 자동화 도구입니다. 모의투자로 먼저 검증하세요.")
+        meta(property="og:url" content="/access")
+        meta(property="og:image" content="/assets/brand/og-image.png")
+        meta(property="og:image:width" content="1200")
+        meta(property="og:image:height" content="630")
+        meta(property="og:image:alt" content="∞stock — 무한매수와 국내·미국 단타 자동 실행과 기록")
+        meta(name="twitter:card" content="summary_large_image")
+        meta(name="twitter:title" content="∞stock — 반복은 시스템에게, 판단은 투자자에게")
+        meta(name="twitter:description" content="한국투자증권 API로 무한매수와 국내·미국 단타를 자동으로 실행하고 기록하는 투자 자동화 도구입니다. 모의투자로 먼저 검증하세요.")
+        meta(name="twitter:image" content="/assets/brand/og-image.png")
+        script(type="application/ld+json").
+            {"@context":"https://schema.org","@type":"SoftwareApplication","name":"∞stock","applicationCategory":"FinanceApplication","operatingSystem":"Web","inLanguage":"ko","description":"한국투자증권 API로 무한매수와 국내·미국 단타를 자동으로 실행하고 기록하는 투자 자동화 도구입니다. 모의투자로 먼저 검증하세요."}
         
         meta(name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0')
         meta(http-equiv='X-UA-Compatible' content='ie=edge')

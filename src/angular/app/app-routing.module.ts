@@ -1,4 +1,5 @@
 const INDEX_PAGE = "dashboard";
+const NOT_FOUND_PAGE = "not-found";
 
 import { URLPattern } from "urlpattern-polyfill";
 import { NgModule } from '@angular/core';
@@ -37,8 +38,15 @@ let patternMatcher = (pattern: any, url: any) => {
     return null
 }
 
+// 10-21: "/" opens the index page; any other address that matches no page
+// goes to the not-found page (it used to land on the dashboard silently).
 let routes: Routes = [{
+    path: '',
+    pathMatch: 'full',
+    redirectTo: INDEX_PAGE
+}, {
     matcher: (url: any) => {
+        if (!url || url.length === 0) return null;
         for (let i = 0; i < app_routes.length; i++) {
             let layout = app_routes[i];
             let layout_childs = layout.children;
@@ -51,7 +59,7 @@ let routes: Routes = [{
         }
         return { consumed: url, posParams: {} };
     },
-    redirectTo: INDEX_PAGE
+    redirectTo: NOT_FOUND_PAGE
 }];
 
 for (let i = 0; i < app_routes.length; i++) {
