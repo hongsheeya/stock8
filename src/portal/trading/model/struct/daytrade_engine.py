@@ -690,11 +690,29 @@ class DomesticDaytradeEngine:
     }
 
     def _regime_trend_pairs(self, market="KS"):
-        return self._US_REGIME_TREND_ETFS if self._is_us_market(market) else self._REGIME_TREND_ETFS
+        if self._is_us_market(market):
+            return self._US_REGIME_TREND_ETFS
+        extras = self._regime_trend_extra_etfs()
+        return {**self._REGIME_TREND_ETFS, **extras} if extras else self._REGIME_TREND_ETFS
+
+    def _regime_trend_extra_etfs(self):
+        """PAPER-only trial ETFs: daytrade_regime_trend_extra_etfs="CODE:SIDE:PROXY,...".
+
+        10-21: PLUS K방산 (449450) was the only sector ETF up in both halves of
+        a 60-day replay (+6.5% / +4.1%, 22-29 trades), so it trades on PAPER
+        with itself as the trend proxy before anything reaches LIVE."""
+        if not _PAPER_MODE:
+            return {}
+        extras = {}
+        for item in str(self._config("daytrade_regime_trend_extra_etfs", "") or "").split(","):
+            parts = [part.strip().upper() for part in item.split(":")]
+            if len(parts) == 3 and parts[1] in ("BULL", "BEAR") and parts[0].isalnum() and parts[2].isalnum():
+                extras[parts[0]] = (parts[1], parts[2])
+        return extras
 
     def _regime_trend_market(self, symbol):
         symbol = str(symbol or "").strip().upper()
-        if symbol in self._REGIME_TREND_ETFS:
+        if symbol in self._regime_trend_pairs("KS"):
             return "KS"
         if symbol in self._US_REGIME_TREND_ETFS:
             return "US"
@@ -4741,7 +4759,7 @@ class DomesticDaytradeEngine:
                 user_stop_hit = bool(state.get("stop_loss_enabled", False)) and user_stop_price > 0 and current_price <= user_stop_price
                 auto_stop_hit = avg_price > 0 and current_price <= avg_price * (1 - stop_loss_pct / 100)
                 breakout_exit = self._volume_breakout_exit(current_price, avg_price, profile, live_bar) if strategy_id == "volume_breakout" else None
-                if strategy_id == "paper_regime_trend" and str(symbol) in self._REGIME_TREND_ETFS:
+                if strategy_id == "paper_regime_trend" and str(symbol) in self._regime_trend_pairs("KS"):
                     breakout_exit = self._regime_trend_exit(symbol, current_price, avg_price, market="KS")
                 if strategy_id == "paper_momentum_ride":
                     try:

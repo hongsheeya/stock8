@@ -97,6 +97,16 @@ class RegimeTrendTests(unittest.TestCase):
         engine._mark_exit_watch(state, reason=exit_signal["reason"], action="SELL_FULL")
         self.assertIn("regime_reversal_exit_at", state)  # one entry per day
 
+    def test_paper_extra_etf_uses_itself_as_proxy(self):
+        snaps = {"449450": _snap(100, 101.5, 100.8)}
+        engine = self._engine(snaps)
+        engine._config = lambda key, default=None: "449450:BULL:449450" if key == "daytrade_regime_trend_extra_etfs" else default
+        self.assertEqual(engine._regime_trend_market("449450"), "KS")
+        self.assertTrue(engine._regime_trend_view("449450")["trend"])
+        self.assertIn("449450", [r["symbol"] for r in engine._with_regime_trend_candidates([], {}, market="KS")])
+        with patch.object(daytrade_engine, "_PAPER_MODE", False):
+            self.assertNotIn("449450", engine._regime_trend_pairs("KS"))
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
