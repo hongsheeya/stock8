@@ -2620,7 +2620,7 @@ class Engine:
                 return "LIMIT"
         return ""
 
-    def _append_extra_reservation_skips(self, skipped, expected_orders, reserved_line_map, side_label):
+    def _append_extra_reservation_skips(self, skipped, expected_orders, reserved_line_map, side_label, allow_shortfall=False):
         expected_by_line = {}
         expected_types_by_line = {}
         expected_symbol_keys = set()
@@ -2665,6 +2665,8 @@ class Engine:
             if expected_qty > 0 and existing_qty == expected_qty:
                 if not wrong_type:
                     continue
+            if allow_shortfall and not wrong_type and 0 < existing_qty < expected_qty:
+                continue  # short, not wrong: it stays "missing" and is topped up
             price = float(first.get("price", 0) or 0)
             if wrong_type:
                 reason = (
@@ -2695,7 +2697,7 @@ class Engine:
                 "reason": reason,
             })
 
-    def _reservation_mismatch_skips(self, symbol, exchange, expected_orders, reserved_line_map, side_label, cycle_id=""):
+    def _reservation_mismatch_skips(self, symbol, exchange, expected_orders, reserved_line_map, side_label, cycle_id="", allow_shortfall=False):
         symbol = str(symbol or "").upper().strip()
         symbol_key = self._reservation_order_symbol_key(symbol, exchange)
         expected_by_line = {}
@@ -2773,7 +2775,7 @@ class Engine:
             wrong_type = bool(active_types and expected_types and any(order_type not in expected_types for order_type in active_types))
             if wrong_type:
                 append_skip(line_key, reservations, expected_qty, expected_types, reason_kind="type")
-            elif existing_qty != expected_qty:
+            elif existing_qty > expected_qty or (existing_qty < expected_qty and not allow_shortfall):
                 append_skip(line_key, reservations, expected_qty, expected_types, reason_kind="qty")
 
         for line_key, reservations in (reserved_line_map or {}).items():
@@ -4094,7 +4096,15 @@ class Engine:
                     "line_key": line_key,
                 })
             expected_orders.extend(symbol_expected_orders)
-            preflight_skips = self._reservation_mismatch_skips(symbol, order_exchange, symbol_expected_orders, reserved_line_map, "매수", cycle_id=cycle["id"])
+            # 10-21 LIVE: with too little cash the 18-share SOXL line was placed
+            # as 4 shares, and every later pass called that a mismatch that
+            # only "cancel everything and re-reserve" could fix. A line that is
+            # short (same price, no conflicting type) is topped up instead.
+            preflight_skips = self._reservation_mismatch_skips(symbol, order_exchange, symbol_expected_orders, reserved_line_map, "매수",
+                                                               cycle_id=cycle["id"], allow_shortfall=True)
+            line_expected_qty = {}
+            for planned in symbol_expected_orders:
+                line_expected_qty[planned["line_key"]] = line_expected_qty.get(planned["line_key"], 0) + int(planned.get("order_qty", 0) or 0)
             if preflight_skips:
                 for skip in preflight_skips:
                     self._log_event(symbol, cycle["id"], "LOC_BUY_PRICE_MISMATCH", action=ACTION_BUY, message=skip.get("reason", ""))
@@ -4110,6 +4120,7 @@ class Engine:
                 label = str(order_plan.get("label", "LOC") or "LOC")
                 line_key = self._reservation_order_line_key(symbol, order_exchange, loc_price)
                 existing_reservations = reserved_line_map.get(line_key, [])
+                topup_from_qty = 0
                 if len(existing_reservations) > 0:
                     existing = existing_reservations[0]
                     existing_qty = sum(self._reservation_order_remaining_qty(order) for order in existing_reservations)
@@ -4120,13 +4131,15 @@ class Engine:
                         if self._reservation_order_type(order)
                     }
                     type_mismatch = bool(active_types and order_type not in active_types)
-                    qty_mismatch = existing_qty != order_qty
+                    line_qty = line_expected_qty.get(line_key, order_qty)
+                    shortfall = line_qty - existing_qty
+                    qty_mismatch = shortfall < 0
                     if type_mismatch or qty_mismatch:
                         detail_msg = (
                             f"FireGate 예약매수 라인 불일치: symbol={symbol}, line={label}, "
                             f"price=${existing_price:.2f}, expected_type={order_type}, "
                             f"active_type={','.join(sorted(active_types)) or 'unknown'}, "
-                            f"expected_qty={order_qty}, active_qty={existing_qty}. "
+                            f"expected_qty={line_qty}, active_qty={existing_qty}. "
                             f"전체 취소 후 FireGate 표대로 재예약 필요"
                         )
                         self._log_event(symbol, cycle["id"], "LOC_BUY_PRICE_MISMATCH", action=ACTION_BUY, message=detail_msg)
@@ -4144,24 +4157,30 @@ class Engine:
                             "reason": detail_msg,
                         })
                         continue
-                    already_msg = (
-                        f"FireGate 예약매수 이미 접수됨: symbol={symbol}, line={label}, type={order_type}, qty={existing_qty}, "
-                        f"price=${existing_price:.2f}, "
-                        f"order_no={existing.get('order_no', existing.get('reserve_order_no', '')) or 'N/A'}"
-                    )
-                    self._log_event(symbol, cycle["id"], "LOC_BUY_ALREADY_SCHEDULED", action=ACTION_BUY, message=already_msg)
-                    already_scheduled.append({
-                        "symbol": symbol,
-                        "cycle_id": cycle["id"],
-                        "buy_qty": existing_qty,
-                        "price": existing_price,
-                        "label": label,
-                        "order_type": order_type,
-                        "order_no": existing.get("order_no", existing.get("reserve_order_no", "")),
-                        "reason": buy_decision.get("reason", ""),
-                    })
-                    satisfied_line_keys.add(line_key)
-                    continue
+                    if shortfall > 0:
+                        # Keep the accepted part; add only the missing shares.
+                        topup_from_qty = existing_qty
+                        order_qty = shortfall
+                        label = f"{label} 추가"
+                    else:
+                        already_msg = (
+                            f"FireGate 예약매수 이미 접수됨: symbol={symbol}, line={label}, type={order_type}, qty={existing_qty}, "
+                            f"price=${existing_price:.2f}, "
+                            f"order_no={existing.get('order_no', existing.get('reserve_order_no', '')) or 'N/A'}"
+                        )
+                        self._log_event(symbol, cycle["id"], "LOC_BUY_ALREADY_SCHEDULED", action=ACTION_BUY, message=already_msg)
+                        already_scheduled.append({
+                            "symbol": symbol,
+                            "cycle_id": cycle["id"],
+                            "buy_qty": existing_qty,
+                            "price": existing_price,
+                            "label": label,
+                            "order_type": order_type,
+                            "order_no": existing.get("order_no", existing.get("reserve_order_no", "")),
+                            "reason": buy_decision.get("reason", ""),
+                        })
+                        satisfied_line_keys.add(line_key)
+                        continue
 
                 if allow_new_orders is False:
                     detail_msg = (
@@ -4178,11 +4197,13 @@ class Engine:
                         "expected_qty": order_qty,
                         "expected_order_type": order_type,
                         "line_key": line_key,
-                        "force_rebuild": True,
+                        # A short line is topped up on the next normal pass.
+                        "force_rebuild": topup_from_qty <= 0,
                         "reason": detail_msg,
                     })
                     continue
 
+                needed_qty = order_qty
                 orderable_amount = 0.0
                 try:
                     with self._broker_request_options(kis_api, timeout=4.0, retries=0):
@@ -4273,7 +4294,9 @@ class Engine:
                     )
                     self._log_event(symbol, cycle["id"], "LOC_BUY_SCHEDULED",
                                     action=ACTION_BUY,
-                                    message=f"FireGate 매수 예약: {label} {order_qty}주 @ ${loc_price:.2f}, 주문방식 {order_type}, 주문번호 {order_result.get('order_no', 'N/A')}, 사유: {buy_decision.get('reason', '')}")
+                                    message=f"FireGate 매수 예약: {label} {order_qty}주 @ ${loc_price:.2f}, 주문방식 {order_type}, 주문번호 {order_result.get('order_no', 'N/A')}"
+                                    + (f" (기존 {topup_from_qty}주 + 추가 {order_qty}주 = {topup_from_qty + order_qty}/{topup_from_qty + needed_qty}주)" if topup_from_qty > 0 else "")
+                                    + f", 사유: {buy_decision.get('reason', '')}")
                     orders.append({
                         "symbol": symbol,
                         "cycle_id": cycle["id"],
@@ -4284,7 +4307,8 @@ class Engine:
                         "order_no": order_result.get("order_no", ""),
                         "reason": buy_decision.get("reason", ""),
                     })
-                    satisfied_line_keys.add(line_key)
+                    if order_qty >= needed_qty:
+                        satisfied_line_keys.add(line_key)  # cash-capped lines stay missing
                     requested_amount = float(order_qty) * loc_price
                     newly_reserved_amount = round(newly_reserved_amount + requested_amount, 4)
                     new_reserved = {
@@ -4309,7 +4333,7 @@ class Engine:
                         "price": loc_price,
                         "reason": detail_msg,
                     })
-        self._append_extra_reservation_skips(skipped, expected_orders, reserved_line_map, "매수")
+        self._append_extra_reservation_skips(skipped, expected_orders, reserved_line_map, "매수", allow_shortfall=True)
         return self._loc_schedule_result(
             orders,
             already_scheduled,

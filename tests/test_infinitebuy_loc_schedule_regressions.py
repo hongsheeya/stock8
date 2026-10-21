@@ -913,7 +913,9 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 		self.assertEqual(kis_api.buy_calls, [])
 		self.assertTrue(result["skipped"][0]["force_rebuild"])
 
-	def test_schedule_loc_buys_marks_under_reserved_line_for_immediate_rebuild(self):
+	def test_schedule_loc_buys_tops_up_an_under_reserved_line(self):
+		# 10-21 LIVE: cash covered 4 of 18 shares on a line; later passes must
+		# add the missing shares, not demand "cancel everything, re-reserve".
 		engine, kis_api, _logs = self._engine(
 			buying_power_info={
 				"executable_amount": 2000,
@@ -955,12 +957,48 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 
 		result = engine.schedule_loc_buys(symbol_filter="SOXL")
 
-		self.assertEqual(result["status"], "partial_pending")
-		self.assertEqual(result["force_rebuild_count"], 1)
-		self.assertEqual(result["scheduled_count"], 0)
+		self.assertEqual(result["force_rebuild_count"], 0)
+		self.assertEqual([(c["price"], c["qty"]) for c in kis_api.buy_calls], [(226.76, 1), (267.57, 1)])
+		self.assertEqual(result["status"], "completed")
+		self.assertTrue(any("기존 1주 + 추가 1주 = 2/2주" in str(m) for m in _logs))
+
+	def test_schedule_loc_buys_still_flags_an_over_reserved_line(self):
+		engine, kis_api, _logs = self._engine(
+			buying_power_info={"executable_amount": 2000, "executable_qty": 10, "broker_amount": 2000, "broker_qty": 10},
+			reservation_orders=[{
+				"side": "BUY", "symbol": "SOXL", "exchange": "NASD", "qty": 3, "filled_qty": 0, "price": 226.76,
+				"order_no": "SOXL-OVER", "cancel_yn": "N", "status_name": "접수", "trade_status_name": "정상", "reject_reason": "",
+			}],
+			watchlist_rows=[{"id": "w1", "symbol": "SOXL", "exchange": "NASD", "is_active": True}],
+			cycle_rows=[{"id": "c1", "symbol": "SOXL", "status": "ACTIVE"}],
+		)
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
+			"should_buy": True, "order_type": "LOC", "reason": "FireGate v4 ladder",
+			"buy_orders": [{"label": "LOC 평단", "loc_price": 226.76, "order_qty": 2}],
+		}
+		result = engine.schedule_loc_buys(symbol_filter="SOXL")
 		self.assertEqual(kis_api.buy_calls, [])
-		self.assertTrue(result["skipped"][0]["force_rebuild"])
-		self.assertIn("expected_qty=2, active_qty=1", result["skipped"][0]["reason"])
+		self.assertEqual(result["force_rebuild_count"], 1)
+		self.assertIn("expected_qty=2, active_qty=3", result["skipped"][0]["reason"])
+
+	def test_a_cash_capped_top_up_stays_missing(self):
+		engine, kis_api, _logs = self._engine(
+			buying_power_info={"executable_amount": 500, "executable_qty": 2, "broker_amount": 500, "broker_qty": 2},
+			reservation_orders=[{
+				"side": "BUY", "symbol": "SOXL", "exchange": "NASD", "qty": 1, "filled_qty": 0, "price": 226.76,
+				"order_no": "SOXL-UNDER", "cancel_yn": "N", "status_name": "접수", "trade_status_name": "정상", "reject_reason": "",
+			}],
+			watchlist_rows=[{"id": "w1", "symbol": "SOXL", "exchange": "NASD", "is_active": True}],
+			cycle_rows=[{"id": "c1", "symbol": "SOXL", "status": "ACTIVE"}],
+		)
+		engine.calculate_buy_decision = lambda cycle, prev_close, **_kw: {
+			"should_buy": True, "order_type": "LOC", "reason": "FireGate v4 ladder",
+			"buy_orders": [{"label": "LOC 평단", "loc_price": 226.76, "order_qty": 5}],
+		}
+		result = engine.schedule_loc_buys(symbol_filter="SOXL")
+		self.assertEqual([(c["price"], c["qty"]) for c in kis_api.buy_calls], [(226.76, 1)])  # $500 less the $226.76 already reserved
+		self.assertEqual(result["force_rebuild_count"], 0)
+		self.assertNotEqual(result["status"], "completed")
 
 	def test_schedule_loc_buys_matches_broker_exchange_alias(self):
 		engine, kis_api, _logs = self._engine(
