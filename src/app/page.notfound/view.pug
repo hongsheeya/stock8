@@ -1,0 +1,18 @@
+//- Shown for any address that matches no page (10-21, pre-launch).
+main(class="nf-bg min-h-screen flex items-center justify-center px-4 py-10")
+    section(class="nf-card w-full max-w-md text-center", aria-labelledby="nf-title")
+        p(class="nf-code", aria-hidden="true") 404
+        h1#nf-title(class="text-xl font-semibold text-white mb-2") 페이지를 찾을 수 없어요
+        p(class="text-[14px] text-slate-400 leading-relaxed mb-8")
+            | 주소가 바뀌었거나 삭제된 페이지예요.
+            br
+            | 입력한 주소를 다시 확인하거나 아래에서 이동해 주세요.
+        div(class="flex flex-col sm:flex-row gap-2 justify-center")
+            a(routerLink="/dashboard", class="nf-btn nf-btn-primary") 대시보드로 이동
+            a(routerLink="/access", class="nf-btn") 로그인
+        nav(class="mt-8 text-[13px] text-slate-500", aria-label="주요 페이지")
+            a(routerLink="/infinite-buy", class="nf-link") 무한매수
+            span(aria-hidden="true") ·
+            a(routerLink="/history", class="nf-link") 거래 이력
+            span(aria-hidden="true") ·
+            a(routerLink="/settings", class="nf-link") 설정

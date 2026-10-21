@@ -1,5 +1,6 @@
 import { Component, OnInit, ChangeDetectorRef, enableProdMode } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, NavigationEnd } from '@angular/router';
+import { applyPageMeta } from '@wiz/libs/portal/trading/page-meta';
 import { Service } from '@wiz/libs/portal/season/service';
 import { TranslateService } from '@ngx-translate/core';
 
@@ -27,6 +28,10 @@ export class AppComponent implements OnInit {
 
     public async ngOnInit() {
         enableProdMode();
+        applyPageMeta(window.location.pathname);
+        this.router.events.subscribe((event: any) => {
+            if (event instanceof NavigationEnd) applyPageMeta(event.urlAfterRedirects || event.url);
+        });
         await this.service.init(this);
         this.installAssetVersionGuard();
     }

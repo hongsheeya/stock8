@@ -121,3 +121,45 @@
 .trading-bg.theme-light .glass-card-light {
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
+
+// Breadcrumb ("현재 위치") above each page except the dashboard.
+.page-crumbs {
+    margin: -8px 0 12px;
+    font-size: 12px;
+    color: var(--bn-muted);
+
+    ol {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    li {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    a {
+        color: var(--bn-muted-strong);
+        text-decoration: none;
+
+        &:hover {
+            color: var(--bn-body);
+            text-decoration: underline;
+        }
+    }
+
+    .sep {
+        color: var(--bn-muted);
+    }
+
+    li[aria-current="page"] {
+        color: var(--bn-body);
+        font-weight: 600;
+    }
+}

@@ -1,0 +1,8 @@
+{
+    "id": "seo.robots",
+    "title": "/robots.txt",
+    "route": "/robots.txt",
+    "viewuri": "/robots.txt",
+    "category": "seo",
+    "controller": ""
+}

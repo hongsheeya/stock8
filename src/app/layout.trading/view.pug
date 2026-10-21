@@ -6,6 +6,12 @@ div(class="trading-bg h-full flex flex-col", [class.theme-light]="themeMode === 
     div(class="flex-1 min-h-0 overflow-hidden")
         div(class="w-full h-full overflow-auto trading-scroll")
             div(class="max-w-7xl mx-auto px-4 py-6 min-h-full")
+                nav.page-crumbs(*ngIf="crumbs.length && crumbCurrent", aria-label="현재 위치")
+                    ol
+                        li(*ngFor="let crumb of crumbs")
+                            a([routerLink]="crumb.path") {{crumb.label}}
+                            span.sep(aria-hidden="true") ›
+                        li(aria-current="page") {{crumbCurrent}}
                 router-outlet
 
     //- Inside the themed wrapper so the guide follows light/dark mode.
