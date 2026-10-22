@@ -762,6 +762,11 @@ class DomesticDaytradeEngine:
             # gapped up >= 1%: +35.5%, max drawdown -18.9% -> -13.1%, quarters
             # -3.5/+11.5/+12.8/+11.6. Gap-up days fade after the open.
             "skip_gap_up_pct": max(0.0, self._safe_float(self._config(prefix + "skip_gap_up_pct", "0"), 0)),
+            # 10-22, same year: entries after the index had already moved more
+            # than 3% from its open averaged -1.02% (25 trades, 28% wins); with
+            # no entries beyond 2.5%: +54.0% -> +59.6%, max drawdown -10.9% ->
+            # -7.4%, both half-years better. 0 = no cap.
+            "max_move_pct": max(0.0, self._safe_float(self._config(prefix + "max_move_pct", "0"), 0)),
             # 10-21, same year: on gap-up days the leverage side still made
             # money when it caught the morning continuation (from 09:15: +21.0%
             # on the seed over 81 trades; 09:05-09:25 starts +10.8..+21.0%;
@@ -1136,6 +1141,9 @@ class DomesticDaytradeEngine:
             signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
         elif not view.get("trend"):
             signal["reason"] = f"시장 방향 대기 · {view.get('reason', '')} (기준 ±{params['move_pct']:g}%)"
+        elif params.get("max_move_pct", 0) > 0 and abs(self._safe_float(view.get("move_pct", 0), 0)) > params["max_move_pct"]:
+            signal["reason"] = (f"지수가 시가 대비 이미 {abs(self._safe_float(view.get('move_pct', 0), 0)):.2f}% 움직임 — "
+                                f"늦은 추격 진입 안 함 (상한 {params['max_move_pct']:g}%)")
         elif price <= 0 or price <= self._safe_float(bar.get("vwap", 0), 0):
             signal["reason"] = f"ETF가 VWAP 아래 — 추세 확인 대기 · {view.get('reason', '')}"
         else:
