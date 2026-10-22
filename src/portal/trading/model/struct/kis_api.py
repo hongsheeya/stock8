@@ -239,6 +239,16 @@ class KisApi:
         offset_hours = -13 if dst_start <= now < dst_end else -14
         return now + datetime.timedelta(hours=offset_hours)
 
+    def _us_market_quiet(self, now=None):
+        """No US trading at all (ET 20:00-04:00, weekends, holidays): balances
+        and quotes cannot change, so PAPER may cache overseas GETs longer.
+        10-22: during the KS session the KS worker re-read US balances and
+        prices ~600 times an hour."""
+        et = self._us_eastern_now(now)
+        if et.weekday() >= 5 or self.US_MARKET_HOLIDAYS.get(et.date().isoformat()):
+            return True
+        return et.hour >= 20 or et.hour < 4
+
     def us_market_holiday_label(self, now=None):
         now_et = self._us_eastern_now(now)
         return self.US_MARKET_HOLIDAYS.get(now_et.date().isoformat(), "")
@@ -621,7 +631,8 @@ class KisApi:
             cache_key = json.dumps([scope, path, tr_id, params or {}], ensure_ascii=False, sort_keys=True, default=str)
             with KisApi._paper_get_cache_lock:
                 cached = KisApi._paper_get_cache.get(cache_key)
-                if isinstance(cached, dict) and (time.monotonic() - float(cached.get("ts", 0) or 0)) < 20.0:
+                ttl = 300.0 if "/overseas-" in path and self._us_market_quiet() else 20.0
+                if isinstance(cached, dict) and (time.monotonic() - float(cached.get("ts", 0) or 0)) < ttl:
                     _CALL_COUNTS["hits"] += 1
                     return copy.deepcopy(cached.get("data"))
         headers = self._headers(tr_id)
