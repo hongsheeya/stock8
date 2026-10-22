@@ -121,6 +121,10 @@ _COIN_WORKER_KEY = "_stock8_live_coin_worker"
 _COIN_WORKER_LOCK = _sys.__dict__.setdefault("_stock8_live_coin_worker_lock", threading.Lock())
 _COIN_POLICY_LOCK = _sys.__dict__.setdefault("_stock8_coin_policy_lock", threading.RLock())
 _PAPER_WORKER_OWNER_KEY = "paper_worker_owner_user_id"
+# 10-23 US daily trend hold (PAPER process only; see us_trend_hold.py).
+_USTH_POLICY_KEY = "us_trend_hold_policy_v1"
+_USTH_WORKER_KEY = "_stock8_paper_us_trend_hold_worker"
+_USTH_WORKER_LOCK = _sys.__dict__.setdefault("_stock8_paper_us_trend_hold_worker_lock", threading.Lock())
 
 
 class _UserScopedDb:
@@ -956,6 +960,10 @@ class Struct:
         owner = str(owner or self._current_user_id() or "").strip()
         if not owner:
             return
+        try:
+            self._ensure_paper_trend_hold_worker()
+        except Exception as exc:
+            print(f"Stock8 US trend hold worker start failed: {type(exc).__name__}")
         started = False
         state = self._worker_state(owner)
         with Struct._worker_lock:
@@ -1324,6 +1332,148 @@ class Struct:
                 registry["wake"].clear()
 
         thread = threading.Thread(target=coin_job, daemon=True, name="stock8-live-coin")
+        registry["thread"] = thread
+        thread.start()
+
+    # ------------------------------------------------------- US trend hold
+    def us_trend_hold_policy_read(self):
+        """The PAPER US trend-hold policy row, read straight from the DB."""
+        engine_cls = self.model("us_trend_hold")
+        row = self.orm.use("trading_config", module="trading").get(key=_USTH_POLICY_KEY)
+        try:
+            raw = _json.loads((row or {}).get("value", "") or "{}")
+        except (ValueError, TypeError):
+            raw = {}
+        return engine_cls.normalize_policy(raw)
+
+    def us_trend_hold_policy_write(self, updates):
+        uid = str(self._current_user_id() or "")
+        if not uid or not self._current_user_is_admin(uid):
+            raise PermissionError("미장 추세 보유 설정은 관리자만 바꿀 수 있습니다.")
+        if not PAPER_MODE:
+            raise PermissionError("미장 추세 보유는 모의투자 서버(3002)에서만 운용합니다.")
+        engine_cls = self.model("us_trend_hold")
+        policy = self.us_trend_hold_policy_read()
+        policy.update(updates or {})
+        policy["owner_user_id"] = uid
+        policy["updated_at"] = _kst_now().strftime("%Y-%m-%d %H:%M:%S")
+        policy = engine_cls.normalize_policy(policy)
+        self._write_config_value(_USTH_POLICY_KEY, _json.dumps(policy, ensure_ascii=False), "US daily trend hold policy (PAPER)", False)
+        registry = _sys.__dict__.get(_USTH_WORKER_KEY) or {}
+        if registry.get("wake") is not None:
+            registry["wake"].set()
+        self._ensure_paper_trend_hold_worker()
+        return policy
+
+    def us_trend_hold_dir(self):
+        return wiz.project.fs().abspath("data/paper/us_trend_hold")
+
+    def us_trend_hold_ledger(self):
+        try:
+            with open(_os.path.join(self.us_trend_hold_dir(), "state.json"), encoding="utf-8") as handle:
+                return _json.load(handle)
+        except (OSError, ValueError):
+            return {}
+
+    def us_trend_hold_reserved_symbols(self):
+        """ETFs the trend-hold sleeve owns or may buy: the day-trade lane must
+        neither adopt nor trade them (it reconciles every US holding)."""
+        if not PAPER_MODE:
+            return set()
+        engine_cls = self.model("us_trend_hold")
+        reserved = set()
+        if self.us_trend_hold_policy_read()["enabled"]:
+            reserved |= {etf for _index, etf in engine_cls.PAIRS}
+        for etf, sleeve in ((self.us_trend_hold_ledger() or {}).get("sleeves") or {}).items():
+            if int((sleeve or {}).get("qty") or 0) > 0 or (sleeve or {}).get("pending"):
+                reserved.add(str(etf).upper())
+        return reserved
+
+    def _us_trend_hold_closes(self, symbol):
+        """Adjusted daily closes (the backtest used the same source); KIS
+        daily prices stop at ~100 bars, short of the 126-session lookback."""
+        import yfinance as yf
+        hist = yf.Ticker(symbol).history(period="1y", interval="1d", auto_adjust=True)
+        if hist is None or hist.empty:
+            return []
+        return [(ts.strftime("%Y-%m-%d"), float(close)) for ts, close in hist["Close"].dropna().items()]
+
+    def _us_trend_hold_log(self, event, symbol, action, message, payload, price=0.0, order_no=""):
+        filled = event == "USTH_FILL"
+        qty = int((payload or {}).get("qty") or 0)
+        self.db("trade_log").insert({
+            "cycle_id": f"us_trend_hold:{symbol or 'all'}",
+            "symbol": symbol or "USTH",
+            "event_type": event,
+            "action": action,
+            "order_no": str(order_no or ""),
+            "order_price": float(price or 0),
+            "order_qty": qty,
+            "filled_price": float(price or 0) if filled else 0,
+            "filled_qty": qty if filled else 0,
+            "message": str(message or "")[:2000],
+            "raw_response": _json.dumps({"market": "US", "exchange": "AMEX", "currency": "USD", **(payload or {})}, ensure_ascii=False, default=str),
+        })
+
+    def us_trend_hold_build_engine(self, policy):
+        engine_cls = self.model("us_trend_hold")
+        kis = self.kis_api
+        holidays = getattr(kis, "US_MARKET_HOLIDAYS", {}) or {}
+        return engine_cls(kis, self.us_trend_hold_dir(), policy, self._us_trend_hold_closes,
+                          log=self._us_trend_hold_log, holiday_fn=lambda day: holidays.get(day, ""))
+
+    def us_trend_hold_worker_status(self):
+        registry = _sys.__dict__.get(_USTH_WORKER_KEY) or {}
+        thread = registry.get("thread")
+        return {"process": "PAPER" if PAPER_MODE else "LIVE", "alive": bool(thread and thread.is_alive()),
+                **{k: v for k, v in registry.items() if k not in ("thread", "wake")}}
+
+    def _ensure_paper_trend_hold_worker(self):
+        if not PAPER_MODE:
+            return
+        with _USTH_WORKER_LOCK:
+            if _sys.__dict__.get(_USTH_WORKER_KEY) is not None:
+                return
+            registry = {"status": "starting", "error": "", "last_check": "", "wake": threading.Event()}
+            _sys.__dict__[_USTH_WORKER_KEY] = registry
+
+        def job():
+            import flask
+            engine, engine_owner, trading = None, None, None
+            while True:
+                delay = 300.0
+                try:
+                    with wiz.server.app.flask.test_request_context("/"):
+                        policy = self.us_trend_hold_policy_read()
+                        owner = policy["owner_user_id"]
+                        ledger = self.us_trend_hold_ledger()
+                        pending = any((s or {}).get("pending") for s in (ledger.get("sleeves") or {}).values())
+                        if not owner or not self.orm.use("user").get(id=owner) or not self._current_user_is_admin(owner) \
+                                or (not policy["enabled"] and not pending):
+                            registry["status"] = "off"  # no KIS call at all
+                            engine, engine_owner = None, None
+                        else:
+                            flask.session["id"] = owner
+                            if trading is None:
+                                trading = Struct()
+                            if engine is None or engine_owner != owner:
+                                engine = trading.us_trend_hold_build_engine(policy)
+                                engine_owner = owner
+                            else:
+                                engine.update_policy(policy)
+                            delay = float(engine.step().get("next_delay", 60) or 60)
+                            registry["status"] = "on" if policy["enabled"] else "settling"
+                    registry["last_check"] = _kst_now().isoformat()
+                    registry["error"] = ""
+                except Exception as exc:
+                    registry["status"] = "error"
+                    registry["error"] = str(exc)[:200]
+                    engine, engine_owner = None, None
+                    delay = 120.0
+                registry["wake"].wait(delay)
+                registry["wake"].clear()
+
+        thread = threading.Thread(target=job, daemon=True, name="stock8-paper-us-trend-hold")
         registry["thread"] = thread
         thread.start()
 

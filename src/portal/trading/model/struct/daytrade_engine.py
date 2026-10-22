@@ -331,6 +331,13 @@ class DomesticDaytradeEngine:
         except Exception:
             # Keep the last known set rather than releasing reserved symbols.
             return reserved | set((cached or (0, set()))[1])
+        try:
+            # 10-23 PAPER US trend hold owns QLD/SSO while it runs or holds them.
+            reserved |= set(self.struct.us_trend_hold_reserved_symbols() or ())
+        except AttributeError:
+            pass
+        except Exception:
+            return reserved | set((cached or (0, set()))[1])
         self._infinite_buy_symbols_cache = (_clock.time(), frozenset(reserved))
         return reserved
 
@@ -1387,11 +1394,18 @@ class DomesticDaytradeEngine:
         rules = self._RULE_STRATEGIES["US" if self._is_us_market(market) else "KS"]
         return bool(paused) and rules <= paused
 
-    def _without_paused_entries(self, rows):
+    def _without_paused_entries(self, rows, market="KS"):
         """Drop new-entry candidates of strategies paused by
         daytrade_paused_entry_strategies (comma separated ids). Held positions
         keep their exits. 10-16: the user paused the rule strategies that
-        showed no edge (KS vrev/volume_breakout, the US rule set)."""
+        showed no edge (KS vrev/volume_breakout, the US rule set).
+
+        daytrade_us_entries_enabled=false stops every new US entry while the
+        lane keeps running for the exits (turning daytrade_us_auto_enabled off
+        would also stop the exit watch). 10-23: US intraday rules lost over 3
+        years of data; the user turned PAPER US entries off."""
+        if self._is_us_market(market) and str(self._config("daytrade_us_entries_enabled", "true") or "true").strip().lower() == "false":
+            return [row for row in rows if row.get("source") == "active_position"]
         raw = str(self._config("daytrade_paused_entry_strategies", "") or "")
         paused = {item.strip().lower() for item in raw.split(",") if item.strip()}
         if not paused:
@@ -7024,9 +7038,12 @@ class DomesticDaytradeEngine:
 
         results = []
         executed_count = 0
-        candidate_rows = self._with_regime_trend_candidates(list(candidate_payload.get("candidates", []) or []), candidate_payload, market="US")
-        candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="US")
-        candidate_rows = self._without_paused_entries(candidate_rows)
+        candidate_rows = list(candidate_payload.get("candidates", []) or [])
+        if str(self._config("daytrade_us_entries_enabled", "true") or "true").strip().lower() != "false":
+            # no extra index/scan calls for candidates that would be dropped anyway
+            candidate_rows = self._with_regime_trend_candidates(candidate_rows, candidate_payload, market="US")
+            candidate_rows = self._with_momentum_candidates(candidate_rows, candidate_payload, market="US")
+        candidate_rows = self._without_paused_entries(candidate_rows, market="US")
         slot_seed_limit_krw = self._safe_float(candidate_payload.get("slot_seed_limit_krw", 0), 0)
 
         for item in candidate_rows:

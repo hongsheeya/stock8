@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.ustrend",
+    "title": "/us-trend",
+    "namespace": "ustrend",
+    "viewuri": "/us-trend",
+    "category": "ustrend",
+    "controller": "coin",
+    "layout": "layout.trading",
+    "template": "wiz-page-ustrend()"
+}
