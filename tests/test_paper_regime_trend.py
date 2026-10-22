@@ -152,6 +152,17 @@ class RegimeTrendTests(unittest.TestCase):
         engine._config = lambda key, default=None: configs.get(key, default)
         self.assertIn("10:00~", self._signal(engine, "122630")["reason"])
 
+    def test_late_entries_beyond_the_move_cap_are_skipped(self):
+        snaps = {"069500": _snap(100, 97.0, 98.5), "114800": _snap(1000, 1010, 1000)}  # index -3.0% from open
+        engine = self._engine(snaps)
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+        engine._config = lambda key, default=None: "2.5" if key == "daytrade_regime_trend_max_move_pct" else default
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("늦은 추격", signal["reason"])
+        snaps["069500"] = _snap(100, 98.0, 99.0)  # -2.0%: within the cap
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])
