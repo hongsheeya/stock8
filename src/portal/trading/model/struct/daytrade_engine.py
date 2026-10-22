@@ -1839,7 +1839,7 @@ class DomesticDaytradeEngine:
             str(order.get("timestamp", ""))[:10]
             for state in state_map.values() if not self._is_us_market(state.get("market", "KS"))
             for order in state.get("orders", [])
-            if order.get("order_no") and str(order.get("status", "")).upper() not in ("FILLED", "CANCELLED")
+            if order.get("order_no") and str(order.get("status", "")).upper() not in ("FILLED", "CANCELLED", "EXPIRED_UNVERIFIED")
             and len(str(order.get("timestamp", ""))) >= 10
         })
         updated = 0
@@ -1852,7 +1852,13 @@ class DomesticDaytradeEngine:
                 original = snapshot.get(prefix + "_order_no")
                 if not original:
                     continue
-                self._sync_us_pending_order(snapshot, snapshot.get("symbol", ""), side)
+                outcome = self._sync_us_pending_order(snapshot, snapshot.get("symbol", ""), side)
+                if outcome == "open" and self._us_pending_session_over(snapshot.get(prefix + "_placed_at", "")):
+                    # 10-22: a SPCX sell from 23:06 stayed "pending" with no
+                    # position left, and every minute re-queried 3 exchanges
+                    # (168 calls/h, 33 timeouts). US orders are day orders, so
+                    # 18 h after placement its session is over: settle it.
+                    self._expire_us_pending(snapshot, prefix, original)
                 with self._global_lock("state_io"):
                     current = self._load_state_map()
                     state = current.get(key, {})
@@ -1880,6 +1886,7 @@ class DomesticDaytradeEngine:
                 errors.append({"date": date, "message": str(exc)})
                 continue
             indexed = {(str(f.get("symbol", "")), self._normalized_order_no(f.get("order_no"))): f for f in fills}
+            settled_day = date < (self._now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
             with self._global_lock("state_io"):
                 current = self._load_state_map()
                 for state in current.values():
@@ -1890,8 +1897,15 @@ class DomesticDaytradeEngine:
                             continue
                         fill = indexed.get((str(state.get("symbol", "")), self._normalized_order_no(order.get("order_no"))))
                         if not fill:
+                            if settled_day and order.get("order_no") and \
+                                    str(order.get("status", "")).upper() not in ("FILLED", "CANCELLED", "EXPIRED_UNVERIFIED"):
+                                # 10-22: unverified sells from 09-03/09-22 were
+                                # re-queried every minute (117 calls/h). A past
+                                # day's history is final; absent means expired.
+                                order["status"] = "EXPIRED_UNVERIFIED"
+                                updated += 1
                             continue
-                        status = str(fill.get("status", "OPEN")).upper()
+                        status = self._final_day_order_status(fill, order.get("timestamp", ""))
                         order.update(status=status, filled_qty=self._safe_int(fill.get("filled_qty"), 0),
                                      filled_price=self._safe_float(fill.get("filled_price"), 0), verification="kis")
                         updated += 1
@@ -1904,6 +1918,33 @@ class DomesticDaytradeEngine:
         result = {"checked_at": self._timestamp(), "updated": updated, "errors": errors, "remaining_dates": len(dates)}
         self._fs().write.json(f"{self._data_root()}/reconciliation.json", result)
         return result
+
+    def _us_pending_session_over(self, placed_at, hours=18):
+        """A US day order is done once its session is: 18 h after placement
+        covers pre-market through after-hours."""
+        try:
+            placed = datetime.datetime.strptime(str(placed_at or "")[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return False
+        return (self._now().replace(tzinfo=None) - placed).total_seconds() > hours * 3600
+
+    def _expire_us_pending(self, state, prefix, order_no):
+        for order in state.get("orders", []) or []:
+            if self._same_order_no(order.get("order_no"), order_no) and \
+                    str(order.get("status", "")).upper() not in ("FILLED", "CANCELLED"):
+                order["status"] = "EXPIRED_UNVERIFIED"
+        if prefix == "pending_sell":
+            self._clear_pending_sell(state)
+        else:
+            for suffix in ("order_no", "action", "placed_at"):
+                state[prefix + "_" + suffix] = ""
+            state[prefix + "_qty"] = 0
+            state[prefix + "_price"] = 0
+        try:
+            self._append_runtime_log("warning", f"{state.get('symbol', '')} 미장 주문 {order_no}: 세션 종료 후에도 체결 내역이 없어 확인 대기를 정리했습니다 (잔고는 브로커 기준)",
+                                     symbol=state.get("symbol", ""), market="US")
+        except Exception:
+            pass
 
     def _final_day_order_status(self, matched, placed_at):
         """Status of a domestic order, final once its trading day has closed.
