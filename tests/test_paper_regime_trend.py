@@ -163,6 +163,19 @@ class RegimeTrendTests(unittest.TestCase):
         snaps["069500"] = _snap(100, 98.0, 99.0)  # -2.0%: within the cap
         self.assertEqual(self._signal(engine)["action"], "BUY1")
 
+    def test_no_second_entry_after_a_manual_sale_the_same_day(self):
+        snaps = {"069500": _snap(100, 98.5, 99.3), "114800": _snap(1000, 1010, 1000)}
+        state = {"symbol": "114800", "market": "KS", "position_qty": 0,
+                 "orders": [{"timestamp": f"{TODAY} 09:40:00", "action": "BUY1", "qty": 300, "status": "FILLED"}]}
+        engine = self._engine(snaps, state=state)
+        signal = self._signal(engine)
+        self.assertEqual(signal["action"], "HOLD")
+        self.assertIn("재진입 안 함", signal["reason"])
+        # an entry from another day does not block today
+        state["orders"][0]["timestamp"] = "2026-05-25 09:40:00"
+        engine = self._engine(snaps, state=state)
+        self.assertEqual(self._signal(engine)["action"], "BUY1")
+
     def test_stale_index_session_is_not_a_view(self):
         engine = self._engine({"069500": _snap(100, 98.5, 99.3, date="2026-05-25")})
         self.assertFalse(engine._regime_trend_view("114800")["ok"])

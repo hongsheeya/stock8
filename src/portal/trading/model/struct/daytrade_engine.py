@@ -906,6 +906,29 @@ class DomesticDaytradeEngine:
             return {"action": "SELL_FULL", "reason": f"{label} — 방향 추세 종료 청산 ({view.get('reason', '')})", "risk_exit": True}
         return None
 
+    def _regime_trend_entered_today(self, state, market="KS"):
+        """One trend entry per ETF per session, as in the validated replay.
+
+        10-22 LIVE: the user sold 252670 by hand at 109 (the position simply
+        vanished from the balance, leaving no exit record), and two minutes
+        later the still-valid signal bought 2,972 shares back at 110. Any
+        buy filled this session counts, however the position ended."""
+        if self._is_us_market(market):
+            cutoff = self._now() - datetime.timedelta(hours=16)
+            since = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+            same = lambda ts: str(ts or "")[:19] >= since
+        else:
+            today = self._now().strftime("%Y-%m-%d")
+            same = lambda ts: str(ts or "")[:10] == today
+        for order in state.get("orders", []) or []:
+            if not str(order.get("action", "")).upper().startswith("BUY"):
+                continue
+            if str(order.get("status", "")).upper() in ("CANCELLED", "REJECTED", "ERROR", "FAILED"):
+                continue
+            if same(order.get("timestamp")) and self._safe_int(order.get("qty", 0), 0) > 0:
+                return True
+        return False
+
     def _regime_trend_cooling(self, state, minutes):
         if minutes <= 0 or not str(state.get("last_exit_action", "") or "").startswith("SELL"):
             return False
@@ -1137,6 +1160,8 @@ class DomesticDaytradeEngine:
             signal["reason"] = "오늘 손절한 종목 · 같은 장중 재진입 차단"
         elif params["reversal_block"] and self._regime_trend_reversed_today(state, market):
             signal["reason"] = "오늘 지수 VWAP 이탈로 청산한 종목 · 횡보장 재진입 차단"
+        elif self._regime_trend_entered_today(state, market):
+            signal["reason"] = "오늘 이미 진입했던 종목 — 같은 날 재진입 안 함 (직접 매도 포함)"
         elif self._regime_trend_cooling(state, params["cooldown_min"]):
             signal["reason"] = f"청산 후 {params['cooldown_min']}분 재진입 대기"
         elif not view.get("trend"):
