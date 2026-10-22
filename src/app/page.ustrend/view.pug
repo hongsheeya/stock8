@@ -1,0 +1,151 @@
+div(*ngIf="loading", class="dx-page")
+    div(class="dx-empty") 미장 추세 보유 화면을 준비하고 있습니다…
+
+div(*ngIf="!loading", class="dx-page ust-page")
+    div(class="dx-head")
+        div(class="dx-title")
+            h1 미장 추세 보유
+            span(class="dx-chip", [class.is-off]="!enabled", [class.is-live]="enabled")
+                i
+                | {{enabled ? '운용 중' : '꺼짐'}}
+            span(class="dx-chip is-off") 모의투자 · 관리자 전용
+        div(class="dx-tools")
+            span(class="dx-updated", *ngIf="engine?.updated_at") {{kst(engine.updated_at)}} 기준
+            button(class="dx-tool", (click)="load(false)", [disabled]="refreshing") {{refreshing ? '갱신 중' : '새로고침'}}
+
+    div(class="dx-alerts")
+        div(class="dx-alert is-danger", *ngIf="errorMessage")
+            strong 확인 필요
+            span {{errorMessage}}
+            button((click)="errorMessage = ''") 닫기
+        div(class="dx-alert is-ok", *ngIf="notice")
+            strong 완료
+            span {{notice}}
+            button((click)="notice = ''") 닫기
+        div(class="dx-alert is-warn", *ngIf="data && !data.available")
+            strong 모의투자 서버 전용
+            span 미장 추세 보유는 모의투자 서버에서만 운용합니다.
+            a(class="dx-tool", [href]="data.paper_url") 모의투자 화면으로
+        div(class="dx-alert is-danger", *ngIf="workerStatus")
+            strong 실행 상태
+            span {{workerStatus}}
+        div(class="dx-alert is-danger", *ngIf="engine?.last_error")
+            strong 최근 오류
+            span {{engine.last_error}}
+        div(class="dx-alert is-info", *ngIf="!enabled")
+            strong 꺼짐
+            span 주문도 시세 조회도 하지 않습니다. 보유 중이던 ETF는 그대로 남습니다.
+
+    div(class="dx-kpis")
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 평가금액
+            div(class="dx-kpi-value") {{usd(engine?.equity || data?.policy?.seed_usd)}}
+            div(class="dx-kpi-sub") 시드 {{usd(engine?.seed_usd || data?.policy?.seed_usd)}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 손익
+            div(class="dx-kpi-value", [class]="tone(equityChange())") {{signedUsd(equityChange())}}
+            div(class="dx-kpi-sub") 고점 대비 {{pct(engine?.drawdown_pct)}}
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 보유
+            div(class="dx-kpi-value") {{heldLabel}}
+            div(class="dx-kpi-sub") QLD = 나스닥100 2배 · SSO = S&amp;P500 2배
+        div(class="dx-kpi")
+            div(class="dx-kpi-label") 판단·주문 시각
+            div(class="dx-kpi-value is-muted") 미국 09:35
+            div(class="dx-kpi-sub") 한국 22:35 (서머타임 해제 후 23:35) · 하루 한 번
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 종목별 현황
+                span(class="dx-count") {{sleeves.length}}
+            small 지수의 6개월(126거래일) 수익률이 플러스면 2배 ETF 보유, 마이너스면 현금
+        div(class="dx-empty", *ngIf="!sleeves.length") {{enabled ? '첫 판단을 준비하고 있습니다.' : '켜면 현황이 표시됩니다.'}}
+        div(class="dx-table-wrap", *ngIf="sleeves.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 종목
+                        th 상태
+                        th(class="num") 기준 지수 6개월
+                        th(class="num") 수량
+                        th(class="num") 현재가
+                        th(class="num") 평가
+                        th(class="num") 실현 손익
+                        th 최근 판단
+                tbody
+                    tr(*ngFor="let r of sleeves")
+                        td
+                            div(class="dx-sym")
+                                strong {{r.etf}}
+                                small {{r.index}} 기준
+                        td
+                            span(class="dx-tag", [class.is-buy]="r.qty > 0", [class.is-warn]="r.pending") {{r.pending ? '주문 확인 중' : (r.qty > 0 ? '보유' : '현금')}}
+                        td(class="num", [class]="tone(r.signal?.mom_pct)") {{pct(r.signal?.mom_pct)}}
+                        td(class="num") {{r.qty}}
+                        td(class="num") {{usd(r.price)}}
+                        td(class="num")
+                            | {{usd(r.value)}}
+                            small([class]="tone(r.unrealized_usd)", *ngIf="r.qty > 0") {{signedUsd(r.unrealized_usd)}}
+                        td(class="num", [class]="tone(r.realized_usd)") {{signedUsd(r.realized_usd)}}
+                        td(class="dx-wrap dx-muted") {{r.last_reason || '-'}}
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 운용 설정
+            small 모의투자 계좌에서만 주문합니다
+        div(class="ust-field")
+            label 운용
+            div(class="dx-seg")
+                button([class.is-on]="!enabled", (click)="setEnabled(false)", [disabled]="!!busy || !data?.available") 꺼짐
+                button([class.is-on]="enabled", (click)="setEnabled(true)", [disabled]="!!busy || !data?.available") 켜기
+        div(class="ust-field")
+            label 시드 (달러)
+            input(class="dx-input", type="number", [(ngModel)]="form.seed_usd", min="1000", step="1000")
+        div(class="ust-actions")
+            button(class="dx-tool is-primary", (click)="saveSettings()", [disabled]="!!busy || !data?.available") 저장
+            small 시드를 반으로 나눠 QLD·SSO를 따로 운용합니다. 보유 중인 종목에는 새 시드가 청산 뒤에 적용됩니다.
+
+    section(class="dx-card")
+        div(class="dx-card-head")
+            h2 최근 기록
+                span(class="dx-count") {{data?.events?.length || 0}}
+        div(class="dx-empty", *ngIf="!data?.events?.length") 아직 기록이 없습니다.
+        div(class="dx-table-wrap", *ngIf="data?.events?.length")
+            table(class="dx-table")
+                tbody
+                    tr(*ngFor="let e of data.events")
+                        td(class="dx-muted") {{e.created}}
+                        td
+                            span(class="dx-tag", [ngClass]="eventTone(e)") {{eventLabel(e)}}
+                        td(class="dx-wrap") {{e.message}}
+
+    section(class="dx-card dx-details")
+        div(class="dx-card-head ust-research-head", (click)="showResearch = !showResearch")
+            h2 전략 검증 요약
+            small {{showResearch ? '접기' : '펼치기'}}
+        div(*ngIf="showResearch", class="ust-research")
+            p 규칙: 장 마감 기준으로 QQQ·SPY의 6개월(126거래일) 수익률이 플러스면 다음 날 장 초반에 QLD·SSO를 보유하고, 마이너스면 팔고 현금으로 기다립니다. 설정값은 검증 전에 고정했고 바꾸지 않습니다.
+            table(class="dx-table")
+                thead
+                    tr
+                        th 구간 (편도 비용 0.1%)
+                        th(class="num") 연 수익
+                        th(class="num") 최대 낙폭
+                tbody
+                    tr
+                        td 이 규칙 · 2007~2016 (규칙 고른 구간)
+                        td(class="num dx-up") +13.5%
+                        td(class="num") -34%
+                    tr
+                        td 이 규칙 · 2017~2026 (처음 보는 구간)
+                        td(class="num dx-up") +23.8%
+                        td(class="num") -44%
+                    tr
+                        td QLD+SSO 계속 보유 · 전체
+                        td(class="num") +20.7%
+                        td(class="num dx-down") -84%
+                    tr
+                        td QQQ+SPY 계속 보유 · 전체
+                        td(class="num") +13.8%
+                        td(class="num") -54%
+            p(class="dx-muted") 수익을 더 내는 전략이 아니라 2배 ETF의 폭락을 피하는 장치입니다. 2008년 -70%를 -15%로 막았지만, 빠른 반등장(2019·2020·2023)은 늦게 따라가 크게 뒤처집니다. 해외주식 양도세(연 250만 원 초과분 22%)는 반영하지 않았습니다.

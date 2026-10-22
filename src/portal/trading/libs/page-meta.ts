@@ -23,6 +23,7 @@ const PAGES: { pattern: RegExp; meta: PageMeta }[] = [
     { pattern: /^\/daytrade\/?$/, meta: { title: '단타', trail: [HOME] } },
     { pattern: /^\/history\/?$/, meta: { title: '거래 이력', trail: [HOME] } },
     { pattern: /^\/coin\/?$/, meta: { title: '코인 자동매매', trail: [HOME] } },
+    { pattern: /^\/us-trend\/?$/, meta: { title: '미장 추세 보유', trail: [HOME] } },
     { pattern: /^\/simulation\/?$/, meta: { title: '시뮬레이션', trail: [HOME] } },
     { pattern: /^\/settings\/live\/?$/, meta: { title: '실투자 설정', trail: [HOME, { label: '설정', path: '/settings' }] } },
     { pattern: /^\/settings\/?$/, meta: { title: '설정', trail: [HOME] } },
