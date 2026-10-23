@@ -16,6 +16,12 @@ import threading
 _TIME = wiz.model("portal/trading/kst")
 # One PAPER close-time run at a time, across worker and scheduler threads.
 _PAPER_LOC_LOCK = sys.__dict__.setdefault('_stock8_paper_loc_lock', threading.Lock())
+# 10-23 LIVE: a LOC buy line short of USD was re-tried on every ~40 s pass,
+# each line re-querying buying power (repeated "초당 거래건수 초과" errors and
+# skip logs all day). A short line is re-checked after this many seconds;
+# a rate-limited query after a short pause.
+LOC_SHORTFALL_RECHECK_SEC = 600
+LOC_RATE_LIMIT_RECHECK_SEC = 60
 
 # 사이클 상태 상수
 STATUS_IDLE = "IDLE"
@@ -3898,6 +3904,27 @@ class Engine:
             "errors": errors,
         }
 
+    def _loc_clock(self):
+        return time.time()
+
+    def _loc_buy_recheck_state(self):
+        """Per engine instance: the LIVE LOC job keeps one Struct (and engine)
+        for its lifetime, while a manual run from the page builds a fresh one
+        and so re-checks every line at once."""
+        state = self.__dict__.get("_loc_buy_recheck")
+        if state is None:
+            state = {}
+            self.__dict__["_loc_buy_recheck"] = state
+        today = _TIME.now().strftime("%Y-%m-%d")
+        for key in [k for k in state if not k.startswith(today + "|")]:
+            state.pop(key, None)
+        return state
+
+    @staticmethod
+    def _loc_rate_limited(exc):
+        text = str(exc or "")
+        return "초당 거래건수" in text or "요청 대기 한도" in text or "EGW00201" in text
+
     def schedule_loc_buys(self, symbol_filter="", allow_new_orders=True):
         """
         LOC 매수 예약 — 오늘 매수 예정 사이클 중 LOC 매수 주문을 사전 접수
@@ -3969,6 +3996,8 @@ class Engine:
         reserved_today_amount = round(reserved_today_amount, 4)
         newly_reserved_amount = 0.0
         allow_auto_exchange_attempt = self._loc_buy_auto_exchange_attempt_enabled()
+        recheck = self._loc_buy_recheck_state()
+        now_sec = self._loc_clock()
         for item in active_items:
             symbol = item["symbol"]
             if symbol_filter and str(symbol or "").upper() != symbol_filter:
@@ -4205,6 +4234,19 @@ class Engine:
 
                 needed_qty = order_qty
                 orderable_amount = 0.0
+                recheck_key = f"{_TIME.now().strftime('%Y-%m-%d')}|{line_key}|{label}"
+                waiting = recheck.get(recheck_key)
+                if waiting and now_sec < float(waiting.get("until", 0) or 0):
+                    # Quiet re-check: no buying-power query and no new log line.
+                    skipped.append({
+                        "symbol": symbol,
+                        "cycle_id": cycle["id"],
+                        "label": label,
+                        "price": loc_price,
+                        "recheck_in_sec": int(float(waiting["until"]) - now_sec),
+                        "reason": f"{waiting.get('reason', '')} (재확인 {int(float(waiting['until']) - now_sec)}초 후)",
+                    })
+                    continue
                 try:
                     with self._broker_request_options(kis_api, timeout=4.0, retries=0):
                         buying_power_info = kis_api.get_buying_power_info(
@@ -4259,6 +4301,7 @@ class Engine:
                                 "price": loc_price,
                                 "reason": detail_msg,
                             })
+                            recheck[recheck_key] = {"until": now_sec + LOC_SHORTFALL_RECHECK_SEC, "reason": "예약매수 스킵: 주문가능예산 부족"}
                             continue
 
                         detail_msg = (
@@ -4283,6 +4326,7 @@ class Engine:
                             "price": loc_price,
                             "reason": detail_msg,
                         })
+                        recheck[recheck_key] = {"until": now_sec + LOC_SHORTFALL_RECHECK_SEC, "reason": "예약매수 대기: 해외 주문가능금액 부족"}
                         continue
 
                     order_result = kis_api.buy_reservation_order(
@@ -4323,8 +4367,11 @@ class Engine:
                     }
                     reserved_symbol_map.setdefault(symbol_key, []).append(new_reserved)
                     reserved_line_map.setdefault(line_key, []).append(new_reserved)
+                    recheck.pop(recheck_key, None)
                 except Exception as e:
                     detail_msg = f"LOC 매수 예약 주문 실패: {label} ${loc_price:.2f} x {order_qty}주 | {str(e)}"
+                    if self._loc_rate_limited(e):
+                        recheck[recheck_key] = {"until": now_sec + LOC_RATE_LIMIT_RECHECK_SEC, "reason": "KIS 호출 제한으로 잠시 대기"}
                     self._log_event(symbol, cycle["id"], "LOC_BUY_ERROR", message=detail_msg)
                     errors.append({
                         "symbol": symbol,
