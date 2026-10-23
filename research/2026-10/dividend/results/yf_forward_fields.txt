@@ -1,0 +1,16 @@
+  start = pd.Timestamp.utcnow().floor("D") - datetime.timedelta(days=365 // 2)
+  end = pd.Timestamp.utcnow().ceil("D")
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"No fundamentals data found for symbol: JEPI"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"No fundamentals data found for symbol: 458730.KS"}}}
+KO | calendar: {'Dividend Date': datetime.date(2026, 12, 15), 'Ex-Dividend Date': datetime.date(2026, 12, 1), 'Earnings Date': [datetime.date(2026, 10, 27)], 'Earnings High': 0.89031, 'Earnings Low': 0.85418, 'Earnings Average': 0.88091, 'Revenue High': 13031000000, 'Revenue Low': 12866000000, 'Revenue Average': 12925421630}
+   info: {'exDividendDate': 1796083200, 'dividendDate': 1797292800, 'dividendRate': 2.12, 'dividendYield': 2.27, 'trailingAnnualDividendRate': 2.08, 'lastDividendValue': 0.53, 'lastDividendDate': 1789430400, 'payoutRatio': 0.6246, 'currency': 'USD'}
+JEPI | calendar: {}
+   info: {'exDividendDate': None, 'dividendDate': None, 'dividendRate': None, 'dividendYield': 8.16, 'trailingAnnualDividendRate': 0.0, 'lastDividendValue': None, 'lastDividendDate': None, 'payoutRatio': None, 'currency': 'USD'}
+O | calendar: {'Dividend Date': datetime.date(2026, 11, 13), 'Ex-Dividend Date': datetime.date(2026, 10, 30), 'Earnings Date': [datetime.date(2026, 11, 3)], 'Earnings High': 0.43618, 'Earnings Low': 0.43326, 'Earnings Average': 0.43472, 'Revenue High': 1468237000, 'Revenue Low': 1428566000, 'Revenue Average': 1446629000}
+   info: {'exDividendDate': 1793318400, 'dividendDate': 1794528000, 'dividendRate': 3.26, 'dividendYield': 5.78, 'trailingAnnualDividendRate': 3.235, 'lastDividendValue': 0.272, 'lastDividendDate': 1790726400, 'payoutRatio': 2.3471, 'currency': 'USD'}
+105560.KS | calendar: {'Ex-Dividend Date': datetime.date(2026, 8, 6), 'Earnings Date': [datetime.date(2026, 10, 29)], 'Earnings High': 5268.966, 'Earnings Low': 4287.1, 'Earnings Average': 4882.2866, 'Revenue High': 4977000000000, 'Revenue Low': 4644877470000, 'Revenue Average': 4846995500000}
+   info: {'exDividendDate': 1785974400, 'dividendDate': None, 'dividendRate': 4620.0, 'dividendYield': 2.87, 'trailingAnnualDividendRate': None, 'lastDividendValue': 1155.0, 'lastDividendDate': 1785974400, 'payoutRatio': 0.2721, 'currency': 'KRW'}
+458730.KS | calendar: {}
+   info: {'exDividendDate': None, 'dividendDate': None, 'dividendRate': None, 'dividendYield': None, 'trailingAnnualDividendRate': None, 'lastDividendValue': None, 'lastDividendDate': None, 'payoutRatio': None, 'currency': 'KRW'}
+033780.KS | calendar: {'Ex-Dividend Date': datetime.date(2026, 8, 20), 'Earnings Date': [datetime.date(2026, 11, 5)], 'Earnings High': None, 'Earnings Low': None, 'Earnings Average': None, 'Revenue High': 1990600000000, 'Revenue Low': 1898000000000, 'Revenue Average': 1939650000000}
+   info: {'exDividendDate': 1787184000, 'dividendDate': None, 'dividendRate': 6600.0, 'dividendYield': 3.4, 'trailingAnnualDividendRate': None, 'lastDividendValue': 2000.0, 'lastDividendDate': 1787184000, 'payoutRatio': 0.4388, 'currency': 'KRW'}
