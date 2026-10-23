@@ -1955,6 +1955,7 @@ class DomesticDaytradeEngine:
                         status = self._final_day_order_status(fill, order.get("timestamp", ""))
                         order.update(status=status, filled_qty=self._safe_int(fill.get("filled_qty"), 0),
                                      filled_price=self._safe_float(fill.get("filled_price"), 0), verification="kis")
+                        self._book_late_sell_fill(state, order)
                         updated += 1
                         if status in ("FILLED", "CANCELLED"):
                             if self._same_order_no(state.get("pending_sell_order_no"), order.get("order_no")):
@@ -2024,7 +2025,37 @@ class DomesticDaytradeEngine:
             order["filled_price"] = self._safe_float(fill.get("filled_price", order.get("price", 0)), 0)
             if fill.get("verification") == "kis":
                 order["verification"] = "kis"
+            self._book_late_sell_fill(state, order)
             break
+
+    def _book_late_sell_fill(self, state, order):
+        """Book the part of a sell the immediate fill check did not see.
+
+        10-23 PAPER: a 495-share market sell of 122630 showed 109 filled right
+        after submission, so only 109 shares were booked (-129,409). The broker
+        filled all 495; reconciliation updated the order to 495 @ 63,554.75 but
+        the other 386 shares never reached realized P&L (true loss -588,605).
+        Only sells that recorded what they booked (entry_avg/booked_qty) are
+        adjusted, so a fill is never booked twice."""
+        if not str(order.get("action", "")).upper().startswith("SELL") or "booked_qty" not in order:
+            return 0.0
+        entry_avg = self._safe_float(order.get("entry_avg", 0), 0)
+        filled_qty = self._safe_int(order.get("filled_qty", 0), 0)
+        filled_price = self._safe_float(order.get("filled_price", 0), 0)
+        booked_qty = self._safe_int(order.get("booked_qty", 0), 0)
+        booked_price = self._safe_float(order.get("booked_price", 0), 0)
+        if entry_avg <= 0 or filled_price <= 0 or filled_qty <= booked_qty:
+            return 0.0
+        extra = filled_qty * filled_price - booked_qty * booked_price - entry_avg * (filled_qty - booked_qty)
+        self._book_realized(state, extra)
+        order["booked_qty"] = filled_qty
+        order["booked_price"] = round(filled_price, 4)
+        try:
+            self._append_runtime_log("info", f"{state.get('symbol', '')} 매도 추가 체결 반영: {booked_qty}주 → {filled_qty}주 · 손익 보정 {round(extra):+,}",
+                                     symbol=state.get("symbol", ""), market=state.get("market", "KS"))
+        except Exception:
+            pass
+        return extra
 
     def _sync_pending_buy(self, state, symbol, market):
         order_no = str(state.get("pending_buy_order_no", "") or "")
@@ -4628,6 +4659,10 @@ class DomesticDaytradeEngine:
                 self._append_order(state, action, qty, current_price, order, strategy_id=strategy_id,
                                    reason=signal.get("reason", ""), status=str(fill.get("status", "FILLED") or "FILLED"),
                                    filled_qty=exec_qty, filled_price=exec_price)
+                if action.startswith("SELL") and prev_avg > 0:
+                    # What this sell booked; later fill evidence books the rest.
+                    state["orders"][-1].update(entry_avg=round(prev_avg, 4), booked_qty=sell_qty,
+                                               booked_price=round(exec_price, 4))
                 self._store_state(state)
                 self._invalidate_kis_cache()
 
