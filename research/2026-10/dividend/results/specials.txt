@@ -1,0 +1,12 @@
+C_open by special flag (KR 'special' = mostly year-end vs quarterly size difference), 2015-2026, % per event
+                n    yld    RAW  DIVTAX    OPT
+mkt special                                   
+KR  False     339  0.957  0.363   0.111 -0.150
+    True       43  3.272  1.466   0.926  0.624
+US  False    2427  0.844  0.096  -0.038 -0.279
+    True       18  0.923  0.223   0.026 -0.215
+sym
+DIVO     2
+QYLD     2
+SPYD     1
+XYLD    13

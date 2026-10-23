@@ -1,0 +1,8 @@
+placebo (non-ex days, +-2 days around ex-dates excluded), mean % per day, 2015-2026
+            overnight%  close2close%
+group                               
+KR_ETF          0.0805        0.0602
+KR_STOCK        0.0138        0.0833
+US_CC_ETF       0.0899        0.0433
+US_DIV_ETF      0.0476        0.0451
+US_STOCK        0.0331        0.0429

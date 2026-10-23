@@ -1,0 +1,14 @@
+RAW C_+20 (unadjusted close + gross dividends) vs Yahoo Adj Close return, 2015-2026; differences in basis points
+                       mean        50%         max
+n                 51.814815  47.000000  170.000000
+mean_abs_diff_bp   6.221793   5.246132   19.184169
+max_abs_diff_bp   30.147367  26.025493  111.263997
+      sym  n  mean_abs_diff_bp  max_abs_diff_bp
+086790.KS 30         16.180464       111.263997
+316140.KS 19         19.184169       103.489684
+       MO 47          7.508921        63.722918
+024110.KS 12         17.408741        51.231978
+055550.KS 27         10.467535        50.191865
+      BTI 41          9.920902        48.032133
+      KMI 47          7.030881        47.747189
+138040.KS 10         13.776125        46.429614

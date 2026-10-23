@@ -1,0 +1,11 @@
+     group strategy    n  round_trip_cost%  mean%   win%  t_clu
+    KR_ETF  C_close  117             0.030 -0.030 42.735 -0.199
+    KR_ETF   C_open  117             0.030 -0.135 49.573 -1.504
+  KR_STOCK  C_close  265             0.230 -0.305 43.019 -2.499
+  KR_STOCK   C_open  265             0.230  0.108 53.962  1.288
+ US_CC_ETF  C_close  601             0.143 -0.231 36.938 -5.442
+ US_CC_ETF   C_open  601             0.143 -0.119 36.439 -3.593
+US_DIV_ETF  C_close  421             0.143 -0.373 33.492 -6.112
+US_DIV_ETF   C_open  421             0.143 -0.131 35.392 -4.157
+  US_STOCK  C_close 1423             0.143 -0.399 35.840 -9.186
+  US_STOCK   C_open 1423             0.143 -0.220 31.623 -8.820

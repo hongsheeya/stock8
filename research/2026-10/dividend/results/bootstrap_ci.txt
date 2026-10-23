@@ -1,0 +1,12 @@
+     group strategy scenario    n  weeks  mean%  ci95_lo%  ci95_hi%    AR%  AR_ci_lo%  AR_ci_hi%
+  US_STOCK   C_open      OPT 1423    578 -0.319    -0.368    -0.272 -0.337     -0.380     -0.297
+  US_STOCK   C_open   DIVTAX 1423    578 -0.077    -0.128    -0.029 -0.095     -0.138     -0.055
+US_DIV_ETF   C_open      OPT  421    250 -0.230    -0.290    -0.169 -0.274     -0.315     -0.232
+ US_CC_ETF   C_open      OPT  601    258 -0.218    -0.281    -0.155 -0.241     -0.272     -0.208
+  KR_STOCK   C_open      OPT  265     66  0.012    -0.156     0.171 -0.003     -0.103      0.098
+  KR_STOCK   C_open   DIVTAX  265     66  0.338     0.166     0.495  0.323      0.219      0.427
+    KR_ETF   C_open      OPT  117     50 -0.233    -0.414    -0.074 -0.211     -0.356     -0.071
+  US_STOCK      R_5      OPT 1421    578  0.240     0.009     0.474  0.011     -0.182      0.208
+  KR_STOCK     R_20      OPT  265     66  2.272     0.646     4.101  1.230     -0.061      2.582
+  KR_STOCK X20_open      OPT  265     66  2.627     0.896     4.400  1.563      0.256      2.873
+  US_STOCK  C_close   DIVTAX 1423    578 -0.257    -0.342    -0.172 -0.291     -0.368     -0.215
