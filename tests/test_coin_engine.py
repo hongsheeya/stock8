@@ -37,6 +37,25 @@ def hourly(start, hours, price_fn):
     return rows
 
 
+class FakeStream:
+    STALE_SEC = 30.0
+
+    def __init__(self, connected=True):
+        self.connected = connected
+        self.rows = {}
+        self.watched = []
+
+    def watch(self, markets):
+        self.watched.append(sorted(markets))
+
+    def read(self, markets):
+        rows, self.rows = self.rows, {}
+        return {m: r for m, r in rows.items() if m in markets}
+
+    def status(self):
+        return {"connected": self.connected}
+
+
 class FakeApi:
     def __init__(self, candles, price):
         self.candles = candles
@@ -177,6 +196,54 @@ class CoinEngineTests(unittest.TestCase):
                 self.assertIn("손절가", sleeve["last_reason"])
                 self.assertEqual(self.events(), ["COIN_SKIP_BELOW_STOP"])
                 self.assertEqual(self.api.buys, [])
+
+    def _long_engine(self, stream):
+        eng = engine_mod.CoinEngine(self.api, os.path.join(self.tmp.name, "state"), os.path.join(self.tmp.name, "candles"),
+                                    {"mode": "shadow", "seed_krw": 1_000_000, "markets": ["KRW-BTC"]}, S,
+                                    log=lambda *a, **k: self.logs.append(a), now=self.clock, sleep=lambda s: None,
+                                    error_cls=ApiError, stream=stream)
+        eng.step()
+        self.assertTrue(eng.state["sleeves"]["KRW-BTC"]["long"])
+        calls = []
+        real = self.api.ticker
+        self.api.ticker = lambda markets: calls.append(list(markets)) or real(markets)
+        return eng, calls
+
+    def test_stream_low_below_the_stop_exits_without_rest_polling(self):
+        stream = FakeStream()
+        eng, calls = self._long_engine(stream)
+        stop = eng.state["sleeves"]["KRW-BTC"]["stop"]
+        self.clock.t += 60
+        stream.rows = {"KRW-BTC": {"price": stop * 1.02, "low": stop * 1.01, "age": 0.5}}
+        out = eng.step()
+        self.assertTrue(eng.state["sleeves"]["KRW-BTC"]["long"])
+        self.assertEqual(eng.state["feed"], "websocket")
+        self.assertEqual(out["next_delay"], 1.0)
+        # a wick through the stop between two passes, price back above it
+        self.clock.t += 1
+        stream.rows = {"KRW-BTC": {"price": stop * 1.02, "low": stop * 0.999, "age": 0.2}}
+        eng.step()
+        self.assertFalse(eng.state["sleeves"]["KRW-BTC"]["long"])
+        self.assertIn("최저 체결", self.logs[-1][3])
+        self.assertEqual(calls, [])
+        self.clock.t += 1
+        eng.step()
+        self.assertEqual(stream.watched[-1], [])  # nothing held on the next pass: disconnect
+
+    def test_disconnected_or_stale_stream_falls_back_to_rest(self):
+        stream = FakeStream(connected=False)
+        eng, calls = self._long_engine(stream)
+        self.clock.t += 60
+        eng.step()
+        self.assertEqual(eng.state["feed"], "rest")
+        self.assertEqual(calls, [["KRW-BTC"]])
+        stream.connected = True
+        stream.rows = {"KRW-BTC": {"price": 131.0, "low": 131.0, "age": 45.0}}
+        self.clock.t += 5
+        out = eng.step()
+        self.assertEqual(eng.state["feed"], "websocket+rest")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(out["next_delay"], 3.0)
 
     def test_entry_window_closes_after_15_minutes(self):
         self.clock.t = E0 + 16 * 60

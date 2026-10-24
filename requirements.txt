@@ -7,6 +7,8 @@ peewee>=3.17,<4
 cryptography>=42
 PyMySQL>=1.1,<2
 yfinance>=0.2.65,<1
+# Upbit trade stream for the coin stop watch (upbit_ws.py).
+websockets>=13,<16
 
 # Optional authentication backends imported by the Season portal.
 oic>=1.7,<2

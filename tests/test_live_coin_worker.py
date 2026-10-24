@@ -35,6 +35,8 @@ def _coin_job():
 
 
 class LiveCoinWorkerTests(unittest.TestCase):
+    fake_sys = type("FakeSys", (), {})()
+
     def run_job(self, policies, admin=True, owner_exists=True, lock=True, rounds=None, step_errors=()):
         app = flask.Flask("coin-worker-test")
         app.secret_key = "test-only"
@@ -58,7 +60,7 @@ class LiveCoinWorkerTests(unittest.TestCase):
             _coin_process_lock=lambda: object() if lock else None,
         )
         registry = {"status": "starting", "error": "", "wake": Wake(rounds or len(policies))}
-        scope = {"self": fake_self, "registry": registry, "wiz": NS(server=NS(app=NS(flask=app))),
+        scope = {"self": fake_self, "registry": registry, "wiz": NS(server=NS(app=NS(flask=app))), "_sys": self.fake_sys,
                  "Struct": lambda: trading, "_kst_now": lambda: datetime.datetime(2026, 10, 22, 9)}
         exec(compile(ast.Module(body=[_coin_job()], type_ignores=[]), "<coin-worker>", "exec"), scope)
         try:
@@ -74,6 +76,13 @@ class LiveCoinWorkerTests(unittest.TestCase):
         trading, engine, registry, _ = self.run_job([self.policy("off"), self.policy("off")])
         trading.coin_build_engine.assert_not_called()
         self.assertEqual(registry["status"], "off")
+
+    def test_off_closes_a_stop_watch_stream_left_from_on(self):
+        stream = Mock()
+        self.fake_sys = type("FakeSys", (), {})()
+        self.fake_sys.__dict__["_stock8_upbit_trade_stream"] = stream
+        self.run_job([self.policy("off")])
+        stream.watch.assert_called_with([])
 
     def test_non_admin_or_deleted_owner_is_off(self):
         for kwargs in ({"admin": False}, {"owner_exists": False}):

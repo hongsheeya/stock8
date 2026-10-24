@@ -1333,7 +1333,8 @@ class Struct:
         guard = self._coin_order_guard if policy["mode"] == "live" else None
         api = api_cls(access, secret, order_guard=guard)
         state_dir, candle_dir, _root = self.coin_data_dirs(owner)
-        return engine_cls(api, state_dir, candle_dir, policy, strategy, log=self._coin_log, error_cls=api_cls.Error)
+        return engine_cls(api, state_dir, candle_dir, policy, strategy, log=self._coin_log, error_cls=api_cls.Error,
+                          stream=self.model("upbit_ws").shared())
 
     def coin_shadow_progress(self, owner, max_age_sec=600):
         """Shadow-run progress (coin_shadow_check), cached for max_age_sec.
@@ -1450,6 +1451,9 @@ class Struct:
                                 or not self._current_user_is_admin(owner):
                             registry["status"] = "off"  # strict no-op: no Upbit call at all
                             engine, engine_sig = None, None
+                            stream = _sys.__dict__.get("_stock8_upbit_trade_stream")
+                            if stream is not None:
+                                stream.watch([])  # close a stop-watch connection left from ON
                         else:
                             flask.session["id"] = owner
                             if trading is None:

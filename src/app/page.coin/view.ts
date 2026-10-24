@@ -191,6 +191,13 @@ export class Component implements OnInit, OnDestroy {
     }
 
     public get progress(): any { return this.data?.shadow_progress || null; }
+    public get feedLabel(): string {
+        const f = this.engine?.feed || '';
+        if (f === 'websocket') return '실시간 체결 (웹소켓)';
+        if (f === 'websocket+rest') return '웹소켓 + 3초 조회 보완';
+        if (f === 'rest') return '3초 조회 (웹소켓 재연결 중)';
+        return '보유 코인 없음 · 대기';
+    }
     public gatePct(g: any): number {
         const v = Number(g?.value || 0), t = Number(g?.target || 1);
         return Math.max(0, Math.min(100, (v / t) * 100));
