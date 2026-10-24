@@ -71,7 +71,8 @@ class ApiTests(unittest.TestCase):
         notifier = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(notifier)
         models = {"struct": NS(trading=trading), "portal/trading/coin_engine": engine_cls,
-                  "portal/trading/notifier": notifier.NotifierModel}
+                  "portal/trading/notifier": notifier.NotifierModel,
+                  "portal/trading/coin_backtest": NS(DATA={"stats": {"cagr": 16.1}})}
         q = dict(query or {})
         wiz = NS(model=lambda name: models[name], session=NS(get=lambda key: "a1"),
                  request=NS(query=lambda key, default=None: q.get(key, default)), response=NS(status=_status))
@@ -83,6 +84,13 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(Status) as ctx:
             env[name]()
         return ctx.exception
+
+    def test_history_is_served_on_either_server(self):
+        for mode in ("LIVE", "PAPER"):
+            env = self.load_api(mode=mode)[0]
+            res = self.call(env, "history")
+            self.assertEqual(res.code, 200)
+            self.assertEqual(res.data["history"]["stats"]["cagr"], 16.1)
 
     def test_alert_urls_are_validated_and_saved(self):
         env, written = self.load_api(query={"webhook": "https://evil.example/hook"})[:2]

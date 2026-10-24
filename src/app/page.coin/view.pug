@@ -257,6 +257,127 @@ div(*ngIf="!loading", class="dx-page coin-page")
                             span(class="dx-tag", [ngClass]="eventTone(e.event_type)") {{eventLabel(e.event_type)}}
                         td(class="dx-wrap") {{e.message}}
 
+    section(class="dx-card coin-hist")
+        div(class="dx-card-head coin-research-head", (click)="toggleHistory()")
+            h2 과거 성과
+                span(class="dx-count", *ngIf="history") {{history.meta.start}} ~ {{history.meta.end}}
+            small {{showHistory ? '접기' : '펼치기'}}
+        div(*ngIf="showHistory && !history", class="dx-empty") 불러오는 중…
+        div(*ngIf="showHistory && history")
+            div(class="dx-kpis coin-hist-kpis")
+                div(class="dx-kpi")
+                    div(class="dx-kpi-label") 연수익 (이 규칙)
+                    div(class="dx-kpi-value", [class]="tone(history.stats.cagr)") {{signedPct(history.stats.cagr)}}
+                    div(class="dx-kpi-sub") 단순 보유 {{signedPct(history.stats.bh_cagr)}}
+                div(class="dx-kpi")
+                    div(class="dx-kpi-label") 최대 낙폭
+                    div(class="dx-kpi-value") {{history.stats.mdd}}%
+                    div(class="dx-kpi-sub") 단순 보유 {{history.stats.bh_mdd}}%
+                div(class="dx-kpi")
+                    div(class="dx-kpi-label") 거래
+                    div(class="dx-kpi-value") {{history.stats.trades}}회
+                    div(class="dx-kpi-sub") 승률 {{history.stats.win_pct}}% · 평균 이익 {{signedPct(history.stats.avg_win_pct)}} / 손실 {{history.stats.avg_loss_pct}}%
+                div(class="dx-kpi")
+                    div(class="dx-kpi-label") 누적 수익
+                    div(class="dx-kpi-value", [class]="tone(history.stats.total)") {{signedPct(history.stats.total)}}
+                    div(class="dx-kpi-sub") 단순 보유 {{signedPct(history.stats.bh_total)}}
+
+            div(class="coin-hist-legend")
+                span
+                    i(class="is-s1")
+                    | 이 규칙 (4개 코인 25%씩)
+                span
+                    i(class="is-s2")
+                    | 같은 4개 코인 단순 보유
+                small 시작 금액 = 100 · 세로축은 로그 눈금
+            div(class="coin-hist-chart", (mousemove)="onHistMove($event)", (mouseleave)="hoverIdx = -1")
+                svg(viewBox="0 0 760 300", preserveAspectRatio="none", role="img", aria-label="이 규칙과 단순 보유의 누적 성과")
+                    g(class="coin-grid")
+                        g(*ngFor="let t of chart.yTicks")
+                            line(x1="48", [attr.x2]="chart.w - chart.r", [attr.y1]="t.y", [attr.y2]="t.y")
+                            text(x="42", [attr.y]="t.y + 4", text-anchor="end") {{t.label}}
+                        g(*ngFor="let t of chart.xTicks")
+                            text([attr.x]="t.x", [attr.y]="chart.h - 6", text-anchor="middle") {{t.label}}
+                    path(class="coin-line is-s2", [attr.d]="chart.pathB")
+                    path(class="coin-line is-s1", [attr.d]="chart.pathA")
+                    text(class="coin-endlabel", [attr.x]="chart.w - chart.r + 6", [attr.y]="chart.endA.y + 4") {{chart.endA.label}}
+                    text(class="coin-endlabel", [attr.x]="chart.w - chart.r + 6", [attr.y]="chart.endB.y + 4") {{chart.endB.label}}
+                    g(*ngIf="hoverIdx >= 0")
+                        line(class="coin-cross", [attr.x1]="chart.px[hoverIdx]", [attr.x2]="chart.px[hoverIdx]", y1="10", [attr.y2]="chart.h - chart.b")
+                        circle(class="coin-dot is-s1", [attr.cx]="chart.px[hoverIdx]", [attr.cy]="chart.pyA[hoverIdx]", r="4")
+                        circle(class="coin-dot is-s2", [attr.cx]="chart.px[hoverIdx]", [attr.cy]="chart.pyB[hoverIdx]", r="4")
+                div(class="coin-tip", *ngIf="hoverIdx >= 0", [style.left.%]="tipLeft()")
+                    strong {{history.daily[hoverIdx][0]}}
+                    div
+                        i(class="is-s1")
+                        | 이 규칙 {{fmtIndex(history.daily[hoverIdx][1])}}
+                    div
+                        i(class="is-s2")
+                        | 단순 보유 {{fmtIndex(history.daily[hoverIdx][2])}}
+                    div(class="dx-muted") 고점 대비 {{history.daily[hoverIdx][3]}}%
+
+            h3(class="coin-hist-sub") 연도별 수익
+            div(class="coin-hist-legend")
+                span
+                    i(class="is-s1")
+                    | 이 규칙
+                span
+                    i(class="is-s2")
+                    | 단순 보유
+                small 2019년은 10월 21일부터, 2026년은 10월 24일까지
+            div(class="coin-hist-chart")
+                svg(viewBox="0 0 760 220", preserveAspectRatio="none", role="img", aria-label="연도별 수익률")
+                    line(class="coin-zero", x1="40", x2="752", [attr.y1]="bars.zero", [attr.y2]="bars.zero")
+                    g(*ngFor="let b of bars.items")
+                        rect(class="coin-bar-s1", [attr.x]="b.x", [attr.y]="b.a.y", width="26", [attr.height]="b.a.h", rx="3")
+                            title {{b.year}} 이 규칙 {{signedPct(b.a.v)}}
+                        rect(class="coin-bar-s2", [attr.x]="b.x + 28", [attr.y]="b.b.y", width="26", [attr.height]="b.b.h", rx="3")
+                            title {{b.year}} 단순 보유 {{signedPct(b.b.v)}}
+                        text(class="coin-barlabel", [attr.x]="b.x + 13", [attr.y]="b.a.v >= 0 ? b.a.y - 4 : b.a.y + b.a.h + 12", text-anchor="middle") {{signedPct(b.a.v)}}
+                        text(class="coin-axislabel", [attr.x]="b.x + 27", y="214", text-anchor="middle") {{b.year}}{{b.partial ? '*' : ''}}
+            div(class="dx-table-wrap")
+                table(class="dx-table")
+                    thead
+                        tr
+                            th 연도
+                            th(class="num") 이 규칙
+                            th(class="num") 단순 보유
+                    tbody
+                        tr(*ngFor="let y of history.years")
+                            td {{y.year}}{{y.partial ? ' (일부)' : ''}}
+                            td(class="num", [class]="tone(y.strategy)") {{signedPct(y.strategy)}}
+                            td(class="num", [class]="tone(y.buy_hold)") {{signedPct(y.buy_hold)}}
+
+            h3(class="coin-hist-sub") 코인별
+            div(class="dx-table-wrap")
+                table(class="dx-table")
+                    thead
+                        tr
+                            th 코인
+                            th(class="num") 이 규칙 누적
+                            th(class="num") 단순 보유 누적
+                            th(class="num") 거래
+                            th(class="num") 승률
+                            th(class="num") 평균 보유
+                            th(class="num") 최고 / 최악 거래
+                    tbody
+                        tr(*ngFor="let c of history.coins")
+                            td
+                                div(class="dx-sym")
+                                    strong {{c.market.replace('KRW-', '')}}
+                                    small {{c.first !== history.meta.start ? c.first + ' 상장부터' : ''}}
+                            td(class="num", [class]="tone(c.strategy_pct)") {{signedPct(c.strategy_pct)}}
+                            td(class="num", [class]="tone(c.buy_hold_pct)") {{signedPct(c.buy_hold_pct)}}
+                            td(class="num") {{c.trades}}
+                            td(class="num") {{c.win_pct}}%
+                            td(class="num") {{c.avg_hold_days}}일
+                            td(class="num") {{signedPct(c.best_pct)}} / {{c.worst_pct}}%
+            p(class="dx-muted coin-hist-note")
+                | 실제 엔진과 같은 규칙·같은 운용 방식(코인마다 25%를 따로 굴리고 다시 나누지 않음)으로 {{history.meta.candles}}을 재생한 결과입니다.
+                | 비용은 한쪽 {{history.meta.fee_side_pct}}%에 호가 반 칸을 더해 실제(0.05%)보다 보수적으로 잡았습니다.
+                | 2019-10~2025-10 구간 연 {{signedPct(history.stats.g1_cagr)}}·낙폭 {{history.stats.g1_mdd}}%, 그 뒤 1년 {{signedPct(history.stats.recent_pct)}}.
+                | 단순 보유가 수익은 훨씬 컸지만 낙폭도 {{history.stats.bh_mdd}}%였습니다. 이 규칙의 장점은 수익이 아니라 큰 하락을 피하는 데 있습니다. 과거 성과가 미래를 보장하지 않습니다.
+
     section(class="dx-card dx-details")
         div(class="dx-card-head coin-research-head", (click)="showResearch = !showResearch")
             h2 전략 검증 요약

@@ -209,6 +209,93 @@ export class Component implements OnInit, OnDestroy {
         return new Date(n * 1000).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric' });
     }
 
+
+    // ---- past performance chart
+    public showHistory: boolean = false;
+    public history: any = null;
+    public hoverIdx: number = -1;
+    public chart: any = { w: 760, h: 300, r: 70, b: 24, yTicks: [], xTicks: [], pathA: '', pathB: '', px: [], pyA: [], pyB: [], endA: {}, endB: {} };
+    public bars: any = { zero: 110, items: [] };
+
+    public async toggleHistory() {
+        this.showHistory = !this.showHistory;
+        if (this.showHistory && !this.history) {
+            try {
+                const { code, data } = await this.api('history');
+                if (code === 200) {
+                    this.history = data.history;
+                    this.buildHistory();
+                }
+            } catch (e) { /* the card shows the loading line */ }
+        }
+        await this.service.render();
+    }
+
+    private buildHistory() {
+        const d = this.history?.daily || [];
+        const W = 760, H = 300, L = 48, R = 70, T = 12, B = 24;
+        const vals = d.flatMap((r: any) => [r[1], r[2]]).filter((v: number) => v > 0);
+        const lo = Math.log(Math.min(...vals) * 0.95), hi = Math.log(Math.max(...vals) * 1.05);
+        const y = (v: number) => T + (1 - (Math.log(Math.max(v, 1e-6)) - lo) / (hi - lo)) * (H - T - B);
+        const x = (i: number) => L + (i / Math.max(1, d.length - 1)) * (W - L - R);
+        const px: number[] = [], pyA: number[] = [], pyB: number[] = [];
+        let pathA = '', pathB = '';
+        d.forEach((r: any, i: number) => {
+            const xi = x(i), ya = y(r[1]), yb = y(r[2]);
+            px.push(xi); pyA.push(ya); pyB.push(yb);
+            pathA += (i ? 'L' : 'M') + xi.toFixed(1) + ' ' + ya.toFixed(1);
+            pathB += (i ? 'L' : 'M') + xi.toFixed(1) + ' ' + yb.toFixed(1);
+        });
+        const yTicks = [0.5, 1, 2, 4, 8, 16].filter((m) => Math.log(m) >= lo && Math.log(m) <= hi)
+            .map((m) => ({ y: y(m), label: (m >= 1 ? '+' : '') + Math.round((m - 1) * 100) + '%' }));
+        const xTicks: any[] = [];
+        d.forEach((r: any, i: number) => {
+            if (i && r[0].slice(0, 4) !== d[i - 1][0].slice(0, 4)) xTicks.push({ x: x(i), label: r[0].slice(0, 4) });
+        });
+        const last = d[d.length - 1] || [0, 1, 1];
+        let endA = { y: y(last[1]), label: this.fmtIndex(last[1]) }, endB = { y: y(last[2]), label: this.fmtIndex(last[2]) };
+        if (Math.abs(endA.y - endB.y) < 14) endA = { ...endA, y: endA.y + (endA.y >= endB.y ? 7 : -7) };
+        this.chart = { w: W, h: H, r: R, b: B, yTicks, xTicks, pathA, pathB, px, pyA, pyB, endA, endB };
+
+        const years = this.history?.years || [];
+        const top = 18, bottom = 196;
+        const pos = Math.max(...years.flatMap((v: any) => [v.strategy, v.buy_hold, 0]));
+        const neg = Math.min(...years.flatMap((v: any) => [v.strategy, v.buy_hold, 0]));
+        const scale = (bottom - top) / Math.max(1, pos - neg);
+        const zero = top + pos * scale;
+        const slot = (712) / Math.max(1, years.length);
+        const bar = (v: number) => ({ v, y: v >= 0 ? zero - v * scale : zero, h: Math.max(1, Math.abs(v) * scale) });
+        this.bars = { zero, items: years.map((v: any, i: number) => ({ year: v.year, partial: v.partial, x: 40 + i * slot + (slot - 54) / 2, a: bar(v.strategy), b: bar(v.buy_hold) })) };
+    }
+
+    public onHistMove(evt: MouseEvent) {
+        const el = evt.currentTarget as HTMLElement;
+        const rect = el.getBoundingClientRect();
+        const xv = ((evt.clientX - rect.left) / rect.width) * this.chart.w;
+        const px = this.chart.px || [];
+        if (!px.length) return;
+        let lo = 0, hi = px.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (px[mid] < xv) lo = mid + 1; else hi = mid;
+        }
+        this.hoverIdx = lo;
+    }
+
+    public tipLeft(): number {
+        const pct = (this.chart.px[this.hoverIdx] || 0) / this.chart.w * 100;
+        return Math.max(14, Math.min(86, pct));
+    }
+
+    public fmtIndex(v: any): string {
+        return (Number(v || 0) * 100).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
+    }
+
+    public signedPct(v: any): string {
+        const n = Number(v || 0);
+        return (n > 0 ? '+' : '') + n.toLocaleString('ko-KR', { maximumFractionDigits: 1 }) + '%';
+    }
+
     public coinName(m: string): string { return COIN_NAME[m] || m; }
     public eventLabel(t: string): string { return EVENT_LABEL[t] || t; }
     public eventTone(t: string): string {

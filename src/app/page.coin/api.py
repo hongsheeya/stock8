@@ -224,6 +224,11 @@ def set_mode():
     wiz.response.status(200, policy={k: policy[k] for k in ("mode", "seed_krw", "markets", "max_order_krw", "live_confirmed_at")})
 
 
+def history():
+    """Static past-performance data (coin_backtest.py, built offline)."""
+    wiz.response.status(200, history=wiz.model("portal/trading/coin_backtest").DATA)
+
+
 def save_alerts():
     _require_live()
     notifier = wiz.model("portal/trading/notifier")

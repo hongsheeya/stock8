@@ -192,3 +192,186 @@
     font-size: 13px;
     color: var(--bn-body);
 }
+
+.coin-hist {
+    --s1: #3987e5;
+    --s2: #8b95a5;
+}
+
+:host-context(.theme-light) .coin-hist {
+    --s1: #2a78d6;
+    --s2: #8a8f98;
+}
+
+.coin-hist-kpis {
+    margin: 4px 0 14px;
+}
+
+.coin-hist-sub {
+    margin: 18px 0 6px;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--bn-body);
+}
+
+.coin-hist-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    font-size: 12px;
+    color: var(--bn-body);
+
+    span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    small {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--bn-muted);
+    }
+}
+
+.coin-hist-legend i,
+.coin-tip i {
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+
+    &.is-s1 {
+        background: var(--s1);
+    }
+
+    &.is-s2 {
+        background: var(--s2);
+    }
+}
+
+.coin-hist-chart {
+    position: relative;
+    margin-top: 6px;
+
+    svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        overflow: visible;
+    }
+}
+
+.coin-grid {
+    line {
+        stroke: var(--bn-hairline);
+        stroke-width: 1;
+    }
+
+    text {
+        font-size: 10px;
+        fill: var(--bn-muted);
+    }
+}
+
+.coin-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+
+    &.is-s1 {
+        stroke: var(--s1);
+    }
+
+    &.is-s2 {
+        stroke: var(--s2);
+    }
+}
+
+.coin-endlabel {
+    font-size: 11px;
+    font-weight: 650;
+    fill: var(--bn-body);
+}
+
+.coin-cross {
+    stroke: var(--bn-muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.coin-dot {
+    stroke: var(--bn-card);
+    stroke-width: 2;
+
+    &.is-s1 {
+        fill: var(--s1);
+    }
+
+    &.is-s2 {
+        fill: var(--s2);
+    }
+}
+
+.coin-tip {
+    position: absolute;
+    top: 8px;
+    transform: translateX(-50%);
+    pointer-events: none;
+    min-width: 150px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bn-card);
+    border: 1px solid var(--bn-hairline);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    font-size: 12px;
+    color: var(--bn-body);
+
+    strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 11px;
+        color: var(--bn-muted-strong);
+    }
+
+    div {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.coin-zero {
+    stroke: var(--bn-muted);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.coin-bar-s1 {
+    fill: var(--s1);
+}
+
+.coin-bar-s2 {
+    fill: var(--s2);
+}
+
+.coin-barlabel {
+    font-size: 10px;
+    font-weight: 650;
+    fill: var(--bn-body);
+}
+
+.coin-axislabel {
+    font-size: 10px;
+    fill: var(--bn-muted);
+}
+
+.coin-hist-note {
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.6;
+}
