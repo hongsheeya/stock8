@@ -37,7 +37,7 @@ def _coin_job():
 class LiveCoinWorkerTests(unittest.TestCase):
     fake_sys = type("FakeSys", (), {})()
 
-    def run_job(self, policies, admin=True, owner_exists=True, lock=True, rounds=None, step_errors=()):
+    def run_job(self, policies, admin=True, owner_exists=True, lock=True, rounds=None, step_errors=(), build=None):
         app = flask.Flask("coin-worker-test")
         app.secret_key = "test-only"
         sessions = []
@@ -51,7 +51,7 @@ class LiveCoinWorkerTests(unittest.TestCase):
             return {"next_delay": 3}
 
         engine.step.side_effect = step
-        trading = NS(coin_build_engine=Mock(return_value=engine))
+        trading = NS(coin_build_engine=Mock(return_value=engine, side_effect=build))
         policy_iter = iter(policies)
         fake_self = NS(
             coin_policy_read=lambda: next(policy_iter),
@@ -70,7 +70,7 @@ class LiveCoinWorkerTests(unittest.TestCase):
         return trading, engine, registry, sessions
 
     def policy(self, mode, owner="admin-1", fp="abc"):
-        return {"mode": mode, "owner_user_id": owner, "account_fp": fp, "markets": ["KRW-BTC"], "seed_krw": 1000000}
+        return {"mode": mode, "owner_user_id": owner, "account_fp": fp, "markets": ["KRW-BTC"], "seed_krw": 1000000, "probe": False}
 
     def test_off_never_builds_an_engine(self):
         trading, engine, registry, _ = self.run_job([self.policy("off"), self.policy("off")])
@@ -82,7 +82,27 @@ class LiveCoinWorkerTests(unittest.TestCase):
         self.fake_sys = type("FakeSys", (), {})()
         self.fake_sys.__dict__["_stock8_upbit_trade_stream"] = stream
         self.run_job([self.policy("off")])
-        stream.watch.assert_called_with([])
+        stream.clear.assert_called_with()
+
+    def test_probe_runs_beside_the_main_engine_and_its_errors_stay_contained(self):
+        pol = dict(self.policy("shadow"), probe=True)
+        trading, engine, registry, sessions = self.run_job([pol] * 2)
+        kinds = [c.kwargs.get("probe", False) for c in trading.coin_build_engine.call_args_list]
+        self.assertEqual(kinds, [False, True])  # built once each, reused on the second pass
+        self.assertEqual(engine.step.call_count, 4)  # main + probe, twice (same Mock serves both)
+        self.assertEqual(registry["status"], "shadow")
+
+        main = Mock()
+        main.step.return_value = {"next_delay": 3}
+
+        def probe_fails(policy, owner, probe=False):
+            if probe:
+                raise RuntimeError("probe boom")
+            return main
+        _t, _e, registry2, _ = self.run_job([pol] * 2, build=probe_fails)
+        self.assertEqual(main.step.call_count, 2)  # the 4-coin ledger kept running
+        self.assertEqual(registry2["status"], "shadow")
+        self.assertIn("probe boom", registry2["probe_error"])
 
     def test_non_admin_or_deleted_owner_is_off(self):
         for kwargs in ({"admin": False}, {"owner_exists": False}):

@@ -68,6 +68,16 @@ class TradeStreamTests(unittest.TestCase):
         self.assertEqual(conn.sent[0][1], {"type": "trade", "codes": ["KRW-BTC", "KRW-XRP"], "is_only_realtime": True})
         self.assertEqual(self.st.read(["KRW-BTC"])["KRW-BTC"]["low"], 99.5)
 
+    def test_main_and_probe_engines_share_one_connection(self):
+        self.st._ensure_thread = lambda: None
+        self.st.watch(["KRW-BTC"], key="main")
+        self.st.watch(["KRW-ADA"], key="probe")
+        self.assertEqual(self.st.want, frozenset({"KRW-BTC", "KRW-ADA"}))
+        self.st.watch([], key="main")
+        self.assertEqual(self.st.want, frozenset({"KRW-ADA"}))
+        self.st.clear()
+        self.assertEqual(self.st.want, frozenset())
+
     def test_watching_nothing_drops_cached_prices(self):
         self.st.want = frozenset({"KRW-BTC"})
         self.st.on_trade("KRW-BTC", 100.0)

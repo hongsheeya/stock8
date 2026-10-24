@@ -1285,6 +1285,8 @@ class Struct:
         settings = self.coin_alert_settings(owner)
         if not settings["webhook"] or (event.startswith("COIN_SHADOW_") and not settings["notify_shadow"]):
             return
+        if "[점검]" in str(message or ""):
+            return  # fidelity-probe trades are not the user's strategy
         text = str(message or "").replace("[모의] ", "")
         self.model("notifier").shared().discord(settings["webhook"], f"[stock8 코인] {label} · {text}")
 
@@ -1323,7 +1325,7 @@ class Struct:
             if hc_url:
                 self.model("notifier").shared().ping(hc_url, fail=int(watch.get("errors") or 0) >= _COIN_ERROR_ALERT_AFTER)
 
-    def coin_build_engine(self, policy, owner):
+    def coin_build_engine(self, policy, owner, probe=False):
         engine_cls = self.model("coin_engine")
         api_cls = self.model("upbit_api")
         strategy = self.model("coin_strategy")
@@ -1333,8 +1335,10 @@ class Struct:
         guard = self._coin_order_guard if policy["mode"] == "live" else None
         api = api_cls(access, secret, order_guard=guard)
         state_dir, candle_dir, _root = self.coin_data_dirs(owner)
+        if probe:
+            api = api_cls(access, secret)  # shadow only: no order guard, this client never orders
         return engine_cls(api, state_dir, candle_dir, policy, strategy, log=self._coin_log, error_cls=api_cls.Error,
-                          stream=self.model("upbit_ws").shared())
+                          stream=self.model("upbit_ws").shared(), probe=probe)
 
     def coin_shadow_progress(self, owner, max_age_sec=600):
         """Shadow-run progress (coin_shadow_check), cached for max_age_sec.
@@ -1359,7 +1363,19 @@ class Struct:
                     candles[market] = _json.load(handle)
             except (OSError, ValueError):
                 pass
-        candles = {m: c for m, c in candles.items() if m in (state.get("sleeves") or {})}
+        try:
+            with open(_os.path.join(state_dir, "state_probe.json"), encoding="utf-8") as handle:
+                probe_state = _json.load(handle)
+        except (OSError, ValueError):
+            probe_state = {}
+        for market in (probe_state.get("sleeves") or {}):
+            try:
+                with open(_os.path.join(candle_dir, f"{market}_60m.json"), encoding="utf-8") as handle:
+                    candles[market] = _json.load(handle)
+            except (OSError, ValueError):
+                pass
+        held = set(state.get("sleeves") or {}) | set(probe_state.get("sleeves") or {})
+        candles = {m: c for m, c in candles.items() if m in held}
         events = []
         sides = {"COIN_SHADOW_BUY": "BUY", "COIN_SHADOW_SELL": "SELL", "COIN_SKIP_BELOW_STOP": "SKIP"}
         rows = []
@@ -1376,7 +1392,8 @@ class Struct:
             if side == "SKIP" and not payload.get("shadow"):
                 continue  # a live-mode skip is not part of the shadow run
             events.append({"time": checker.kst_epoch(row.get("created", "")), "market": row.get("symbol", ""),
-                           "side": side, "bar_end": payload.get("bar_end"), "price": payload.get("price")})
+                           "side": side, "bar_end": payload.get("bar_end"), "price": payload.get("price"),
+                           "probe": bool(payload.get("probe"))})
         ledger_path = _os.path.join(state_dir, "shadow_check.json")
         try:
             with open(ledger_path, encoding="utf-8") as handle:
@@ -1384,6 +1401,9 @@ class Struct:
         except (OSError, ValueError):
             ledger = {}
         summary, ledger = checker.check(self.model("coin_strategy"), state, events, candles, ledger, time.time())
+        summary["entries_main"] = sum(1 for ev in events if ev["side"] == "BUY" and not ev["probe"] and ev["time"] >= summary["started_at"])
+        summary["entries_probe"] = summary["entries"] - summary["entries_main"]
+        summary["probe_markets"] = sorted(probe_state.get("sleeves") or {})
         tmp = ledger_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as handle:
             _json.dump(ledger, handle)
@@ -1439,6 +1459,7 @@ class Struct:
                 registry["status"] = "locked_elsewhere"
                 return
             engine, engine_sig, trading = None, None, None
+            probe_engine, probe_owner = None, None
             watch = {}
             while True:
                 delay = 15.0
@@ -1451,9 +1472,10 @@ class Struct:
                                 or not self._current_user_is_admin(owner):
                             registry["status"] = "off"  # strict no-op: no Upbit call at all
                             engine, engine_sig = None, None
+                            probe_engine = None
                             stream = _sys.__dict__.get("_stock8_upbit_trade_stream")
                             if stream is not None:
-                                stream.watch([])  # close a stop-watch connection left from ON
+                                stream.clear()  # close a stop-watch connection left from ON
                         else:
                             flask.session["id"] = owner
                             if trading is None:
@@ -1467,6 +1489,20 @@ class Struct:
                             result = engine.step()
                             delay = float(result.get("next_delay", 10) or 10)
                             registry["status"] = policy["mode"]
+                            if policy.get("probe", True):
+                                try:
+                                    if probe_engine is None or probe_owner != owner:
+                                        probe_engine = trading.coin_build_engine(policy, owner, probe=True)
+                                        probe_owner = owner
+                                    else:
+                                        probe_engine.update_policy(policy)
+                                    delay = min(delay, float(probe_engine.step().get("next_delay", 10) or 10))
+                                    registry["probe_error"] = ""
+                                except Exception as exc:  # the probe never stops the 4-coin ledger
+                                    registry["probe_error"] = str(exc)[:200]
+                                    probe_engine = None
+                            else:
+                                probe_engine = None
                     registry["last_check"] = _kst_now().isoformat()
                     registry["error"] = ""
                 except Exception as exc:

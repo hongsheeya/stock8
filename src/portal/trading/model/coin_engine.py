@@ -29,6 +29,7 @@ import sys
 import time
 
 STATUS = sys.__dict__.setdefault("_stock8_coin_status", {})
+PROBE_STATUS = sys.__dict__.setdefault("_stock8_coin_probe_status", {})
 _LOG_SEEN = sys.__dict__.setdefault("_stock8_coin_log_seen", {})
 
 POLICY_KEY = "coin_policy_v1"
@@ -36,6 +37,13 @@ ALL_MARKETS = ("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE")
 # DOGE: a 1 KRW tick at ~110 KRW costs ~0.9% per tick; off unless chosen.
 DEFAULT_MARKETS = ("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
 MODES = ("off", "shadow", "live")
+# 10-25 fidelity probe: liquid coins traded in shadow only, in their own
+# ledger, to exercise entries/stops/stream/slippage faster. Never live, never
+# part of the 4-coin performance or the kill switch (backtests: more coins
+# hurt returns, research/2026-10/coin/universe).
+PROBE_MARKETS = ("KRW-DOGE", "KRW-ADA", "KRW-SUI", "KRW-XLM", "KRW-TRX",
+                 "KRW-LINK", "KRW-AVAX", "KRW-DOT", "KRW-HBAR", "KRW-NEAR")
+PROBE_SEED = 1000000
 SEED_MIN, SEED_MAX = 50000, 10000000
 FEE_SIDE = 0.0005
 HISTORY_HOURS = 80 * 24
@@ -84,6 +92,7 @@ def normalize_policy(raw):
         "account_fp": str(raw.get("account_fp", "") or ""),
         "live_confirmed_at": str(raw.get("live_confirmed_at", "") or ""),
         "resume_at": str(raw.get("resume_at", "") or ""),
+        "probe": bool(raw.get("probe", True)),
         "updated_at": str(raw.get("updated_at", "") or ""),
     }
 
@@ -93,14 +102,16 @@ def bar_floor(sec, bar_sec):
 
 
 class CoinEngine:
-    def __init__(self, api, state_dir, candle_dir, policy, strategy, log=None, now=None, sleep=None, error_cls=Exception, stream=None):
+    def __init__(self, api, state_dir, candle_dir, policy, strategy, log=None, now=None, sleep=None, error_cls=Exception, stream=None,
+                 probe=False):
+        self.probe = bool(probe)
         self.api = api
         self.stream = stream  # upbit_ws.TradeStream: every trade of the held markets
         self._rest_at = 0.0
         self.S = strategy
         self.state_dir = state_dir
         self.candle_dir = candle_dir
-        self.policy = normalize_policy(policy)
+        self.policy = self._shape(policy)
         self.mode = self.policy["mode"]
         if self.mode not in ("shadow", "live"):
             raise ValueError("coin engine runs only in shadow or live mode")
@@ -112,7 +123,7 @@ class CoinEngine:
         self.prices = {}
         os.makedirs(state_dir, exist_ok=True)
         os.makedirs(candle_dir, exist_ok=True)
-        self.state_path = os.path.join(state_dir, f"state_{self.mode}.json")
+        self.state_path = os.path.join(state_dir, "state_probe.json" if self.probe else f"state_{self.mode}.json")
         self.state = self._load_state()
         self.update_policy(self.policy)
 
@@ -141,8 +152,16 @@ class CoinEngine:
                 "pending": None, "realized_krw": 0.0, "trades": 0, "wins": 0, "last_action": "", "last_reason": "",
                 "indicators": {}, "active": True}
 
-    def update_policy(self, policy):
+    def _shape(self, policy):
         policy = normalize_policy(policy)
+        if self.probe:
+            if policy["mode"] == "off":
+                raise ValueError("coin engine runs only in shadow or live mode")
+            policy.update(mode="shadow", markets=list(PROBE_MARKETS), seed_krw=PROBE_SEED, resume_at="")
+        return policy
+
+    def update_policy(self, policy):
+        policy = self._shape(policy)
         markets = policy["markets"]
         per = float(policy["seed_krw"] // len(markets))
         sleeves = self.state.setdefault("sleeves", {})
@@ -222,7 +241,7 @@ class CoinEngine:
         if long_markets:
             self._watch_stops(long_markets)
         elif self.stream is not None:
-            self.stream.watch([])  # nothing held: no connection
+            self.stream.watch([], key="probe" if self.probe else "main")  # nothing held: no connection
             self.state["feed"] = ""
         E = bar_floor(now, self.S.BAR_SEC)
         if E > int(self.state.get("last_decision_bar_end") or 0) and now >= E + DECISION_DELAY_SEC:
@@ -483,7 +502,7 @@ class CoinEngine:
         also polled over REST every REST_POLL_SEC."""
         stale = list(markets)
         if self.stream is not None:
-            self.stream.watch(markets)
+            self.stream.watch(markets, key="probe" if self.probe else "main")
             data = self.stream.read(markets)
             connected = bool(self.stream.connected)
             stale = []
@@ -548,7 +567,7 @@ class CoinEngine:
         self.state["equity"] = equity
         peak = max(float(self.state.get("peak_equity") or 0), equity)
         self.state["peak_equity"] = peak
-        if peak > 0 and equity < peak * (1 - KILL_DRAWDOWN) and not self.state.get("halted"):
+        if not self.probe and peak > 0 and equity < peak * (1 - KILL_DRAWDOWN) and not self.state.get("halted"):
             self.state["halted"] = True
             self.state["halt_reason"] = f"고점 ₩{round(peak):,} 대비 -{KILL_DRAWDOWN * 100:.0f}% 도달 (현재 ₩{round(equity):,})"
             self._log("COIN_HALT", "", "HALT", f"코인 자동매매 신규 진입 중단: {self.state['halt_reason']}", {"equity": equity, "peak": peak})
@@ -573,8 +592,11 @@ class CoinEngine:
             if time.monotonic() - _LOG_SEEN.get(key, -1e9) < 600:
                 return
             _LOG_SEEN[key] = time.monotonic()
+        if self.probe:
+            message = str(message).replace("[모의] ", "")
+            message = "[점검] " + message
         try:
-            self.log(event, market, action, message, dict(payload or {}, mode=self.mode), price=price, order_no=order_no)
+            self.log(event, market, action, message, dict(payload or {}, mode=self.mode, probe=self.probe), price=price, order_no=order_no)
         except Exception:
             pass
 
@@ -603,12 +625,15 @@ class CoinEngine:
     def _publish(self, now):
         snap = self.snapshot(now)
         snap["updated_at"] = int(now)
-        STATUS.clear()
-        STATUS.update(snap)
+        target = PROBE_STATUS if self.probe else STATUS
+        target.clear()
+        target.update(snap)
 
 
 # wiz.model() hands out only `Model`; expose the module helpers on it.
 CoinEngine.STATUS = STATUS
+CoinEngine.PROBE_STATUS = PROBE_STATUS
+CoinEngine.PROBE_MARKETS = PROBE_MARKETS
 CoinEngine.POLICY_KEY = POLICY_KEY
 CoinEngine.ALL_MARKETS = ALL_MARKETS
 CoinEngine.DEFAULT_MARKETS = DEFAULT_MARKETS
