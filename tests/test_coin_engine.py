@@ -331,7 +331,8 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(ind["ready"])
         action, pos, _ = S.decide({"long": False}, ind)
         self.assertEqual(action, "ENTER")
-        self.assertAlmostEqual(pos["stop"], ind["high"] - 2.0 * ind["atr"])
+        self.assertAlmostEqual(pos["stop"], ind["high"] - S.ATR_K * ind["atr"])
+        self.assertEqual(S.ATR_K, 4.0)  # frozen "breakout 4h_N55_atr4" (10-24)
         quiet = S.indicators(bars[:-1], daily, len(bars) - 2)
         self.assertEqual(S.decide({"long": False}, quiet)[0], "WAIT")
 
@@ -340,7 +341,7 @@ class StrategyTests(unittest.TestCase):
         _, pos2, _ = S.decide(pos, {"high": 125.0, "atr": 10.0})
         self.assertEqual(pos2["stop"], 120.0)
         _, pos3, _ = S.decide(pos2, {"high": 150.0, "atr": 5.0})
-        self.assertEqual(pos3["stop"], 140.0)
+        self.assertEqual(pos3["stop"], 150.0 - S.ATR_K * 5.0)
 
     def test_bars_follow_utc_4h_buckets(self):
         rows = hourly(E0 - 2 * H, 6, lambda i: 100.0 + i)
