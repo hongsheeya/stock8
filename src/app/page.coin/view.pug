@@ -62,7 +62,7 @@ div(*ngIf="!loading", class="dx-page coin-page")
         div(class="dx-card-head")
             h2 실거래 전 검증 진행
                 span(class="dx-tag", [class.is-ok]="progress.ready") {{progress.ready ? '조건 충족' : '진행 중'}}
-            small 모의 운용 {{progress.gates.weeks.target}}주 · 진입 {{progress.gates.entries.target}}회 · 신호 일치 {{progress.gates.match.target}}% 이상이면 소액 실거래 검토
+            small 모의 운용 {{progress.gates.weeks.target}}주 · 진입 {{progress.gates.entries.target}}회 · 신호 일치 {{progress.gates.match.target}}% 이상 · 미끄러짐 {{progress.gates.slippage?.target}}% 이하면 소액 실거래 검토
         div(class="coin-gates")
             div(class="coin-gate")
                 div(class="coin-gate-head")
@@ -85,6 +85,13 @@ div(*ngIf="!loading", class="dx-page coin-page")
                 div(class="coin-bar")
                     i([style.width.%]="progress.match_pct || 0", [class.is-ok]="progress.gates.match.ok")
                 small 같은 시세로 다시 계산한 결과와 비교 · {{progress.compared_count}}건 중 {{progress.matched}}건 일치
+            div(class="coin-gate")
+                div(class="coin-gate-head")
+                    strong 주문 미끄러짐 (중앙값)
+                    span {{progress.slippage_median_pct === null ? '아직 없음' : progress.slippage_median_pct + '%'}}
+                div(class="coin-bar")
+                    i([style.width.%]="slipPct()", [class.is-ok]="progress.gates.slippage?.ok", [class.is-warn]="progress.slippage_median_pct > progress.gates.slippage?.target")
+                small 모델 가격 대비 한쪽 {{progress.gates.slippage?.target}}% 이하 · 표본 {{progress.slippage_samples}}건
             div(class="coin-gate")
                 div(class="coin-gate-head")
                     strong 4시간봉 판단

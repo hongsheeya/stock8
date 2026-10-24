@@ -299,8 +299,16 @@ class CoinEngine:
         return f"s8c-{market.split('-')[-1]}-{int(stamp)}-{side}"
 
     def _enter(self, market, sleeve, position, reason, E):
+        book = self.api.orderbook([market]).get(market, {})
+        bid = float(book.get("bid") or 0)
+        if 0 < bid <= float(position["stop"]):
+            # SPEC 5b: the price is already at the stop; the backtest books an
+            # immediate round trip whose only result is the costs.
+            sleeve.update(last_action="SKIP", last_reason=f"매수호가 ₩{bid:,.4f}가 이미 손절가 ₩{float(position['stop']):,.4f} 이하 — 진입 안 함")
+            self._log("COIN_SKIP_BELOW_STOP", market, "SKIP", f"{market} 진입 건너뜀: {sleeve['last_reason']}",
+                      {"bid": bid, "stop": position["stop"], "bar_end": E, "shadow": self.mode == "shadow"})
+            return
         if self.mode == "shadow":
-            book = self.api.orderbook([market]).get(market, {})
             ask = float(book.get("ask") or 0)
             if ask <= 0:
                 sleeve.update(last_action="SKIP", last_reason="호가 없음 — 진입 보류")

@@ -165,6 +165,19 @@ class CoinEngineTests(unittest.TestCase):
         again = self.engine("shadow")
         self.assertEqual(again.state["sleeves"]["KRW-BTC"]["trades"], 1)
 
+    def test_entry_is_skipped_when_the_bid_is_already_at_the_stop(self):
+        for mode in ("shadow", "live"):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.api.price = 1.0  # far below any stop of the 130 breakout
+                eng = self.engine(mode)
+                eng.step()
+                sleeve = eng.state["sleeves"]["KRW-BTC"]
+                self.assertFalse(sleeve["long"])
+                self.assertIn("손절가", sleeve["last_reason"])
+                self.assertEqual(self.events(), ["COIN_SKIP_BELOW_STOP"])
+                self.assertEqual(self.api.buys, [])
+
     def test_entry_window_closes_after_15_minutes(self):
         self.clock.t = E0 + 16 * 60
         eng = self.engine("shadow")

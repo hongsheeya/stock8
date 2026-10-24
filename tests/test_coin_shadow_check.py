@@ -83,6 +83,25 @@ class ShadowCheckTests(unittest.TestCase):
         self.assertEqual(summary["match_pct"], 100.0)
         self.assertEqual(ledger2["started_at"], self.started)
 
+    def test_slippage_is_measured_against_the_model_prices(self):
+        events = []
+        for et, epx, xt, xpx, why in self.trades:
+            events.append({"time": et + 5, "market": "KRW-BTC", "side": "BUY", "bar_end": et, "price": epx * 1.001})
+            if why != "end":
+                events.append({"time": xt + 1800, "market": "KRW-BTC", "side": "SELL", "price": xpx * 0.998})
+        summary, _ = C.check(S, self.state, events, self.c, {}, self.now)
+        self.assertGreater(summary["slippage_samples"], 0)
+        self.assertAlmostEqual(min(summary["compared"][0]["slippage"]), 0.1, places=3)
+        self.assertLessEqual(summary["slippage_median_pct"], 0.2)
+
+    def test_a_skip_below_the_stop_counts_as_a_match(self):
+        et = self.trades[0][0]
+        events = [{"time": et + 5, "market": "KRW-BTC", "side": "SKIP", "bar_end": et}]
+        summary, _ = C.check(S, self.state, events, self.c, {}, self.now)
+        row = next(r for r in summary["compared"] if r["bar_end"] == et)
+        self.assertEqual(row["status"], "match")
+        self.assertTrue(row["skipped"])
+
     def test_kst_epoch(self):
         self.assertEqual(C.kst_epoch("2026-10-24 09:00:00"), 1792800000)
 
