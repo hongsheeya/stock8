@@ -58,6 +58,59 @@ div(*ngIf="!loading", class="dx-page coin-page")
             div(class="dx-kpi-value is-muted") {{mode === 'off' ? '-' : kst(engine?.next_decision_at)}}
             div(class="dx-kpi-sub") 4시간봉 마감 직후 (09·13·17·21·01·05시)
 
+    section(class="dx-card", *ngIf="progress && !progress.error")
+        div(class="dx-card-head")
+            h2 실거래 전 검증 진행
+                span(class="dx-tag", [class.is-ok]="progress.ready") {{progress.ready ? '조건 충족' : '진행 중'}}
+            small 모의 운용 {{progress.gates.weeks.target}}주 · 진입 {{progress.gates.entries.target}}회 · 신호 일치 {{progress.gates.match.target}}% 이상이면 소액 실거래 검토
+        div(class="coin-gates")
+            div(class="coin-gate")
+                div(class="coin-gate-head")
+                    strong 모의 운용 기간
+                    span {{progress.weeks}} / {{progress.gates.weeks.target}}주
+                div(class="coin-bar")
+                    i([style.width.%]="gatePct(progress.gates.weeks)", [class.is-ok]="progress.gates.weeks.ok")
+                small {{kstDate(progress.started_at)}} 시작
+            div(class="coin-gate")
+                div(class="coin-gate-head")
+                    strong 진입 횟수
+                    span {{progress.entries}} / {{progress.gates.entries.target}}회
+                div(class="coin-bar")
+                    i([style.width.%]="gatePct(progress.gates.entries)", [class.is-ok]="progress.gates.entries.ok")
+                small 4개 코인 합계 · 하락장(50일선 아래)에는 진입이 없습니다
+            div(class="coin-gate")
+                div(class="coin-gate-head")
+                    strong 신호 일치율
+                    span {{progress.match_pct === null ? '비교할 신호 없음' : progress.match_pct + '%'}}
+                div(class="coin-bar")
+                    i([style.width.%]="progress.match_pct || 0", [class.is-ok]="progress.gates.match.ok")
+                small 같은 시세로 다시 계산한 결과와 비교 · {{progress.compared_count}}건 중 {{progress.matched}}건 일치
+            div(class="coin-gate")
+                div(class="coin-gate-head")
+                    strong 4시간봉 판단
+                    span {{progress.decided_bars}} / {{progress.expected_bars}}
+                div(class="coin-bar")
+                    i([style.width.%]="progress.coverage_pct || 0", [class.is-ok]="progress.missed_count === 0", [class.is-warn]="progress.missed_count > 0")
+                small(*ngIf="progress.missed_count === 0") 빠진 판단 없음
+                small(class="dx-down", *ngIf="progress.missed_count > 0") 빠진 판단 {{progress.missed_count}}회 (PC 절전·작업 중단) · 최근 {{missedLabel()}}
+        div(class="dx-table-wrap", *ngIf="progress.compared?.length")
+            table(class="dx-table")
+                thead
+                    tr
+                        th 코인
+                        th 신호(4시간봉 마감)
+                        th 결과
+                        th 모의 청산
+                        th 다시 계산한 청산
+                tbody
+                    tr(*ngFor="let c of progress.compared")
+                        td {{c.market.replace('KRW-', '')}}
+                        td {{kst(c.bar_end)}}
+                        td
+                            span(class="dx-tag", [class.is-ok]="c.status === 'match'", [class.is-warn]="c.status === 'pending'", [class.is-danger]="c.status !== 'match' && c.status !== 'pending'") {{compareLabel(c.status)}}
+                        td {{c.shadow_exit ? kst(c.shadow_exit) : '보유 중'}}
+                        td {{c.replay_exit ? kst(c.replay_exit) : '보유 중'}}
+
     section(class="dx-card")
         div(class="dx-card-head")
             h2 코인별 현황
