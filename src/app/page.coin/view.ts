@@ -8,7 +8,7 @@ const MODE_LABEL: any = { off: '꺼짐', shadow: '모의 운용', live: '실거�
 const EVENT_LABEL: any = {
     COIN_SHADOW_BUY: '모의 매수', COIN_SHADOW_SELL: '모의 매도', COIN_BUY: '매수', COIN_SELL: '매도',
     COIN_BUY_SKIPPED: '매수 보류', COIN_BUY_ERROR: '매수 실패', COIN_SELL_ERROR: '매도 실패',
-    COIN_ORDER_CANCELLED: '주문 취소', COIN_EXTERNAL_SELL: '직접 매도 감지', COIN_HALT: '진입 중단', COIN_RESUME: '진입 재개',
+    COIN_ORDER_CANCELLED: '주문 취소', COIN_EXTERNAL_SELL: '직접 매도 감지', COIN_HALT: '진입 중단', COIN_RESUME: '진입 재개', COIN_SKIP_BELOW_STOP: '진입 건너뜀',
 };
 const COMPARE_LABEL: any = {
     match: '일치', pending: '확인 중', exit_differs: '청산 시각 다름', replay_only: '모의에서 놓침', shadow_only: '모의에만 있음',
@@ -196,6 +196,12 @@ export class Component implements OnInit, OnDestroy {
         return Math.max(0, Math.min(100, (v / t) * 100));
     }
     public compareLabel(s: string): string { return COMPARE_LABEL[s] || s; }
+    public slipPct(): number {
+        // full bar = within the gate; over the gate shows full in the warning tone
+        const v = this.progress?.slippage_median_pct;
+        if (v === null || v === undefined) return 0;
+        return 100;
+    }
     public missedLabel(): string { return (this.progress?.missed_bars || []).slice(-3).map((t: number) => this.kst(t)).join(', '); }
     public kstDate(sec: any): string {
         const n = Number(sec || 0);

@@ -127,6 +127,7 @@ _COIN_ALERT_EVENTS = {
     "COIN_BUY_ERROR": "❗ 매수 실패", "COIN_SELL_ERROR": "❗ 매도 실패", "COIN_ORDER_CANCELLED": "❗ 주문 취소",
     "COIN_HALT": "⛔ 신규 진입 중단", "COIN_RESUME": "▶️ 신규 진입 재개",
     "COIN_SHADOW_BUY": "🟢 [모의] 매수", "COIN_SHADOW_SELL": "🔴 [모의] 매도",
+    "COIN_SKIP_BELOW_STOP": "⏭️ 진입 건너뜀",
 }
 _COIN_HEARTBEAT_SEC = 300
 _COIN_ERROR_ALERT_AFTER = 3
@@ -1359,14 +1360,22 @@ class Struct:
                 pass
         candles = {m: c for m, c in candles.items() if m in (state.get("sleeves") or {})}
         events = []
-        for row in self.db("trade_log").rows(event_type__startswith="COIN_SHADOW_", orderby="created", order="ASC", dump=5000) or []:
+        sides = {"COIN_SHADOW_BUY": "BUY", "COIN_SHADOW_SELL": "SELL", "COIN_SKIP_BELOW_STOP": "SKIP"}
+        rows = []
+        for prefix in ("COIN_SHADOW_", "COIN_SKIP_"):
+            rows += self.db("trade_log").rows(event_type__startswith=prefix, orderby="created", order="ASC", dump=5000) or []
+        for row in rows:
+            side = sides.get(row.get("event_type"))
+            if not side:
+                continue
             try:
                 payload = _json.loads(row.get("raw_response") or "{}")
             except (ValueError, TypeError):
                 payload = {}
+            if side == "SKIP" and not payload.get("shadow"):
+                continue  # a live-mode skip is not part of the shadow run
             events.append({"time": checker.kst_epoch(row.get("created", "")), "market": row.get("symbol", ""),
-                           "side": "BUY" if row.get("event_type") == "COIN_SHADOW_BUY" else "SELL",
-                           "bar_end": payload.get("bar_end")})
+                           "side": side, "bar_end": payload.get("bar_end"), "price": payload.get("price")})
         ledger_path = _os.path.join(state_dir, "shadow_check.json")
         try:
             with open(ledger_path, encoding="utf-8") as handle:
