@@ -45,7 +45,7 @@ class FakeStream:
         self.rows = {}
         self.watched = []
 
-    def watch(self, markets):
+    def watch(self, markets, key="main"):
         self.watched.append(sorted(markets))
 
     def read(self, markets):
@@ -244,6 +244,23 @@ class CoinEngineTests(unittest.TestCase):
         self.assertEqual(eng.state["feed"], "websocket+rest")
         self.assertEqual(len(calls), 2)
         self.assertEqual(out["next_delay"], 3.0)
+
+    def test_probe_ledger_is_separate_shadow_only_and_never_halts(self):
+        eng = engine_mod.CoinEngine(self.api, os.path.join(self.tmp.name, "state"), os.path.join(self.tmp.name, "candles"),
+                                    {"mode": "live", "seed_krw": 50_000, "markets": ["KRW-BTC"]}, S,
+                                    log=lambda *a, **k: self.logs.append(a), now=self.clock, sleep=lambda s: None,
+                                    error_cls=ApiError, probe=True)
+        self.assertEqual(eng.mode, "shadow")  # even while the 4-coin ledger is live
+        self.assertTrue(eng.state_path.endswith("state_probe.json"))
+        self.assertEqual(sorted(eng.state["sleeves"]), sorted(engine_mod.PROBE_MARKETS))
+        self.assertEqual(eng.state["seed_krw"], engine_mod.PROBE_SEED)
+        eng.state.update(peak_equity=10_000_000.0)
+        eng._update_equity(self.clock.t)
+        self.assertFalse(eng.state.get("halted"))
+        eng._log("COIN_SHADOW_BUY", "KRW-ADA", "BUY", "[모의] KRW-ADA 매수", {})
+        self.assertTrue(self.logs[-1][3].startswith("[점검] "))
+        self.assertTrue(self.logs[-1][4]["probe"])
+        self.assertEqual(engine_mod.PROBE_STATUS.get("seed_krw", engine_mod.PROBE_SEED), engine_mod.PROBE_SEED)
 
     def test_entry_window_closes_after_15_minutes(self):
         self.clock.t = E0 + 16 * 60

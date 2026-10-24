@@ -104,6 +104,7 @@ class WatchdogTests(unittest.TestCase):
     def test_trade_events_follow_the_shadow_switch(self):
         self.self._coin_alert("COIN_SHADOW_BUY", "[모의] KRW-BTC 매수")
         self.self._coin_alert("COIN_BUY_SKIPPED", "noise")
+        self.self._coin_alert("COIN_SHADOW_BUY", "[점검] KRW-ADA 매수")  # probe: never alerted
         self.assertEqual(len(self.msgs), 1)
         self.assertNotIn("[모의] KRW", self.msgs[0])
         self.settings["notify_shadow"] = False

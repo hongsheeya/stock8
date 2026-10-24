@@ -58,6 +58,7 @@ class TradeStream:
         self.lock = threading.Lock()
         self.changed = threading.Event()
         self.want = frozenset()
+        self.wants = {}       # owner key -> markets (main engine, probe engine)
         self.last = {}        # market -> (price, local_ts)
         self.low = {}         # market -> lowest price since the last read
         self.connected = False
@@ -67,9 +68,11 @@ class TradeStream:
         self.thread = None
 
     # ------------------------------------------------------------ engine side
-    def watch(self, markets):
-        markets = frozenset(markets or ())
+    def watch(self, markets, key="main"):
+        """Markets one engine holds; the connection covers the union."""
         with self.lock:
+            self.wants[key] = frozenset(markets or ())
+            markets = frozenset().union(*self.wants.values())
             if markets == self.want:
                 return
             self.want = markets
@@ -80,6 +83,12 @@ class TradeStream:
         self.changed.set()
         if markets:
             self._ensure_thread()
+
+    def clear(self):
+        """Drop every engine's markets (coin automation OFF)."""
+        with self.lock:
+            self.wants = {}
+        self.watch([], key="main")
 
     def read(self, markets):
         """{market: {"price", "low", "age"}}; low is the minimum trade price

@@ -62,7 +62,7 @@ div(*ngIf="!loading", class="dx-page coin-page")
         div(class="dx-card-head")
             h2 실거래 전 검증 진행
                 span(class="dx-tag", [class.is-ok]="progress.ready") {{progress.ready ? '조건 충족' : '진행 중'}}
-            small 모의 운용 {{progress.gates.weeks.target}}주 · 진입 {{progress.gates.entries.target}}회 · 신호 일치 {{progress.gates.match.target}}% 이상 · 미끄러짐 {{progress.gates.slippage?.target}}% 이하면 소액 실거래 검토
+            small 모의 운용 {{progress.gates.weeks.target}}주 · 진입 {{progress.gates.entries.target}}회 · 신호 일치 {{progress.gates.match.target}}% 이상 · 미끄러짐 {{progress.gates.slippage?.target}}% 이하면 소액 실거래 검토. 점검용 코인은 프로그램 동작 확인용이며 성과·실거래에는 들어가지 않습니다.
         div(class="coin-gates")
             div(class="coin-gate")
                 div(class="coin-gate-head")
@@ -77,7 +77,7 @@ div(*ngIf="!loading", class="dx-page coin-page")
                     span {{progress.entries}} / {{progress.gates.entries.target}}회
                 div(class="coin-bar")
                     i([style.width.%]="gatePct(progress.gates.entries)", [class.is-ok]="progress.gates.entries.ok")
-                small 4개 코인 합계 · 하락장(50일선 아래)에는 진입이 없습니다
+                small 운용 4개 {{progress.entries_main || 0}}회 + 점검용 {{progress.probe_markets?.length || 0}}개 {{progress.entries_probe || 0}}회 · 하락장(50일선 아래)에는 진입이 없습니다
             div(class="coin-gate")
                 div(class="coin-gate-head")
                     strong 신호 일치율
