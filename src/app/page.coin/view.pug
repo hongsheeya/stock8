@@ -377,35 +377,35 @@ div(*ngIf="!loading", class="dx-page coin-page")
                 | 실제 엔진과 같은 규칙·같은 운용 방식(코인마다 25%를 따로 굴리고 다시 나누지 않음)으로 {{history.meta.candles}}을 재생한 결과입니다.
                 | 비용은 한쪽 {{history.meta.fee_side_pct}}%에 호가 반 칸을 더해 실제(0.05%)보다 보수적으로 잡았습니다.
                 | 2019-10~2025-10 구간 연 {{signedPct(history.stats.g1_cagr)}}·낙폭 {{history.stats.g1_mdd}}%, 그 뒤 1년 {{signedPct(history.stats.recent_pct)}}.
-                | 단순 보유가 수익은 훨씬 컸지만 낙폭도 {{history.stats.bh_mdd}}%였습니다. 이 규칙의 장점은 수익이 아니라 큰 하락을 피하는 데 있습니다. 과거 성과가 미래를 보장하지 않습니다.
+                | 같은 기간 단순 보유는 연 {{signedPct(history.stats.bh_cagr)}}·낙폭 {{history.stats.bh_mdd}}%였습니다. 손절 폭 ×4는 2018~2019 결과를 본 뒤 고른 값이라 앞으로의 모의 운용이 진짜 검증입니다. 과거 성과가 미래를 보장하지 않습니다.
 
     section(class="dx-card dx-details")
         div(class="dx-card-head coin-research-head", (click)="showResearch = !showResearch")
             h2 전략 검증 요약
             small {{showResearch ? '접기' : '펼치기'}}
         div(*ngIf="showResearch", class="coin-research")
-            p 규칙: 4시간봉 종가가 직전 55개 봉의 고점을 넘고 일봉 50일선 위면 매수합니다. 매수 뒤 최고가에서 ATR(14)×2를 뺀 손절가를 올려가며 그 아래로 내려가면 매도합니다. 설정값은 검증 전에 고정했고 바꾸지 않습니다.
+            p 규칙: 4시간봉 종가가 직전 55개 봉의 고점을 넘고 일봉 50일선 위면 매수합니다. 매수 뒤 최고가에서 ATR(14)×4를 뺀 손절가를 올려가며 그 아래로 내려가면 매도합니다. (10-24에 손절 폭을 ×2에서 ×4로 넓히고 모의 운용을 다시 시작했습니다.)
             table(class="dx-table")
                 thead
                     tr
-                        th 구간
-                        th(class="num") 수익
-                        th(class="num") 최대 낙폭
+                        th 구간 (비용 한쪽 0.1%+호가 반 칸)
+                        th(class="num") ×4 (현재)
+                        th(class="num") ×2 (이전)
                         th 비고
                 tbody
                     tr
-                        td 2019-10 ~ 2025-10 (처음 보는 6년)
-                        td(class="num dx-up") 연 +20.0%
-                        td(class="num") -14.6%
-                        td 6년 중 5년 플러스 · 비용 0.1%+호가 반 칸
+                        td 2019-10 ~ 2026-10 (4개 코인)
+                        td(class="num dx-up") 연 +41.9% · 낙폭 -21.3%
+                        td(class="num") 연 +16.1% · 낙폭 -15.9%
+                        td 비용 2배에서도 연 +38.4%
                     tr
-                        td 2025-10 ~ 2026-10 (하락장 1년)
-                        td(class="num") +1.2%
-                        td(class="num") -7.7%
-                        td 같은 기간 단순 보유 -47.8%
+                        td 2018-01 ~ 2019-10 (BTC·ETH·XRP, 폭락장)
+                        td(class="num dx-up") 연 +41.7% · 낙폭 -18.6%
+                        td(class="num") 연 +11.2% · 낙폭 -13.4%
+                        td 같은 기간 단순 보유 연 -54.5%
                     tr
-                        td 비용 2배 가정 (6년)
-                        td(class="num") 연 +14.8%
-                        td(class="num") -16.7%
-                        td 낙폭 기준(-15%)은 넘음
-            p(class="dx-muted") 하락장에서는 대부분 현금으로 기다리고, 상승장의 일부를 가져가는 추세 추종입니다. 손실 나는 달이 더 많고 수익은 큰 상승 몇 번에 몰립니다. 미리 정한 계획은 모의 운용 8주(진입 15회 이상)로 실제 신호가 검증과 같은지 확인한 뒤 소액 실거래입니다.
+                        td 다른 대형 코인 16개에 하나씩
+                        td(class="num") 14개에서 ×2보다 좋음
+                        td(class="num") -
+                        td 코인 하나만 들면 낙폭 -40~-80% → 4개 분산이 핵심
+            p(class="dx-muted") 하락장에서는 대부분 현금으로 기다리고, 상승 추세에 올라타는 추세 추종입니다. ×4는 2018~2019 결과를 본 뒤 고른 값이라 진짜 검증은 앞으로의 모의 운용입니다. 모의 운용 8주·진입 15회·신호 일치 90%·미끄러짐 0.15% 이하를 확인한 뒤 소액 실거래를 검토합니다.

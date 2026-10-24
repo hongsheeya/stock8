@@ -1,6 +1,6 @@
 """Upbit coin automation engine (admin only, LIVE server process only, 10-22).
 
-Rule: coin_strategy (frozen "breakout 4h_N55_atr2"). Each market is an
+Rule: coin_strategy (frozen "breakout 4h_N55_atr4" since 10-24). Each market is an
 independent sleeve with seed/N KRW: all-in when long, cash when flat,
 compounding on its own ledger (the exchange KRW balance is shared, so the
 ledger - not the balance - says what belongs to the automation).

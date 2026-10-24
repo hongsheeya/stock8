@@ -1,4 +1,4 @@
-"""Frozen coin rule "breakout 4h_N55_atr2" (10-21 research, pre-registered).
+"""Frozen coin rule "breakout 4h_N55_atr4" (10-24; was atr2 from 10-21).
 
 Long-only, one position per market, all-in per sleeve:
 - 4h bars on UTC boundaries (00/04/08/12/16/20 UTC = 09/13/17/21/01/05 KST),
@@ -6,10 +6,15 @@ Long-only, one position per market, all-in per sleeve:
 - Entry at a 4h close when close > highest high of the previous 55 bars and
   close > SMA50 of completed UTC-day closes (Upbit's 09:00 KST day).
 - Exit only by a chandelier stop: highest high since the signal bar minus
-  2 x ATR14 (Wilder, alpha 1/14), fixed for a whole bar, ratcheting up.
-Evidence: TEST 2026-06-21..10-21 +6.05% (MDD -7.4%); out-of-sample
-2019-10-21..2025-10-21 +199% (CAGR +20.0%, MDD -14.6%, 5 of 6 years >= 0)
-with 0.10%/side + half a tick. Parameters must not be tuned.
+  4 x ATR14 (Wilder, alpha 1/14), fixed for a whole bar, ratcheting up.
+History: atr2 passed G1 (2019-10..2025-10 CAGR +20.0%, MDD -14.6%). The
+10-24 variants study (research/2026-10/coin/variants, 0.10%/side + half a
+tick, 25% sleeves) found the x2 stop too tight (average hold 1.2 days):
+atr4 2019-10..2026-10 CAGR +41.9% (MDD -21.3%) vs +16.1%, untouched
+2018-01..2019-10 holdout +41.7% (MDD -18.6%) vs +11.2%, smooth from x2 to
+x5, better on 14 of 16 other coins. atr4 was flagged after the holdout was
+seen, so the user restarted the shadow run with it (10-24) as the forward
+test. Parameters must not be tuned further.
 
 Pure functions only (no WIZ), so the replay and unit tests can import it.
 """
@@ -19,7 +24,7 @@ BAR_SEC = 4 * 3600
 DAY_SEC = 24 * 3600
 DONCHIAN_N = 55
 ATR_N = 14
-ATR_K = 2.0
+ATR_K = 4.0
 DAILY_MA = 50
 
 
