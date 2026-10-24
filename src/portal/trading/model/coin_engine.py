@@ -46,6 +46,7 @@ RECONCILE_SEC = 60
 MIN_ORDER_KRW = 5000
 DUST_KRW = 1000
 PENDING_GIVE_UP_SEC = 90
+REST_POLL_SEC = 3
 
 
 def account_fingerprint(access_key):
@@ -92,8 +93,10 @@ def bar_floor(sec, bar_sec):
 
 
 class CoinEngine:
-    def __init__(self, api, state_dir, candle_dir, policy, strategy, log=None, now=None, sleep=None, error_cls=Exception):
+    def __init__(self, api, state_dir, candle_dir, policy, strategy, log=None, now=None, sleep=None, error_cls=Exception, stream=None):
         self.api = api
+        self.stream = stream  # upbit_ws.TradeStream: every trade of the held markets
+        self._rest_at = 0.0
         self.S = strategy
         self.state_dir = state_dir
         self.candle_dir = candle_dir
@@ -218,6 +221,9 @@ class CoinEngine:
         long_markets = [m for m, s in sleeves.items() if s.get("long")]
         if long_markets:
             self._watch_stops(long_markets)
+        elif self.stream is not None:
+            self.stream.watch([])  # nothing held: no connection
+            self.state["feed"] = ""
         E = bar_floor(now, self.S.BAR_SEC)
         if E > int(self.state.get("last_decision_bar_end") or 0) and now >= E + DECISION_DELAY_SEC:
             self._decide(E, now)
@@ -228,7 +234,8 @@ class CoinEngine:
         self._publish(now)
         long_now = any(s.get("long") for s in sleeves.values())
         until_decision = E + self.S.BAR_SEC + DECISION_DELAY_SEC - now
-        out["next_delay"] = max(1.0, min(3.0 if long_now else 15.0, until_decision))
+        fast = 1.0 if self.state.get("feed") == "websocket" else float(REST_POLL_SEC)
+        out["next_delay"] = max(1.0, min(fast if long_now else 15.0, until_decision))
         return out
 
     def _decide(self, E, now):
@@ -470,19 +477,46 @@ class CoinEngine:
 
     # -------------------------------------------------------------- watching
     def _watch_stops(self, markets):
+        """Primary feed: the trade stream (lowest trade since the last pass, so
+        a short wick through the stop counts, as in the backtest). A market
+        without a fresh stream (disconnected, or no trade for STALE_SEC) is
+        also polled over REST every REST_POLL_SEC."""
+        stale = list(markets)
+        if self.stream is not None:
+            self.stream.watch(markets)
+            data = self.stream.read(markets)
+            connected = bool(self.stream.connected)
+            stale = []
+            for market in markets:
+                row = data.get(market)
+                if row:
+                    self.prices[market] = row["price"]
+                    self._check_stop(market, row["low"], row["price"], "체결")
+                if not connected or not row or row["age"] >= getattr(self.stream, "STALE_SEC", 30.0):
+                    stale.append(market)
+            self.state["feed"] = "websocket" if connected and not stale else ("websocket+rest" if connected else "rest")
+        else:
+            self.state["feed"] = "rest"
+        if not stale or (self.stream is not None and self.now() - self._rest_at < REST_POLL_SEC):
+            return
+        self._rest_at = self.now()
         try:
-            ticks = self.api.ticker(markets)
+            ticks = self.api.ticker(stale)
         except Exception as exc:
             self.state["last_error"] = f"시세 조회 실패: {str(exc)[:120]}"
             return
-        for market in markets:
-            sleeve = self.state["sleeves"][market]
+        for market in stale:
             price = float((ticks.get(market) or {}).get("trade_price", 0) or 0)
             if price <= 0:
                 continue
             self.prices[market] = price
-            if not sleeve.get("pending") and self.S.stop_hit(sleeve, price):
-                self._exit(market, sleeve, f"손절가 ₩{float(sleeve['stop']):,.4f} 도달 (현재가 ₩{price:,.4f})", price_hint=price)
+            self._check_stop(market, price, price, "현재가")
+
+    def _check_stop(self, market, low, price, source):
+        sleeve = self.state["sleeves"][market]
+        if sleeve.get("long") and not sleeve.get("pending") and self.S.stop_hit(sleeve, low):
+            detail = f"최저 체결 ₩{low:,.4f}, 현재가 ₩{price:,.4f}" if low < price else f"{source} ₩{price:,.4f}"
+            self._exit(market, sleeve, f"손절가 ₩{float(sleeve['stop']):,.4f} 도달 ({detail})", price_hint=price)
 
     def _reconcile(self):
         self.state["last_reconcile_at"] = int(self.now())
@@ -563,6 +597,7 @@ class CoinEngine:
                 "last_decision_bar_end": self.state.get("last_decision_bar_end", 0),
                 "next_decision_at": E + self.S.BAR_SEC + DECISION_DELAY_SEC, "krw_available": self.state.get("krw_available"),
                 "last_error": self.state.get("last_error", ""), "sleeves": sleeves,
+                "feed": self.state.get("feed", ""), "stream": self.stream.status() if self.stream is not None else {},
                 "decisions": (self.state.get("decisions") or [])[-6:], "equity_days": (self.state.get("equity_days") or [])[-120:]}
 
     def _publish(self, now):

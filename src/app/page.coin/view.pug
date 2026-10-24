@@ -123,6 +123,7 @@ div(*ngIf="!loading", class="dx-page coin-page")
             h2 코인별 현황
                 span(class="dx-count") {{sleeves.length}}
             small 55개 4시간봉 고점을 넘고 50일선 위에서 마감하면 매수, 손절가 아래로 내려가면 매도
+            span(class="dx-tag", [class.is-ok]="engine?.feed === 'websocket'", [class.is-warn]="engine?.feed && engine?.feed !== 'websocket'") 손절 감시: {{feedLabel}}
         div(class="dx-empty", *ngIf="!sleeves.length") {{mode === 'off' ? '모드를 켜면 현황이 표시됩니다.' : '첫 판단을 준비하고 있습니다.'}}
         div(class="dx-table-wrap", *ngIf="sleeves.length")
             table(class="dx-table")
