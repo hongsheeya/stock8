@@ -1,5 +1,6 @@
 """Coin page (10-22): admin-only controller, keys never echoed, PAPER refuses edits."""
 import json
+import importlib.util
 import os
 import unittest
 from pathlib import Path
@@ -50,7 +51,7 @@ class ControllerTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def load_api(self, mode="LIVE", query=None):
         os.environ["TRADING_MODE"] = mode
-        self.addCleanup(os.environ.pop, "TRADING_MODE")
+        self.addCleanup(os.environ.pop, "TRADING_MODE", None)
         written = {}
         engine_cls = NS(ALL_MARKETS=("KRW-BTC", "KRW-ETH"), DEFAULT_MARKETS=("KRW-BTC",), SEED_MIN=50000, SEED_MAX=10000000,
                         STATUS={}, account_fingerprint=lambda k: "fp" if k else "")
@@ -61,8 +62,16 @@ class ApiTests(unittest.TestCase):
                      coin_data_dirs=lambda owner: ("/nonexistent", "/nonexistent", "/nonexistent"),
                      db=lambda name: NS(rows=lambda **kw: []),
                      coin_save_keys=lambda uid, a, s: written.update(uid=uid, a=a, s=s),
-                     coin_policy_write=lambda upd: written.setdefault("policy", []).append(upd) or {**policy, **upd})
-        models = {"struct": NS(trading=trading), "portal/trading/coin_engine": engine_cls}
+                     coin_policy_write=lambda upd: written.setdefault("policy", []).append(upd) or {**policy, **upd},
+                     coin_alert_settings=lambda uid: dict(alerts),
+                     coin_save_alert_settings=lambda uid, **kw: written.setdefault("alerts", []).append(kw))
+        alerts = {"webhook": "", "hc_url": "", "notify_shadow": True}
+        self.alerts = alerts
+        spec = importlib.util.spec_from_file_location("t_notifier_page", ROOT / "portal" / "trading" / "model" / "notifier.py")
+        notifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(notifier)
+        models = {"struct": NS(trading=trading), "portal/trading/coin_engine": engine_cls,
+                  "portal/trading/notifier": notifier.NotifierModel}
         q = dict(query or {})
         wiz = NS(model=lambda name: models[name], session=NS(get=lambda key: "a1"),
                  request=NS(query=lambda key, default=None: q.get(key, default)), response=NS(status=_status))
@@ -74,6 +83,17 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(Status) as ctx:
             env[name]()
         return ctx.exception
+
+    def test_alert_urls_are_validated_and_saved(self):
+        env, written = self.load_api(query={"webhook": "https://evil.example/hook"})[:2]
+        res = self.call(env, "save_alerts")
+        self.assertEqual(res.code, 400)
+        env, written = self.load_api(query={"webhook": "https://discord.com/api/webhooks/1/abc", "notify_shadow": "false"})[:2]
+        res = self.call(env, "save_alerts")
+        self.assertEqual(res.code, 200)
+        self.assertEqual(written["alerts"][-1], {"webhook": "https://discord.com/api/webhooks/1/abc", "hc_url": None, "notify_shadow": False})
+        env, _w = self.load_api(mode="PAPER", query={"webhook": "https://discord.com/api/webhooks/1/abc"})[:2]
+        self.assertEqual(self.call(env, "save_alerts").code, 409)
 
     def test_status_never_contains_the_keys(self):
         env, _ = self.load_api()
