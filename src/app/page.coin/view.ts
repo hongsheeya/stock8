@@ -26,6 +26,7 @@ export class Component implements OnInit, OnDestroy {
 
     public form: any = { seed_krw: 1000000, max_order_krw: 0, markets: {} };
     public keyForm: any = { access_key: '', secret_key: '' };
+    public alertForm: any = { webhook: '', hc_url: '', notify_shadow: true };
     public liveConfirm: string = '';
     public showLiveConfirm: boolean = false;
     public showResearch: boolean = false;
@@ -73,6 +74,7 @@ export class Component implements OnInit, OnDestroy {
         const chosen: any = {};
         for (const m of this.data?.all_markets || []) chosen[m] = (p.markets || []).includes(m);
         this.form = { seed_krw: p.seed_krw || 1000000, max_order_krw: p.max_order_krw || 0, markets: chosen };
+        this.alertForm = { webhook: '', hc_url: '', notify_shadow: this.data?.alerts?.notify_shadow !== false };
     }
 
     private async run(name: string, params: any, label: string, success: string) {
@@ -148,6 +150,22 @@ export class Component implements OnInit, OnDestroy {
     public async confirmLive() {
         const r = await this.run('set_mode', { mode: 'live', confirm: this.liveConfirm }, 'mode', '실거래를 시작했습니다. 다음 4시간봉 마감부터 주문합니다.');
         if (r) this.showLiveConfirm = false;
+    }
+
+    public async saveAlerts() {
+        await this.run('save_alerts', { ...this.alertForm }, 'alerts', '알림 설정을 저장했습니다. 테스트를 보내 확인해 보세요.');
+    }
+
+    public async testAlerts() {
+        await this.run('test_alerts', {}, 'alert-test', '테스트 알림을 보냈습니다. 디스코드를 확인하세요.');
+    }
+
+    public async clearAlerts() {
+        const ok = await this.service.modal.show({
+            title: '알림 설정 삭제', message: '디스코드 웹훅과 PC 꺼짐 감시 주소를 지웁니다. healthchecks.io 쪽 체크는 직접 지워야 경고가 멈춥니다.',
+            action: '삭제', cancel: '취소', status: 'warning', actionBtn: 'warning',
+        });
+        if (ok === true) await this.run('save_alerts', { clear: 'webhook,hc', notify_shadow: this.alertForm.notify_shadow }, 'alerts', '알림 설정을 지웠습니다.');
     }
 
     public async resume() {

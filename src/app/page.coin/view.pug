@@ -207,6 +207,36 @@ div(*ngIf="!loading", class="dx-page coin-page")
 
     section(class="dx-card")
         div(class="dx-card-head")
+            h2 알림
+                span(class="dx-tag", [class.is-ok]="!!data?.alerts?.discord") {{data?.alerts?.discord ? '디스코드 연결됨' : '미설정'}}
+            small 매수·매도·손절·진입 중단·작업 오류를 디스코드로 보냅니다
+        div(class="coin-field")
+            label 디스코드 웹훅
+            input(class="dx-input", type="password", autocomplete="off", [(ngModel)]="alertForm.webhook", [placeholder]="data?.alerts?.discord || 'https://discord.com/api/webhooks/...'")
+        div(class="coin-field")
+            label PC 꺼짐 감시
+            input(class="dx-input", type="password", autocomplete="off", [(ngModel)]="alertForm.hc_url", [placeholder]="data?.alerts?.hc || 'https://hc-ping.com/... (healthchecks.io)'")
+        div(class="coin-field")
+            label 모의 운용 알림
+            label(class="coin-check")
+                input(type="checkbox", [(ngModel)]="alertForm.notify_shadow")
+                span 모의 매수·매도도 알림 받기
+        div(class="coin-actions")
+            button(class="dx-tool is-primary", (click)="saveAlerts()", [disabled]="!!busy || !data?.available") 저장
+            button(class="dx-tool", (click)="testAlerts()", [disabled]="!!busy || (!data?.alerts?.discord && !data?.alerts?.hc)") {{busy === 'alert-test' ? '보내는 중' : '테스트 보내기'}}
+            button(class="dx-tool is-danger", (click)="clearAlerts()", [disabled]="!!busy || (!data?.alerts?.discord && !data?.alerts?.hc)") 삭제
+        div(class="coin-conn")
+            div(*ngIf="data?.alerts?.state?.last_sent") 마지막 알림 {{kst(data.alerts.state.last_sent)}}
+            div(*ngIf="data?.alerts?.state?.last_ping") 마지막 생존 신호 {{kst(data.alerts.state.last_ping)}} (5분마다)
+            div(class="dx-down", *ngIf="data?.alerts?.state?.last_error") 알림 실패: {{data.alerts.state.last_error}} ({{kst(data.alerts.state.last_error_at)}})
+            div(class="dx-down", *ngIf="data?.alerts?.state?.last_ping_error") 생존 신호 실패: {{data.alerts.state.last_ping_error}}
+        ul(class="coin-notes")
+            li 디스코드: 알림 받을 채널 → 채널 편집 → 연동 → 웹후크 → 새 웹후크 → 웹후크 URL 복사
+            li PC 꺼짐 감시: healthchecks.io 가입 → Add Check (Period 5분, Grace 15분) → Integrations에서 디스코드 연결 → Ping URL 복사. 이 PC가 5분마다 신호를 보내고, 15분 넘게 끊기면 healthchecks.io가 대신 알려줍니다.
+            li 주소에는 비밀 토큰이 들어 있어 암호화해서 저장하고 화면에는 앞부분만 보여줍니다.
+
+    section(class="dx-card")
+        div(class="dx-card-head")
             h2 최근 기록
                 span(class="dx-count") {{data?.events?.length || 0}}
             small 매수·매도·보류·오류 (모의 운용 기록은 '모의'로 표시)

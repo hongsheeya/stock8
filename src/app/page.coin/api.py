@@ -74,6 +74,13 @@ def _events(trading):
              "action": r.get("action", ""), "message": r.get("message", "")} for r in rows]
 
 
+def _alert_status(trading, uid):
+    notifier = wiz.model("portal/trading/notifier")
+    settings = trading.coin_alert_settings(uid)
+    return {"discord": notifier.mask(settings["webhook"]), "hc": notifier.mask(settings["hc_url"]),
+            "notify_shadow": settings["notify_shadow"], "state": dict(notifier.STATE)}
+
+
 def status():
     trading = _trading()
     uid = _uid()
@@ -91,6 +98,7 @@ def status():
         "connection": {k: v for k, v in (_CONN.get(uid) or {}).items() if k != "fingerprint"},
         "worker": trading.coin_worker_status() if live_process else {},
         "live_confirm_text": _LIVE_CONFIRM_TEXT,
+        "alerts": _alert_status(trading, uid),
         "engine": {},
         "ledgers": {},
         "events": [],
@@ -214,6 +222,49 @@ def set_mode():
         updates["account_fp"] = ""  # leaving live always needs a new approval
     policy = trading.coin_policy_write(updates)
     wiz.response.status(200, policy={k: policy[k] for k in ("mode", "seed_krw", "markets", "max_order_krw", "live_confirmed_at")})
+
+
+def save_alerts():
+    _require_live()
+    notifier = wiz.model("portal/trading/notifier")
+    webhook = str(wiz.request.query("webhook", "") or "").strip()
+    hc_url = str(wiz.request.query("hc_url", "") or "").strip()
+    clear = str(wiz.request.query("clear", "") or "")
+    if webhook and not notifier.valid_discord(webhook):
+        wiz.response.status(400, message="디스코드 웹훅 주소는 https://discord.com/api/webhooks/ 로 시작해야 합니다.")
+    if hc_url and not notifier.valid_hc(hc_url):
+        wiz.response.status(400, message="healthchecks.io 주소는 https://hc-ping.com/ 으로 시작해야 합니다.")
+    notify_shadow = str(wiz.request.query("notify_shadow", "true") or "true").lower() in ("1", "true", "yes", "on")
+    trading = _trading()
+    uid = _uid()
+    trading.coin_save_alert_settings(
+        uid,
+        webhook=webhook or ("" if "webhook" in clear else None),
+        hc_url=hc_url or ("" if "hc" in clear else None),
+        notify_shadow=notify_shadow,
+    )
+    wiz.response.status(200, alerts=_alert_status(trading, uid))
+
+
+def test_alerts():
+    _require_live()
+    notifier = wiz.model("portal/trading/notifier")
+    trading = _trading()
+    settings = trading.coin_alert_settings(_uid())
+    if not settings["webhook"] and not settings["hc_url"]:
+        wiz.response.status(400, message="먼저 디스코드 웹훅 주소를 저장하세요.")
+    result = {}
+    sender = notifier.shared()
+    if settings["webhook"]:
+        ok, msg = sender.send_now(settings["webhook"], "[stock8 코인] ✅ 알림 테스트 — 이 메시지가 보이면 설정 완료입니다.")
+        result["discord"] = {"ok": ok, "message": msg}
+    if settings["hc_url"]:
+        ok, msg = sender.ping_now(settings["hc_url"])
+        result["hc"] = {"ok": ok, "message": msg}
+    failed = [v["message"] for v in result.values() if not v["ok"]]
+    if failed:
+        wiz.response.status(400, message=" / ".join(failed), result=result)
+    wiz.response.status(200, result=result)
 
 
 def resume():

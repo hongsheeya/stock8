@@ -121,6 +121,15 @@ _COIN_WORKER_KEY = "_stock8_live_coin_worker"
 _COIN_WORKER_LOCK = _sys.__dict__.setdefault("_stock8_live_coin_worker_lock", threading.Lock())
 _COIN_POLICY_LOCK = _sys.__dict__.setdefault("_stock8_coin_policy_lock", threading.RLock())
 _PAPER_WORKER_OWNER_KEY = "paper_worker_owner_user_id"
+# 10-24 coin alerts (Discord) and heartbeat (healthchecks.io); see notifier.py.
+_COIN_ALERT_EVENTS = {
+    "COIN_BUY": "🟢 매수", "COIN_SELL": "🔴 매도", "COIN_EXTERNAL_SELL": "⚠️ 직접 매도 감지",
+    "COIN_BUY_ERROR": "❗ 매수 실패", "COIN_SELL_ERROR": "❗ 매도 실패", "COIN_ORDER_CANCELLED": "❗ 주문 취소",
+    "COIN_HALT": "⛔ 신규 진입 중단", "COIN_RESUME": "▶️ 신규 진입 재개",
+    "COIN_SHADOW_BUY": "🟢 [모의] 매수", "COIN_SHADOW_SELL": "🔴 [모의] 매도",
+}
+_COIN_HEARTBEAT_SEC = 300
+_COIN_ERROR_ALERT_AFTER = 3
 # 10-23 US daily trend hold (PAPER process only; see us_trend_hold.py).
 _USTH_POLICY_KEY = "us_trend_hold_policy_v1"
 _USTH_WORKER_KEY = "_stock8_paper_us_trend_hold_worker"
@@ -1237,6 +1246,81 @@ class Struct:
             "message": str(message or "")[:2000],
             "raw_response": _json.dumps({"market": "COIN", "exchange": "UPBIT", "currency": "KRW", **(payload or {})}, ensure_ascii=False, default=str),
         })
+        try:
+            self._coin_alert(event, message)
+        except Exception:
+            pass  # an alert must never break the ledger
+
+    # ---------------------------------------------------------- coin alerts
+    def coin_alert_settings(self, owner):
+        owner = str(owner or "").strip()
+        if not owner:
+            return {"webhook": "", "hc_url": "", "notify_shadow": True}
+        webhook = self._lookup_config_value(self._user_config_key(owner, "coin_discord_webhook"), "")
+        hc_url = self._lookup_config_value(self._user_config_key(owner, "coin_hc_ping_url"), "")
+        shadow = self._lookup_config_value(self._user_config_key(owner, "coin_notify_shadow"), "true")
+        return {"webhook": str(webhook or ""), "hc_url": str(hc_url or ""),
+                "notify_shadow": str(shadow or "true").lower() != "false"}
+
+    def coin_save_alert_settings(self, owner, webhook=None, hc_url=None, notify_shadow=None):
+        """None leaves a field unchanged; "" clears it. URLs are secrets (encrypted)."""
+        if webhook is not None:
+            self._write_config_value(self._user_config_key(owner, "coin_discord_webhook"), str(webhook), "Coin alerts Discord webhook (encrypted)", True)
+        if hc_url is not None:
+            self._write_config_value(self._user_config_key(owner, "coin_hc_ping_url"), str(hc_url), "Coin heartbeat healthchecks.io URL (encrypted)", True)
+        if notify_shadow is not None:
+            self._write_config_value(self._user_config_key(owner, "coin_notify_shadow"), "true" if notify_shadow else "false", "Coin alerts for shadow trades", False)
+
+    def _coin_notify(self, owner, text):
+        settings = self.coin_alert_settings(owner)
+        if settings["webhook"]:
+            self.model("notifier").shared().discord(settings["webhook"], f"[stock8 코인] {text}")
+
+    def _coin_alert(self, event, message):
+        label = _COIN_ALERT_EVENTS.get(event)
+        if not label:
+            return
+        owner = self.coin_policy_read()["owner_user_id"]
+        settings = self.coin_alert_settings(owner)
+        if not settings["webhook"] or (event.startswith("COIN_SHADOW_") and not settings["notify_shadow"]):
+            return
+        text = str(message or "").replace("[모의] ", "")
+        self.model("notifier").shared().discord(settings["webhook"], f"[stock8 코인] {label} · {text}")
+
+    def _coin_watchdog(self, registry, watch, policy, engine):
+        """Runs after every coin worker pass: heartbeat ping, a start/mode
+        notice, repeated-error and missed-decision alerts (once each)."""
+        owner = policy["owner_user_id"]
+        if not owner:
+            return
+        now = time.time()
+        mode_label = {"off": "꺼짐", "shadow": "모의 운용", "live": "실거래"}.get(policy["mode"], policy["mode"])
+        if watch.get("mode") != policy["mode"]:
+            if watch.get("mode") is None:
+                if policy["mode"] != "off":
+                    self._coin_notify(owner, f"▶️ 코인 작업 시작 · {mode_label} (서버 시작 또는 PC 재시작 후)")
+            else:
+                self._coin_notify(owner, f"🔁 코인 모드 변경 · {mode_label}")
+            watch["mode"] = policy["mode"]
+        if registry.get("status") == "error":
+            watch["errors"] = int(watch.get("errors") or 0) + 1
+            if watch["errors"] == _COIN_ERROR_ALERT_AFTER:
+                self._coin_notify(owner, f"❗ 코인 작업 오류가 반복됩니다: {registry.get('error', '')}")
+        else:
+            if int(watch.get("errors") or 0) >= _COIN_ERROR_ALERT_AFTER:
+                self._coin_notify(owner, "✅ 코인 작업이 다시 정상입니다")
+            watch["errors"] = 0
+        if engine is not None and policy["mode"] != "off":
+            bar_end = int(now) // (4 * 3600) * (4 * 3600)
+            last = int((engine.state or {}).get("last_decision_bar_end") or 0)
+            if now > bar_end + 900 and last < bar_end and watch.get("overdue") != bar_end:
+                watch["overdue"] = bar_end
+                self._coin_notify(owner, "⚠️ 4시간봉 판단이 15분 넘게 늦어지고 있습니다 (시세 조회 실패 등)")
+        if now - float(watch.get("ping_at") or 0) >= _COIN_HEARTBEAT_SEC:
+            watch["ping_at"] = now
+            hc_url = self.coin_alert_settings(owner)["hc_url"]
+            if hc_url:
+                self.model("notifier").shared().ping(hc_url, fail=int(watch.get("errors") or 0) >= _COIN_ERROR_ALERT_AFTER)
 
     def coin_build_engine(self, policy, owner):
         engine_cls = self.model("coin_engine")
@@ -1345,8 +1429,10 @@ class Struct:
                 registry["status"] = "locked_elsewhere"
                 return
             engine, engine_sig, trading = None, None, None
+            watch = {}
             while True:
                 delay = 15.0
+                policy = None
                 try:
                     with wiz.server.app.flask.test_request_context("/"):
                         policy = self.coin_policy_read()
@@ -1375,6 +1461,11 @@ class Struct:
                     registry["error"] = str(exc)[:200]
                     engine, engine_sig = None, None
                     delay = 30.0
+                try:
+                    with wiz.server.app.flask.test_request_context("/"):
+                        self._coin_watchdog(registry, watch, policy or self.coin_policy_read(), engine)
+                except Exception:
+                    pass  # alerts never stop the worker
                 registry["wake"].wait(delay)
                 registry["wake"].clear()
 
