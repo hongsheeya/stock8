@@ -10,6 +10,9 @@ const EVENT_LABEL: any = {
     COIN_BUY_SKIPPED: '매수 보류', COIN_BUY_ERROR: '매수 실패', COIN_SELL_ERROR: '매도 실패',
     COIN_ORDER_CANCELLED: '주문 취소', COIN_EXTERNAL_SELL: '직접 매도 감지', COIN_HALT: '진입 중단', COIN_RESUME: '진입 재개',
 };
+const COMPARE_LABEL: any = {
+    match: '일치', pending: '확인 중', exit_differs: '청산 시각 다름', replay_only: '모의에서 놓침', shadow_only: '모의에만 있음',
+};
 const COIN_NAME: any = { 'KRW-BTC': '비트코인', 'KRW-ETH': '이더리움', 'KRW-XRP': '리플', 'KRW-SOL': '솔라나', 'KRW-DOGE': '도지코인' };
 
 export class Component implements OnInit, OnDestroy {
@@ -167,6 +170,19 @@ export class Component implements OnInit, OnDestroy {
         if (w.status === 'error') return `실행 오류: ${w.error || ''}`;
         if (this.mode !== 'off' && w.alive === false) return '코인 작업이 멈춰 있습니다 (서버 재시작 필요)';
         return '';
+    }
+
+    public get progress(): any { return this.data?.shadow_progress || null; }
+    public gatePct(g: any): number {
+        const v = Number(g?.value || 0), t = Number(g?.target || 1);
+        return Math.max(0, Math.min(100, (v / t) * 100));
+    }
+    public compareLabel(s: string): string { return COMPARE_LABEL[s] || s; }
+    public missedLabel(): string { return (this.progress?.missed_bars || []).slice(-3).map((t: number) => this.kst(t)).join(', '); }
+    public kstDate(sec: any): string {
+        const n = Number(sec || 0);
+        if (!n) return '-';
+        return new Date(n * 1000).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric' });
     }
 
     public coinName(m: string): string { return COIN_NAME[m] || m; }

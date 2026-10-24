@@ -103,6 +103,10 @@ def status():
         owner = policy["owner_user_id"] or uid
         payload["ledgers"] = {mode: _ledger_summary(_read_state(trading, owner, mode)) for mode in ("shadow", "live")}
         payload["events"] = _events(trading)
+        try:
+            payload["shadow_progress"] = trading.coin_shadow_progress(owner)
+        except Exception as exc:
+            payload["shadow_progress"] = {"error": str(exc)[:200]}
     wiz.response.status(200, **payload)
 
 

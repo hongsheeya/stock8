@@ -1250,6 +1250,53 @@ class Struct:
         state_dir, candle_dir, _root = self.coin_data_dirs(owner)
         return engine_cls(api, state_dir, candle_dir, policy, strategy, log=self._coin_log, error_cls=api_cls.Error)
 
+    def coin_shadow_progress(self, owner, max_age_sec=600):
+        """Shadow-run progress (coin_shadow_check), cached for max_age_sec.
+        The ledger (shadow_check.json) keeps compared signals after the 80-day
+        candle window has rolled past them."""
+        cache = _sys.__dict__.setdefault("_stock8_coin_shadow_progress", {})
+        hit = cache.get(owner)
+        if hit and time.time() - hit[0] < max_age_sec:
+            return hit[1]
+        state_dir, candle_dir, _root = self.coin_data_dirs(owner)
+        try:
+            with open(_os.path.join(state_dir, "state_shadow.json"), encoding="utf-8") as handle:
+                state = _json.load(handle)
+        except (OSError, ValueError):
+            return None
+        engine_cls = self.model("coin_engine")
+        checker = self.model("coin_shadow_check")
+        candles = {}
+        for market in engine_cls.ALL_MARKETS:
+            try:
+                with open(_os.path.join(candle_dir, f"{market}_60m.json"), encoding="utf-8") as handle:
+                    candles[market] = _json.load(handle)
+            except (OSError, ValueError):
+                pass
+        candles = {m: c for m, c in candles.items() if m in (state.get("sleeves") or {})}
+        events = []
+        for row in self.db("trade_log").rows(event_type__startswith="COIN_SHADOW_", orderby="created", order="ASC", dump=5000) or []:
+            try:
+                payload = _json.loads(row.get("raw_response") or "{}")
+            except (ValueError, TypeError):
+                payload = {}
+            events.append({"time": checker.kst_epoch(row.get("created", "")), "market": row.get("symbol", ""),
+                           "side": "BUY" if row.get("event_type") == "COIN_SHADOW_BUY" else "SELL",
+                           "bar_end": payload.get("bar_end")})
+        ledger_path = _os.path.join(state_dir, "shadow_check.json")
+        try:
+            with open(ledger_path, encoding="utf-8") as handle:
+                ledger = _json.load(handle)
+        except (OSError, ValueError):
+            ledger = {}
+        summary, ledger = checker.check(self.model("coin_strategy"), state, events, candles, ledger, time.time())
+        tmp = ledger_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            _json.dump(ledger, handle)
+        _os.replace(tmp, ledger_path)
+        cache[owner] = (time.time(), summary)
+        return summary
+
     def coin_worker_status(self):
         registry = _sys.__dict__.get(_COIN_WORKER_KEY) or {}
         thread = registry.get("thread")
