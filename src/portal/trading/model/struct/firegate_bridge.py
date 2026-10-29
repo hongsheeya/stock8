@@ -293,6 +293,35 @@ def _reverse_factor(division_count):
     return 0.95
 
 
+REVERSE_STATES = ("NORMAL", "ENTERED", "ACTIVE")
+
+
+def is_exhausted_v4(t_value, division_count, remaining_seed, holding_qty):
+    """FireGate: divisionDate > 0 and (T > divisionDate - 1 or (seed left < 0 and holding))."""
+    division_count = _safe_float(division_count, 0)
+    return division_count > 0 and (_safe_float(t_value, 0) > division_count - 1
+                                   or (_safe_float(remaining_seed, 0) < 0 and _safe_int(holding_qty, 0) > 0))
+
+
+def reverse_state_of(portfolio):
+    """FireGate reverseStateV4 getter: the stored state when valid, else derived."""
+    state = (portfolio or {}).get("reverseState")
+    if state in REVERSE_STATES:
+        return state
+    seed = _safe_float((portfolio or {}).get("seed"), 0)
+    remaining = seed - (_safe_float((portfolio or {}).get("totalBuy"), 0) - _safe_float((portfolio or {}).get("totalSell"), 0))
+    if bool((portfolio or {}).get("reverseMode", False)):
+        exhausted = is_exhausted_v4((portfolio or {}).get("tValue"), (portfolio or {}).get("divisionDate"), remaining,
+                                    (portfolio or {}).get("holdingQty"))
+        return "ENTERED" if exhausted else "ACTIVE"
+    return "NORMAL"
+
+
+def reverse_auto_exit_factor(ticker):
+    """FireGate maybeAutoExit: leave reverse mode once the price is back above avg x this."""
+    return 0.85 if str(ticker or "").upper() == "TQQQ" else 0.8
+
+
 def _normalize_symbol(symbol):
     return "".join(ch for ch in str(symbol or "").upper().strip() if ch.isalnum() or ch in ".-")
 
@@ -455,6 +484,7 @@ def _portfolio_with_transaction_state(portfolio, transactions):
         "totalSell": 0,
         "tValue": 0,
         "reverseMode": False,
+        "reverseState": "NORMAL",
         "reverseModeStarPrice": 0,
     }
     for tx in sorted(valid_transactions, key=_transaction_sort_key):
@@ -645,6 +675,11 @@ def _authoritative_cycle_state_from_portfolio(portfolio):
         "_firegate_source": _portfolio_source(portfolio),
         "_firegate_source_cycle_id": str((portfolio or {}).get("sourceCycleId", "") or ""),
         "_firegate_updated_at": str((portfolio or {}).get("updatedAt", "") or ""),
+        "_firegate_reverse_mode": bool((portfolio or {}).get("reverseMode", False)),
+        "_firegate_reverse_state": reverse_state_of(portfolio),
+        "_firegate_reverse_star_price": _safe_float((portfolio or {}).get("reverseModeStarPrice"), 0),
+        "_firegate_remaining_seed": round(seed - (total_buy - total_sell), 4),
+        "_firegate_exhausted": is_exhausted_v4(t_value, division_count, seed - (total_buy - total_sell), holding_qty),
     }
 
 
@@ -660,6 +695,9 @@ def authoritative_portfolio_states(struct, symbol_filter=""):
             state = _authoritative_cycle_state_from_portfolio(portfolio)
             if not state:
                 continue
+            if str((portfolio or {}).get("version", "v4") or "v4") == "v4" and (
+                    state.get("_firegate_reverse_mode") or state.get("_firegate_exhausted")):
+                portfolio, state = _reverse_market_view(bridge, portfolio, state)
             symbol = state.get("symbol")
             if symbol in states:
                 duplicate_ids.setdefault(symbol, [states[symbol].get("_firegate_portfolio_id", "")])
@@ -674,6 +712,32 @@ def authoritative_portfolio_states(struct, symbol_filter=""):
 
     result = _bridge_call_from_config(struct, _load)
     return result or {}
+
+
+def _reverse_market_view(bridge, portfolio, state):
+    """What the FireGate dashboard does before showing a reverse-mode guide:
+    read the latest price and the 5-day average from FireGate's own price
+    store, and leave reverse mode (maybeAutoExit) once the price is back above
+    avg x 0.8 (TQQQ 0.85) unless the cycle has just been exhausted."""
+    ticker = state.get("symbol", "")
+    try:
+        last = bridge.latest_price(ticker)
+        recent = bridge.recent_prices(ticker, 5)
+    except Exception as exc:
+        state["_firegate_price_error"] = str(exc)[:160]
+        return portfolio, state
+    state["_firegate_last_price"] = last
+    state["_firegate_five_day_avg"] = round(sum(recent) / len(recent), 2) if recent else 0.0
+    avg = _safe_float((portfolio or {}).get("avgPrice"), 0)
+    if (state.get("_firegate_reverse_mode") and state.get("_firegate_reverse_state") != "ENTERED"
+            and _safe_float(state.get("_firegate_remaining_seed"), 0) >= 0 and last > 0 and avg > 0
+            and last > avg * reverse_auto_exit_factor(ticker)):
+        bridge.update_portfolio((portfolio or {}).get("id"), {"reverseMode": False, "reverseState": "NORMAL"})
+        portfolio = {**(portfolio or {}), "reverseMode": False, "reverseState": "NORMAL"}
+        refreshed = _authoritative_cycle_state_from_portfolio(portfolio)
+        state = {**refreshed, "_firegate_last_price": last, "_firegate_five_day_avg": state["_firegate_five_day_avg"],
+                 "_firegate_reverse_auto_exited": True}
+    return portfolio, state
 
 
 def _cleanup_removed_portfolios(trading, remote_symbols, symbol_filter=""):
@@ -1160,7 +1224,27 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
         tx["tDelta"] = 0
     elif tx["type"] == "buy" and portfolio:
         tx["tDelta"] = calculate_v4_t_delta(portfolio, tx)
+    if portfolio:
+        tx.update(firegate_operator(portfolio, tx))
     return tx
+
+
+def firegate_operator(portfolio, tx):
+    """FireGate addTransaction: buys are '+'; a sell is 'x' with the reverse
+    factor in reverse mode, x0.25 when it sells more than half, else x0.75."""
+    if str((tx or {}).get("type", "")) == "buy":
+        return {"tOperator": "+"}
+    seed = _safe_float((portfolio or {}).get("seed"), 0)
+    remaining = seed - (_safe_float((portfolio or {}).get("totalBuy"), 0) - _safe_float((portfolio or {}).get("totalSell"), 0))
+    reverse = bool((portfolio or {}).get("reverseMode", False)) or is_exhausted_v4(
+        (portfolio or {}).get("tValue"), (portfolio or {}).get("divisionDate"), remaining, (portfolio or {}).get("holdingQty"))
+    out = {"tOperator": "x", "reverseMode": reverse}
+    if "tDelta" not in (tx or {}):
+        if reverse:
+            out["tDelta"] = _reverse_factor((portfolio or {}).get("divisionDate"))
+        else:
+            out["tDelta"] = 0.25 if _safe_int((tx or {}).get("size"), 0) > _safe_int((portfolio or {}).get("holdingQty"), 0) / 2 else 0.75
+    return out
 
 
 def transaction_document_id(tx):
@@ -1198,7 +1282,11 @@ def calculate_v4_t_delta(portfolio, tx):
     return 0.5 * math.ceil(gross / max(one_turn / 2, 0.000001))
 
 
-def apply_v4_transaction(portfolio, tx):
+def apply_v4_transaction(portfolio, tx, recent_average=None):
+    """Mirror of the FireGate web app's per-transaction update (addTransaction):
+    T, average, reverse mode and reverse state (NORMAL / ENTERED / ACTIVE).
+    A sell in reverse mode makes the state ACTIVE (the first-day MOC is done);
+    a NORMAL portfolio that becomes exhausted is ENTERED."""
     updated = copy.deepcopy(portfolio or {})
     tx_type = str((tx or {}).get("type", "") or "").lower()
     price = _safe_float((tx or {}).get("price"), 0)
@@ -1213,27 +1301,36 @@ def apply_v4_transaction(portfolio, tx):
     total_sell = _safe_float(updated.get("totalSell"), 0)
     t_value = _safe_float(updated.get("tValue"), 0)
     division_count = max(_safe_int(updated.get("divisionDate"), 20), 1)
+    seed = _safe_float(updated.get("seed"), 0)
     reverse_mode = bool(updated.get("reverseMode", False))
     reverse_star_price = _safe_float(updated.get("reverseModeStarPrice"), 0)
+    exhausted = is_exhausted_v4(t_value, division_count, seed - (total_buy - total_sell), holding_qty)
+    state = updated.get("reverseState")
+    if state is None:
+        state = ("ENTERED" if exhausted else "ACTIVE") if reverse_mode else "NORMAL"
+    t_delta = tx.get("tDelta")
     gross = price * size
 
     if tx_type == "buy":
         buy_amount = gross + commission
-        if reverse_mode:
-            t_value += (division_count - t_value) * 0.25
-        else:
-            t_delta = tx.get("tDelta") if "tDelta" in tx else calculate_v4_t_delta(updated, tx)
+        if reverse_mode or exhausted:
+            if t_delta is None or _safe_float(t_delta, 0) != 0:
+                t_value += (division_count - t_value) * 0.25
+        elif t_delta is not None:
             t_value += _safe_float(t_delta, 0)
+        else:
+            t_value += _safe_float(calculate_v4_t_delta(updated, tx), 0)
         avg_price = _round2(((avg_price * holding_qty) + buy_amount) / (holding_qty + size))
         holding_qty += size
         total_buy += buy_amount
     else:
-        if reverse_mode:
-            t_value *= _reverse_factor(division_count)
-            if reverse_star_price <= 0:
-                reverse_star_price = price
+        if reverse_mode or exhausted:
+            t_value *= _safe_float(t_delta, _reverse_factor(division_count)) if t_delta is not None else _reverse_factor(division_count)
+            if reverse_star_price <= 0 and recent_average:
+                reverse_star_price = _round2(recent_average)
+            state = "ACTIVE"
         else:
-            t_value *= _safe_float(tx.get("tDelta"), 0.75)
+            t_value *= _safe_float(t_delta, 0.75) if t_delta is not None else 0.75
         updated["isRunning"] = holding_qty > size
         updated["endDate"] = tx.get("date", "")
         updated["sellPrice"] = price
@@ -1243,15 +1340,16 @@ def apply_v4_transaction(portfolio, tx):
             avg_price = 0
 
     t_value = max(0, min(t_value, division_count))
-    if t_value > division_count - 1:
-        reverse_mode = True
+    if state == "NORMAL" and is_exhausted_v4(t_value, division_count, seed - (total_buy - total_sell), holding_qty):
+        state = "ENTERED"
     updated.update({
         "holdingQty": holding_qty,
         "avgPrice": _round2(avg_price),
         "totalBuy": _round2(total_buy),
         "totalSell": _round2(total_sell),
         "tValue": _round2(t_value),
-        "reverseMode": reverse_mode,
+        "reverseMode": state != "NORMAL",
+        "reverseState": state,
         "reverseModeStarPrice": reverse_star_price,
         "updatedAt": format_updated_at(),
     })
@@ -1316,6 +1414,17 @@ class FireGateBridge:
             page_token = str(data.get("nextPageToken", "") or "")
             if not page_token:
                 return rows
+
+    def latest_price(self, ticker):
+        data = self._request("GET", f"{FIRESTORE_ROOT}/prices/{urllib.parse.quote(_normalize_symbol(ticker), safe='')}")
+        return _safe_float(decode_firestore_document(data).get("price"), 0)
+
+    def recent_prices(self, ticker, count=5):
+        """Last `count` daily prices, newest first (FireGate getRecentPrices)."""
+        url = f"{FIRESTORE_ROOT}/prices/{urllib.parse.quote(_normalize_symbol(ticker), safe='')}/prices"
+        data = self._request("GET", url, params={"orderBy": "date desc", "pageSize": int(count)})
+        rows = [decode_firestore_document(doc) for doc in data.get("documents", []) or []]
+        return [p for p in (_safe_float(r.get("price"), 0) for r in rows) if p > 0]
 
     def list_portfolios(self):
         return self._list_collection("portfolios")
@@ -1452,8 +1561,17 @@ class FireGateBridge:
         tx = {**(tx or {}), "portfolioId": _safe_int(portfolio_id, portfolio_id)}
         if tx.get("type") == "buy" and "tDelta" not in tx:
             tx["tDelta"] = calculate_v4_t_delta(portfolio, tx)
+        if tx.get("type") == "sell" and "tOperator" not in tx:
+            tx.update(firegate_operator(portfolio, tx))
+        recent_average = None
+        if tx.get("type") == "sell" and tx.get("reverseMode") and _safe_float(portfolio.get("reverseModeStarPrice"), 0) <= 0:
+            try:
+                recent = self.recent_prices(portfolio.get("ticker", tx.get("ticker", "")), 5)
+                recent_average = round(sum(recent) / len(recent), 2) if recent else None
+            except Exception:
+                recent_average = None
         saved_tx = self.create_transaction(tx, doc_id=transaction_document_id(tx))
-        updated_payload = apply_v4_transaction(portfolio, tx)
+        updated_payload = apply_v4_transaction(portfolio, tx, recent_average=recent_average)
         updated = self.update_portfolio(portfolio_id, updated_payload)
         return saved_tx, {**updated_payload, **updated}
 
@@ -1549,6 +1667,9 @@ class _FireGateBridgeModel:
     infinitystock_portfolio_nickname = staticmethod(infinitystock_portfolio_nickname)
     calculate_v4_t_delta = staticmethod(calculate_v4_t_delta)
     apply_v4_transaction = staticmethod(apply_v4_transaction)
+    is_exhausted_v4 = staticmethod(is_exhausted_v4)
+    reverse_state_of = staticmethod(reverse_state_of)
+    firegate_operator = staticmethod(firegate_operator)
     transaction_from_cycle_trade = staticmethod(transaction_from_cycle_trade)
     transaction_document_id = staticmethod(transaction_document_id)
     sync_cycle_trade = staticmethod(sync_cycle_trade)

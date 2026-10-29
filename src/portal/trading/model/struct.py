@@ -1101,6 +1101,10 @@ class Struct:
                                     state['message'] = str(result.get('message', '') or '')
                                     state['schedule_window'] = result.get('schedule_window', '')
                                     state['result_status'] = result.get('status', '')
+                                try:
+                                    state['reverse_moc'] = trading.run_firegate_reverse_moc()
+                                except Exception as exc:
+                                    state['reverse_moc'] = {'status': 'error', 'message': str(exc)[:200]}
                             else:
                                 for market in (('US',) if job.endswith('_us') else ('KS',)):
                                     seed_key = 'daytrade_us_default_seed' if market == 'US' else 'daytrade_default_seed'
@@ -2303,6 +2307,18 @@ class Struct:
             "rebuild": {"executed": False, "status": "locked", "message": message, "symbols": []},
         }
 
+    def run_firegate_reverse_moc(self):
+        """LIVE only: the MOC sell of a FireGate reverse-mode first day. KIS
+        takes MOC (ORD_DVSN 33) only as a regular order in the US session,
+        never as a reservation. Same switches as the LOC automation."""
+        if PAPER_MODE:
+            return {"status": "skipped", "message": "모의투자는 MOC 주문 미지원"}
+        if str(self.get_config("auto_trade_enabled", "false") or "false").lower() != "true":
+            return {"status": "off", "message": "무한매수 매매 OFF"}
+        if str(self.get_config("loc_auto_schedule_enabled", "true") or "true").lower() != "true":
+            return {"status": "off", "message": "LOC 자동 예약 비활성"}
+        return self.engine.run_firegate_reverse_moc()
+
     def run_due_loc_automation(self, force=False, reason="worker", verify=False, symbols=None):
         if PAPER_MODE:
             # Scheduler/API entry points must share the worker's capability
@@ -2330,6 +2346,15 @@ class Struct:
             return {"enabled": False, "executed": False, "message": "무한매수 매매 OFF"}
         if loc_enabled is False:
             return {"enabled": False, "executed": False, "message": "LOC 자동 예약 비활성"}
+        if self.get_config('kis_reservation_pending', ''):
+            try:
+                cleared = self.broker_api.clear_definite_reservation_rejection()
+            except Exception:
+                cleared = None
+            if cleared:
+                self.engine._log_event(str(cleared.get('symbol', '') or 'SYSTEM'), "", "LOC_RESERVATION_REJECTION_CLEARED",
+                                       message="KIS가 명확히 거절한 예약이라 접수 대기 표시를 해제했습니다: "
+                                               + str((cleared.get('response') or {}).get('msg1', ''))[:120])
         if self.get_config('kis_reservation_pending', ''):
             state = self._worker_state()
             if time.time() - state.get('pending_inspected_at', 0) >= 300:
