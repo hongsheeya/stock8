@@ -539,10 +539,6 @@ def _consume_fifo_realized_with_cost(lots, qty, sell_price, market="KS"):
             lots.pop(0)
     return realized, matched_cost
 
-def _consume_fifo_realized(lots, qty, sell_price, market="KS"):
-    realized, _matched_cost = _consume_fifo_realized_with_cost(lots, qty, sell_price, market=market)
-    return realized
-
 def _presell_order_no(order):
     return str((order or {}).get("order_no", "") or (order or {}).get("reserve_order_no", "") or "").strip()
 
@@ -1385,8 +1381,6 @@ def cycles():
     start = (page - 1) * dump
     wiz.response.status(200, rows=rows[start:start + dump], total=total, total_pages=total_pages, page=page)
 
-_LOG_COLUMNS = ("id", "created", "symbol", "event_type", "action", "order_price", "order_qty",
-                "filled_price", "filled_qty", "message")
 # Written on every automation pass; they drown the order events (≈90% of trade_log).
 _SYSTEM_EVENT_TYPES = (
     "IB_LOC_AUTOMATION_RUN", "IB_LOC_BUY_SKIPPED", "IB_LOC_SELL_SKIPPED",

@@ -5,9 +5,7 @@
 # 바꿔도 LOC 주문/잔고/체결 동기화를 같은 방식으로 호출할 수 있게 한다.
 # Official docs: https://developers.tossinvest.com/docs
 # =============================================================================
-import datetime
 import time
-import threading
 import re
 import base64
 import os

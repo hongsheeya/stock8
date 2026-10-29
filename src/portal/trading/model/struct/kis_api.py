@@ -41,7 +41,6 @@ PAPER_MODE = TRADING_MODE == "PAPER"
 LIVE_UNLOCKED = os.environ.get("STOCK8_LIVE_TRADING_UNLOCK", "") == "I_UNDERSTAND_LIVE_TRADING"
 
 TOKEN_ISSUE_PATH = "/oauth2/tokenP"
-TOKEN_REVOKE_PATH = "/oauth2/revokeP"
 _REQUEST_OPTIONS = threading.local()
 # WIZ executes model source into fresh classes for different requests. Class
 # attributes alone are not a process-wide limiter. Keep coordination outside
@@ -57,32 +56,6 @@ _GATEWAY_STATE = sys.__dict__.setdefault("_stock8_kis_gateway_v1", {
 # TR id, path, limiter wait, outcome and thread. No parameters or replies.
 _CALL_LOG = sys.__dict__.setdefault("_stock8_kis_call_log", collections.deque(maxlen=6000))
 _CALL_COUNTS = sys.__dict__.setdefault("_stock8_kis_cache_hits", {"hits": 0})
-
-
-def kis_call_stats(minutes=10):
-    cutoff = time.time() - max(1, float(minutes)) * 60
-    rows = [row for row in list(_CALL_LOG) if row[0] >= cutoff]
-    by_key = {}
-    for ts, tr_id, path, waited, outcome, thread in rows:
-        key = f"{tr_id} {path.rsplit('/', 1)[-1]}"
-        item = by_key.setdefault(key, {"calls": 0, "wait_sec": 0.0, "timeouts": 0, "errors": 0, "threads": {}})
-        item["calls"] += 1
-        item["wait_sec"] += waited
-        item["timeouts"] += outcome == "timeout"
-        item["errors"] += outcome == "error"
-        item["threads"][thread] = item["threads"].get(thread, 0) + 1
-    span = max(1.0, min(float(minutes) * 60, time.time() - (rows[0][0] if rows else time.time())))
-    top = sorted(by_key.items(), key=lambda kv: -kv[1]["calls"])
-    return {
-        "minutes": minutes,
-        "calls": len(rows),
-        "calls_per_min": round(len(rows) / span * 60, 1),
-        "timeouts": sum(1 for r in rows if r[4] == "timeout"),
-        "avg_wait_sec": round(sum(r[3] for r in rows) / len(rows), 2) if rows else 0.0,
-        "max_wait_sec": round(max((r[3] for r in rows), default=0.0), 2),
-        "paper_cache_hits_total": _CALL_COUNTS["hits"],
-        "by_call": [{"call": k, **{kk: (round(vv, 1) if isinstance(vv, float) else vv) for kk, vv in v.items()}} for k, v in top[:25]],
-    }
 
 
 @contextmanager
@@ -142,14 +115,11 @@ class KisApi:
     # PAPER gateway is considerably stricter than the production quotation API.
     # Keep one shared limiter for every KisApi instance/process thread so balance,
     # quote and order calls cannot burst into the mock gateway together.
-    _last_request_time = 0
     # The paper gateway is materially stricter than production and returns
     # EGW00201/"초당 거래건수" under bursts around one request per second.
     # Keep every request (including balance checks immediately before orders)
     # on the conservative side of that boundary.
     _min_request_interval = 1.10 if PAPER_MODE else 0.06
-    _rate_limit_lock = threading.RLock()
-    _rate_limit_blocked_until = 0.0
     _token_issue_lock = _GATEWAY_STATE["token_lock"]
     _paper_get_cache = _GATEWAY_STATE["cache"]
     _paper_get_cache_lock = _GATEWAY_STATE["cache_lock"]
@@ -1580,10 +1550,6 @@ class KisApi:
             "raw": output,
         }
 
-    def get_domestic_buying_power(self, symbol="005930", price=0, order_type="MARKET"):
-        info = self.get_domestic_buying_power_info(symbol=symbol, price=price, order_type=order_type)
-        return float(info.get("amount", 0))
-
     def buy_order(self, symbol, qty, price=0, order_type="LOC", exchange="NASD", allow_auto_exchange_attempt=None):
         """
         해외주식 매수 주문
@@ -2772,10 +2738,6 @@ class KisApi:
     def get_overseas_fills_by_date(self, start_date=None, end_date=None, symbol="", exchanges=None):
         return self.get_overseas_order_history(start_date=start_date, end_date=end_date, symbol=symbol, exchanges=exchanges)
 
-    def get_order_history(self, start_date=None, end_date=None):
-        """레거시 호환용 해외 체결/미체결 내역 조회."""
-        return self.get_overseas_order_history(start_date=start_date, end_date=end_date)
-
     # =========================================================================
     # 주문 가능 금액 (예수금) 조회
     # =========================================================================
@@ -3129,21 +3091,9 @@ class KisApi:
             },
         }
 
-    def get_krw_balance(self):
-        """자동환전 주문에 사용할 수 있는 원화 잔고"""
-        data = self.get_present_balance()
-        return float(data.get("withdrawable_krw", data.get("krw_balance", 0)))
-
     # =========================================================================
     # 환율 정보
     # =========================================================================
-
-    def get_exchange_rate(self):
-        """
-        환율 조회 (USD/KRW)
-        """
-        data = self.get_present_balance()
-        return {"usd_krw": float(data.get("usd_krw", 0))}
 
     # =========================================================================
     # 국내주식 주문 취소

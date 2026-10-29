@@ -24,7 +24,6 @@ LOC_SHORTFALL_RECHECK_SEC = 600
 LOC_RATE_LIMIT_RECHECK_SEC = 60
 
 # 사이클 상태 상수
-STATUS_IDLE = "IDLE"
 STATUS_ACTIVE = "ACTIVE"
 STATUS_HOLDING = "HOLDING"
 STATUS_PAUSED = "PAUSED"
@@ -37,9 +36,7 @@ ACTION_SELL = "SELL"
 ACTION_SKIP = "SKIP"
 
 # 주문 상태
-ORDER_PENDING = "PENDING"
 ORDER_FILLED = "FILLED"
-ORDER_CANCELLED = "CANCELLED"
 ORDER_EXPIRED = "EXPIRED"
 SYNTHETIC_EXTERNAL_ORDER_TYPES = {"RECON", "AUDIT"}
 
@@ -430,21 +427,6 @@ class Engine:
         self._log_event(symbol, "", "CYCLE_START", message=f"사이클 #{cycle_number} 시작: 투자금 ${total_investment}, {division_count}분할, 목표 {target_profit}%")
 
         return cycle_db.get(symbol=symbol, status=STATUS_ACTIVE)
-
-    def complete_cycle(self, cycle_id):
-        """사이클 완료 처리"""
-        cycle_db = self._cycle_db()
-        now = self._now()
-        cycle_db.update({
-            "status": STATUS_COMPLETED,
-            "completed_at": now,
-            "updated": now,
-        }, id=cycle_id)
-
-        cycle = cycle_db.get(id=cycle_id)
-        self._log_event(cycle["symbol"], cycle_id, "CYCLE_COMPLETE",
-                        message=f"사이클 #{cycle.get('cycle_number', '?')} 완료: 수익률 {cycle['profit_rate']:.2f}%")
-        self._auto_start_next_cycle_after_completion(cycle)
 
     def _auto_start_next_cycle_after_completion(self, completed_cycle):
         """Start the next active cycle after a completed infinite-buy cycle."""
@@ -1032,9 +1014,6 @@ class Engine:
     # =========================================================================
     # 매수 판단 로직
     # =========================================================================
-
-    def _round_down_cent(self, value):
-        return math.floor(float(value or 0) * 100) / 100
 
     def _round_nearest_cent(self, value):
         return math.floor(float(value or 0) * 100 + 0.5) / 100
@@ -1889,81 +1868,6 @@ class Engine:
     # =========================================================================
     # 거래 실행 (폭락장 추가 매입 — 회차 소진 안 함)
     # =========================================================================
-
-    def execute_crash_buy(self, cycle_id, filled_price, filled_qty):
-        """
-        폭락장 추가 매입 체결 처리
-        - 회차(current_round)를 소진하지 않음
-        - total_qty, total_spent 증가
-        """
-        cycle_db = self._cycle_db()
-        trade_db = self._trade_db()
-        cycle = cycle_db.get(id=cycle_id)
-        if not cycle:
-            raise Exception(f"사이클을 찾을 수 없습니다: {cycle_id}")
-
-        now = self._now()
-        trade_date = now.strftime("%Y-%m-%d")
-
-        filled_amount = filled_price * filled_qty
-
-        rates = self._get_commission_rates()
-        commission = self._calc_buy_commission(filled_amount, rates)
-
-        # 회차 소진 안 함 (current_round 유지)
-        total_spent = float(cycle["total_spent"]) + filled_amount + commission
-        total_qty = int(cycle["total_qty"]) + filled_qty
-        avg_price = total_spent / total_qty if total_qty > 0 else 0
-        remaining = float(cycle["remaining_investment"]) - (filled_amount + commission)
-        total_commission = float(cycle.get("total_commission", 0)) + commission
-        crash_buy_count = int(cycle.get("crash_buy_count", 0))
-
-        trade_data = {
-            "cycle_id": cycle_id,
-            "symbol": cycle["symbol"],
-            "round": int(cycle["current_round"]),  # 같은 회차
-            "trade_date": trade_date,
-            "action": ACTION_BUY,
-            "order_type": "LOC",
-            "order_price": filled_price,
-            "order_qty": filled_qty,
-            "filled_price": filled_price,
-            "filled_qty": filled_qty,
-            "filled_amount": round(filled_amount, 2),
-            "commission": commission,
-            "avg_buy_price": round(avg_price, 4),
-            "total_qty_after": total_qty,
-            "total_spent_after": round(total_spent, 2),
-            "current_eval": 0,
-            "profit_rate": 0,
-            "remaining_investment": round(remaining, 2),
-            "remaining_rounds": max(int(cycle["division_count"]) - int(cycle["current_round"]), 0),
-            "strategy_type": STRATEGY_CRASH_BUY,
-            "status": ORDER_FILLED,
-            "memo": "폭락장 추가 매입",
-            "created": now,
-        }
-        trade_id = self._insert_trade_record(trade_db, trade_data)
-        if trade_id:
-            trade_data["id"] = trade_id
-
-        cycle_db.update({
-            "total_spent": round(total_spent, 2),
-            "total_qty": total_qty,
-            "avg_price": round(avg_price, 4),
-            "remaining_investment": round(remaining, 2),
-            "total_commission": round(total_commission, 2),
-            "crash_buy_count": crash_buy_count + 1,
-            "updated": now,
-        }, id=cycle_id)
-
-        self._log_event(cycle["symbol"], cycle_id, "CRASH_BUY_FILLED",
-                        action=ACTION_BUY,
-                        message=f"폭락장 추가 매입: {filled_qty}주 @ ${filled_price:.2f}, "
-                                f"수수료 ${commission:.2f}, 잔여금 ${remaining:.2f}")
-        self._sync_trade_to_firegate(cycle_id, trade_data)
-
-        return trade_data
 
     def _sync_trade_to_firegate(self, cycle_id, trade):
         """Best-effort FireGate transaction sync after a local fill is recorded."""
@@ -3237,41 +3141,6 @@ class Engine:
             self._log_event(symbol, "", "EXTERNAL_CYCLE_START_ERROR", message=f"외부 매수 체결용 사이클 자동 생성 실패: {str(e)}")
             return None, False
 
-    def _external_cycle_trade_seen(self, trade_db, order, trade_date):
-        symbol = str((order or {}).get("symbol", "") or "").upper()
-        action = str((order or {}).get("action", (order or {}).get("side", "")) or "").upper()
-        order_no = str((order or {}).get("order_no", "") or "").strip()
-        qty = int(float((order or {}).get("filled_qty", 0) or 0))
-        price = round(float((order or {}).get("filled_price", 0) or 0), 4)
-        if order_no:
-            try:
-                row = trade_db.get(broker_order_no=order_no)
-                if row and not self._is_synthetic_external_trade(row):
-                    return True
-            except Exception:
-                pass
-        try:
-            rows = trade_db.rows(symbol=symbol, action=action, trade_date=trade_date, orderby="created", order="DESC", dump=200) or []
-        except Exception:
-            rows = []
-        for row in rows:
-            if self._is_synthetic_external_trade(row):
-                continue
-            row_order_no = str(row.get("broker_order_no", "") or "").strip()
-            if order_no and row_order_no == order_no:
-                return True
-            if order_no and row_order_no and row_order_no != order_no:
-                continue
-            same_qty = int(row.get("filled_qty", 0) or 0) == qty
-            same_price = abs(float(row.get("filled_price", 0) or 0) - price) < 0.0001
-            source = str(row.get("source", "") or "").upper()
-            memo = str(row.get("memo", "") or "")
-            if order_no and order_no in memo:
-                return True
-            if same_qty and same_price and (source in ("KIS", "TOSS", "BROKER", "") or "외부 체결 동기화" in memo):
-                return True
-        return False
-
     def _external_cycle_trade_existing(self, trade_db, order, trade_date):
         symbol = str((order or {}).get("symbol", "") or "").upper()
         action = str((order or {}).get("action", (order or {}).get("side", "")) or "").upper()
@@ -3439,10 +3308,6 @@ class Engine:
             item["qty"] = qty
             holdings_by_symbol[symbol] = item
         return holdings_by_symbol
-
-    def _broker_holding_qty_by_symbol(self, kis_api, symbols):
-        holdings = self._broker_holdings_by_symbol(kis_api, symbols)
-        return {symbol: int((holding or {}).get("qty", 0) or 0) for symbol, holding in holdings.items()}
 
     def _align_cycle_snapshot_to_broker_holdings(self, broker_holdings, symbols):
         """Align cycle position snapshot to broker balance without fabricating trade rows."""

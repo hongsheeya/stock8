@@ -1,4 +1,3 @@
-import re
 import os
 import time
 
@@ -46,10 +45,6 @@ def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def _csv_items(value):
-    return [token.strip() for token in re.split(r"[\s,;\n]+", str(value or "")) if token.strip()]
-
-
 def _is_admin_user(user):
     role = str((user or {}).get("role", "") or "").lower()
     email = str((user or {}).get("email", "") or "").strip().lower()
@@ -65,14 +60,6 @@ def _session_user():
         return _get_struct().user.get(id=user_id)
     except Exception:
         return None
-
-
-def _listed_user(user, id_key, email_key):
-    user_id = str((user or {}).get("id", "") or "").strip()
-    email = str((user or {}).get("email", "") or "").strip().lower()
-    ids = {str(item).strip() for item in _csv_items(_get_config(id_key, ""))}
-    emails = {str(item).strip().lower() for item in _csv_items(_get_config(email_key, ""))}
-    return (user_id and user_id in ids) or (email and email in emails)
 
 
 def daytrade_access_status():

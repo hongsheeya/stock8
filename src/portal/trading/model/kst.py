@@ -13,9 +13,6 @@ class Time:
     def today(self, fmt="%Y-%m-%d"):
         return self.now().strftime(fmt)
 
-    def compact_date(self):
-        return self.now().strftime("%Y%m%d")
-
     def parse(self, value=None):
         if value in (None, ""):
             return None

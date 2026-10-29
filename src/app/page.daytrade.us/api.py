@@ -1,7 +1,6 @@
 import copy as _copy
 import datetime as _datetime
 import os as _os
-import re as _re
 import sys as _sys
 import threading as _threading
 import time as _time
@@ -241,10 +240,6 @@ def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def _csv_items(value):
-    return [token.strip() for token in _re.split(r"[\s,;\n]+", str(value or "")) if token.strip()]
-
-
 def _is_admin_user(user):
     role = str((user or {}).get("role", "") or "").lower()
     email = str((user or {}).get("email", "") or "").strip().lower()
@@ -260,14 +255,6 @@ def _session_user():
     if not user:
         wiz.response.status(404, message="사용자 정보를 찾을 수 없습니다.")
     return user
-
-
-def _listed_user(user, id_key, email_key):
-    user_id = str((user or {}).get("id", "") or "").strip()
-    email = str((user or {}).get("email", "") or "").strip().lower()
-    ids = {str(item).strip() for item in _csv_items(_get_config(id_key, ""))}
-    emails = {str(item).strip().lower() for item in _csv_items(_get_config(email_key, ""))}
-    return (user_id and user_id in ids) or (email and email in emails)
 
 
 def _daytrade_access_payload():

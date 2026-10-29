@@ -1,5 +1,3 @@
-import json
-import datetime
 import time
 import re
 import os
@@ -314,14 +312,6 @@ def _daytrade_user_authorized(user):
     email = str((user or {}).get("email", "") or "").strip().lower()
     ids = {str(item).strip() for item in _csv_items(_get_config("daytrade_authorized_user_ids", ""))}
     emails = {str(item).strip().lower() for item in _csv_items(_get_config("daytrade_authorized_user_emails", ""))}
-    return (user_id and user_id in ids) or (email and email in emails)
-
-
-def _daytrade_user_confirmed(user):
-    user_id = str((user or {}).get("id", "") or "").strip()
-    email = str((user or {}).get("email", "") or "").strip().lower()
-    ids = {str(item).strip() for item in _csv_items(_get_config("daytrade_confirmed_user_ids", ""))}
-    emails = {str(item).strip().lower() for item in _csv_items(_get_config("daytrade_confirmed_user_emails", ""))}
     return (user_id and user_id in ids) or (email and email in emails)
 
 

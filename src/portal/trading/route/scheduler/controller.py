@@ -12,7 +12,6 @@ Trading Scheduler API
 - /api/trading/scheduler/snapshot - 계좌 스냅샷 저장
 - /api/trading/scheduler/health  - 헬스체크
 """
-import json
 import datetime
 import os
 import threading
@@ -44,26 +43,6 @@ def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def _loc_schedule_mark_done(result):
-    result = result or {}
-    status = str(result.get("status", "") or "").lower()
-    try:
-        error_count = int(float(result.get("error_count", 0) or 0))
-    except Exception:
-        error_count = 0
-    try:
-        scheduled_count = int(float(result.get("scheduled_count", 0) or 0))
-    except Exception:
-        scheduled_count = 0
-    try:
-        already_scheduled_count = int(float(result.get("already_scheduled_count", 0) or 0))
-    except Exception:
-        already_scheduled_count = 0
-    if scheduled_count > 0 or already_scheduled_count > 0:
-        return True
-    return status not in ("error", "partial_error") and error_count <= 0
-
-
 def _configured_base_asset_krw(trading):
     for key in ["dashboard_base_asset_krw", "daytrade_default_seed"]:
         try:
@@ -75,63 +54,8 @@ def _configured_base_asset_krw(trading):
     return 0.0
 
 
-def _sync_firegate_before_loc(trading):
-    try:
-        if hasattr(trading, "run_due_firegate_sync"):
-            return trading.run_due_firegate_sync()
-    except Exception as e:
-        return {"executed": False, "status": "error", "message": str(e)}
-    return {"executed": False, "message": "not_available"}
-
-
 def now_kst():
     return _TIME.now()
-
-
-def _loc_hhmm_text(hhmm):
-    return f"{int(hhmm) // 100:02d}:{int(hhmm) % 100:02d}"
-
-
-def _nth_weekday(year, month, weekday, nth):
-    day = datetime.date(year, month, 1)
-    offset = (weekday - day.weekday()) % 7
-    return day + datetime.timedelta(days=offset + (nth - 1) * 7)
-
-
-def _us_summer_time_for_kst(now):
-    try:
-        from zoneinfo import ZoneInfo
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
-        return bool(now.astimezone(ZoneInfo("America/New_York")).dst())
-    except Exception:
-        today = now.date()
-        start = _nth_weekday(today.year, 3, 6, 2)
-        end = _nth_weekday(today.year, 11, 6, 1)
-        return start <= today < end
-
-
-def _loc_reservation_cutoff_hhmm(now):
-    return _LOC_RESERVATION_END_SUMMER_HHMM if _us_summer_time_for_kst(now) else _LOC_RESERVATION_END_STANDARD_HHMM
-
-
-def _loc_reservation_window_label(now=None):
-    now = now or now_kst()
-    return f"{_loc_hhmm_text(_LOC_RESERVATION_START_HHMM)}-{_loc_hhmm_text(_loc_reservation_cutoff_hhmm(now))} KST"
-
-
-def _loc_reservation_next_start_label():
-    return f"{_loc_hhmm_text(_LOC_RESERVATION_START_HHMM)} KST"
-
-
-def _loc_reservation_window_state(now):
-    hhmm = now.hour * 100 + now.minute
-    cutoff = _loc_reservation_cutoff_hhmm(now)
-    if hhmm < _LOC_RESERVATION_START_HHMM:
-        return "before"
-    if hhmm > cutoff:
-        return "after"
-    return "open"
 
 
 def _should_run_maintenance(trading, now=None):
@@ -197,42 +121,6 @@ def run_daytrade_exit_watch(trading):
     seed = float(_config_value(trading, "daytrade_default_seed", "5000000") or 5000000)
     result = trading.daytrade_engine.execute_exit_watch(requested_seed=seed, market="ALL")
     return {"enabled": True, **result}
-
-
-def schedule_loc_sell_if_due(trading):
-    enabled = str(_config_value(trading, "loc_auto_schedule_enabled", "true")).lower() == "true"
-    now = now_kst()
-    scheduled_at = _loc_reservation_next_start_label()
-    schedule_window = _loc_reservation_window_label(now)
-    window_state = _loc_reservation_window_state(now)
-
-    if enabled is False:
-        return {"enabled": False, "scheduled": False, "message": "LOC 자동 예약 비활성"}
-    if window_state != "open":
-        message = f"{schedule_window} 전이라 FireGate 매도 예약 대기 중입니다." if window_state == "before" else f"{schedule_window} 예약 접수시간이 지나 FireGate 매도 예약을 대기합니다."
-        return {"enabled": True, "scheduled": False, "message": message, "scheduled_at": scheduled_at, "schedule_window": schedule_window}
-
-    automation = trading.run_due_loc_automation(verify=True, reason="scheduler_due_loc_sell")
-    result = (automation or {}).get("sell") or {}
-    return {"enabled": True, "scheduled": bool((automation or {}).get("executed", False)), "scheduled_at": scheduled_at, "schedule_window": schedule_window, "automation": automation, **result}
-
-
-def schedule_loc_buy_if_due(trading):
-    enabled = str(_config_value(trading, "loc_auto_schedule_enabled", "true")).lower() == "true"
-    now = now_kst()
-    scheduled_at = _loc_reservation_next_start_label()
-    schedule_window = _loc_reservation_window_label(now)
-    window_state = _loc_reservation_window_state(now)
-
-    if enabled is False:
-        return {"enabled": False, "scheduled": False, "message": "LOC 자동 예약 비활성"}
-    if window_state != "open":
-        message = f"{schedule_window} 전이라 LOC 자동 예약매수 대기 중입니다." if window_state == "before" else f"{schedule_window} 예약 접수시간이 지나 LOC 자동 예약매수를 대기합니다."
-        return {"enabled": True, "scheduled": False, "message": message, "scheduled_at": scheduled_at, "schedule_window": schedule_window}
-
-    automation = trading.run_due_loc_automation(verify=True, reason="scheduler_due_loc_buy")
-    result = (automation or {}).get("buy") or {}
-    return {"enabled": True, "scheduled": bool((automation or {}).get("executed", False)), "scheduled_at": scheduled_at, "schedule_window": schedule_window, "automation": automation, **result}
 
 
 def verify_token():

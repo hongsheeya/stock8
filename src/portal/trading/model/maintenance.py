@@ -8,7 +8,6 @@
 import datetime
 import json
 import os
-from collections import defaultdict
 
 _TIME = wiz.model("portal/trading/kst")
 

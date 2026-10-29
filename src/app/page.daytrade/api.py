@@ -1,10 +1,8 @@
-import json
 import traceback as _tb
 import os as _os
 import time as _time
 import datetime as _datetime
 import copy as _copy
-import re as _re
 
 _TIME = wiz.model("portal/trading/kst")
 
@@ -89,10 +87,6 @@ def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def _csv_items(value):
-    return [token.strip() for token in _re.split(r"[\s,;\n]+", str(value or "")) if token.strip()]
-
-
 def _is_admin_user(user):
     role = str((user or {}).get("role", "") or "").lower()
     email = str((user or {}).get("email", "") or "").strip().lower()
@@ -108,14 +102,6 @@ def _session_user():
     if not user:
         wiz.response.status(404, message="사용자 정보를 찾을 수 없습니다.")
     return user
-
-
-def _listed_user(user, id_key, email_key):
-    user_id = str((user or {}).get("id", "") or "").strip()
-    email = str((user or {}).get("email", "") or "").strip().lower()
-    ids = {str(item).strip() for item in _csv_items(_get_config(id_key, ""))}
-    emails = {str(item).strip().lower() for item in _csv_items(_get_config(email_key, ""))}
-    return (user_id and user_id in ids) or (email and email in emails)
 
 
 def _daytrade_access_payload():
@@ -377,43 +363,6 @@ def _session_date_9am(now=None):
     if now.hour < 9:
         anchor = now - _datetime.timedelta(days=1)
     return anchor.strftime("%Y%m%d")
-
-
-def _to_kst_datetime(value):
-    if value in (None, ""):
-        return None
-    dt = value
-    if isinstance(dt, str):
-        text = dt.strip()
-        for parse_fmt in (
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%dT%H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d",
-        ):
-            try:
-                dt = _datetime.datetime.strptime(text[:26], parse_fmt)
-                break
-            except Exception:
-                dt = None
-        if dt is None:
-            return None
-    if isinstance(dt, _datetime.datetime) is False:
-        return None
-    if dt.tzinfo is None:
-        dt = dt + _datetime.timedelta(hours=9)
-    else:
-        dt = dt.astimezone(_datetime.timezone(_datetime.timedelta(hours=9)))
-    return dt
-
-
-def _to_kst_string(value, fmt="%Y-%m-%d %H:%M:%S"):
-    dt = _to_kst_datetime(value)
-    if dt is None:
-        return ""
-    return dt.strftime(fmt)
 
 
 

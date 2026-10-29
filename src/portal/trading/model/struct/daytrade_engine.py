@@ -2738,7 +2738,6 @@ class DomesticDaytradeEngine:
         dedup_sec: 동일 메시지가 이 시간(초) 이내에 이미 기록된 경우 스킵 (기본 300초=5분).
         타임스탬프는 파일에 KST로 저장하고, dedup 비교도 KST 기준으로 처리.
         """
-        import time as _t
         with self._global_lock("runtime_log_io"):
             fs = self._fs()
             market_key = self._market_key(market=market, symbol=symbol)
@@ -3002,13 +3001,6 @@ class DomesticDaytradeEngine:
         fee_sell = exit_price * qty * self._kr_sell_fee_rate(symbol, name)
         return fee_buy + fee_sell
 
-    def _last_buy_order(self, state):
-        orders = list(state.get("orders", []) or [])
-        for item in reversed(orders):
-            if str(item.get("action", "")).startswith("BUY"):
-                return item
-        return None
-
     def _position_opened_at(self, state):
         state = state or {}
         orders = list(state.get("orders", []) or [])
@@ -3032,16 +3024,6 @@ class DomesticDaytradeEngine:
         symbol = str(row.get("symbol", "") or "")
         strategy_id = str(row.get("strategy_id", "") or "")
         return (opened_at == "", opened_at, symbol, strategy_id)
-
-    def _minutes_since(self, timestamp):
-        ts = str(timestamp or "").strip()
-        if ts == "":
-            return 0.0
-        try:
-            dt = datetime.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            return max(0.0, (self._now() - dt).total_seconds() / 60.0)
-        except Exception:
-            return 0.0
 
     def _aggregate_ticks_to_candle(self, symbol, market="KS"):
         """실시간 체결 틱을 모아 1분봉을 조립하여 반환. 데이터가 없으면 None 반환."""
@@ -6923,96 +6905,6 @@ class DomesticDaytradeEngine:
             "paper_exploration": paper_exploration,
         }
 
-    def _rotation_opportunity(self, candidate_payload, remaining_seed_krw=0):
-        portfolio = candidate_payload.get("portfolio", {}) or {}
-        active_positions = portfolio.get("active_positions", []) if isinstance(portfolio, dict) else []
-        if isinstance(active_positions, list) is False or len(active_positions) == 0:
-            active_positions = self.active_positions()
-        if len(active_positions) == 0:
-            return None
-        max_symbols = candidate_payload.get("max_symbols", self._auto_max_symbols())
-        if remaining_seed_krw > 0 and len(active_positions) < max_symbols:
-            return None
-
-        score_map = {}
-        recommendation = candidate_payload.get("recommendation", {}) or {}
-        for row in (recommendation.get("leaderboard", []) or []):
-            if row.get("error"):
-                continue
-            score_map[(row.get("symbol", ""), row.get("strategy_id", "vrev"))] = self._safe_float(row.get("score", 0), 0)
-
-        alternatives = [
-            item for item in (candidate_payload.get("candidates", []) or [])
-            if item.get("source") != "active_position"
-        ]
-        if len(alternatives) == 0:
-            return None
-
-        min_hold_minutes = self._safe_float(self._config("daytrade_rotation_hold_minutes", "20"), 20)
-        min_score_gap = self._safe_float(self._config("daytrade_rotation_score_gap", "8"), 8)
-        max_volume_ratio = self._safe_float(self._config("daytrade_rotation_max_volume_ratio", "0.9"), 0.9)
-        max_range_pct = self._safe_float(self._config("daytrade_rotation_max_range_pct", "1.4"), 1.4)
-
-        for position in active_positions:
-            state = self._state_for(
-                position.get("symbol", ""),
-                market=position.get("market", "KS"),
-                seed=max(self._safe_float(position.get("current_price", 0), 0) * self._safe_int(position.get("position_qty", 0), 0), 1),
-                name=position.get("name", ""),
-                strategy_id=position.get("strategy_id", "vrev"),
-            )
-            buy_order = self._last_buy_order(state)
-            hold_minutes = self._minutes_since((buy_order or {}).get("timestamp", state.get("updated_at", "")))
-            if hold_minutes < min_hold_minutes:
-                continue
-            avg_price = self._safe_float(position.get("avg_price", 0), 0)
-            current_price = self._safe_float(position.get("current_price", 0), 0)
-            break_even = self._break_even_price(avg_price, position.get("symbol", ""), position.get("name", ""))
-            if break_even <= 0 or current_price < break_even:
-                continue
-            status = self.signal_status(
-                position.get("symbol", ""),
-                market=position.get("market", "KS"),
-                seed=max(current_price * self._safe_int(position.get("position_qty", 0), 0), current_price, 1),
-                name=position.get("name", ""),
-                strategy_id=position.get("strategy_id", "vrev"),
-            )
-            if str(status.get("signal", {}).get("action", "HOLD")).startswith("SELL"):
-                continue
-            bar = status.get("bar", {}) or {}
-            stagnant = (
-                self._safe_float(bar.get("volume_surge_ratio", 0), 0) <= max_volume_ratio
-                and self._safe_float(bar.get("intraday_range_pct", 0), 0) <= max_range_pct
-                and abs(self._safe_float(bar.get("vwap_gap_pct", 0), 0)) <= 0.5
-            )
-            if stagnant is False:
-                continue
-            position_score = score_map.get((position.get("symbol", ""), position.get("strategy_id", "vrev")), 0.0)
-            for alternative in alternatives:
-                alternative_score = self._safe_float(alternative.get("score", 0), 0)
-                if alternative_score <= position_score + min_score_gap:
-                    continue
-                alt_seed = max(self._safe_float(alternative.get("entry_seed_krw", 0), 0), self._safe_float(alternative.get("last_price", 0), 0), 1)
-                alt_status = self.signal_status(
-                    alternative.get("symbol", ""),
-                    market=alternative.get("market", "KS"),
-                    seed=alt_seed,
-                    name=alternative.get("name", ""),
-                    strategy_id=alternative.get("strategy_id", "vrev"),
-                )
-                if str(alt_status.get("signal", {}).get("action", "HOLD")).startswith("BUY") is False:
-                    continue
-                return {
-                    "from": position,
-                    "to": alternative,
-                    "reason": f"{position.get('name', position.get('symbol', ''))} 정체 {hold_minutes:.0f}분 · 본전 이상 구간이라 {alternative.get('name', alternative.get('symbol', ''))}로 교체 검토",
-                    "hold_minutes": round(hold_minutes, 1),
-                    "break_even_price": round(break_even, 2),
-                    "position_score": round(position_score, 2),
-                    "target_score": round(alternative_score, 2),
-                }
-        return None
-
     def auto_cycle(self, requested_seed=0, force_recommend=False, market="KS", user_id=""):
         if self._hard_locked():
             return self._hard_locked_result()
@@ -7616,25 +7508,6 @@ class DomesticDaytradeEngine:
             "mode": "live" if connection.get("is_real") else "paper",
             "connection": connection,
             "portfolio_limit": round(portfolio_limit, 2),
-        }
-
-    def runtime_status(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev"):
-        payload = self._signal_from_state(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
-        state = payload.get("state", {})
-        signal = payload.get("signal", {})
-        guardrails = self._guardrails(symbol, market, seed, state, signal, payload.get("session", {}), payload.get("bar", {}), payload.get("profile", {}))
-        return {
-            "mode": guardrails.get("mode", "paper"),
-            "risk_status": guardrails.get("risk_status", "SAFE"),
-            "halt_reason": state.get("halt_reason", "") or (guardrails.get("issues", [""])[0] if guardrails.get("issues") else ""),
-            "issues": guardrails.get("issues", []),
-            "warnings": guardrails.get("warnings", []),
-            "recent_errors": self._recent_error_messages(state),
-            "recent_logs": self._load_runtime_logs()[-30:],
-            "connection": guardrails.get("connection", {}),
-            "portfolio": guardrails.get("portfolio", {}),
-            "daily_loss": guardrails.get("daily_loss", {}),
-            "exit_watch": self._exit_watch_payload(state, signal),
         }
 
     def active_positions(self, sync_broker=True, use_live_price=True, market_filter=None):
@@ -8976,62 +8849,5 @@ class DomesticDaytradeEngine:
             })
         except Exception as e:
             self._append_runtime_log("warning", f"{symbol} 주문 실패 로그 저장 실패: {str(e)}", symbol=symbol, strategy_id=strategy_id, market=market)
-
-    def _execute_live_legacy_tail(self, symbol, market="KS", seed=1000000, name="", strategy_id="vrev", force=False, allow_buy=True):
-        strategy_id = self.strategy._normalize_strategy(strategy_id)
-        status = self.signal_status(symbol, market=market, seed=seed, name=name, strategy_id=strategy_id)
-        signal = status.get("signal", {}) or {}
-        state = status.get("state", {}) or {}
-        runtime = status.get("runtime", {}) or {}
-        action = str(signal.get("action", "HOLD") or outcome.get("status", {}).get("signal", {}).get("action", "HOLD"))
-        qty = max(0, self._safe_int(signal.get("order_qty", 0), 0))
-        current_price = self._safe_float(signal.get("current_price", 0), 0)
-        order_value = round(current_price * qty, 2)
-        breakout_meta = signal.get("breakout_meta")
-        self._append_runtime_log(
-            "info",
-            f"{symbol} 실행 판단: {action} · {signal.get('reason', '')}",
-            symbol=symbol,
-            strategy_id=strategy_id,
-            meta=self._compact_runtime_meta(status, {
-                "seed": round(self._safe_float(seed, 0), 2),
-                "force": bool(force),
-                "allow_buy": bool(allow_buy),
-                "order_value": order_value,
-            }),
-        )
-
-        if action.startswith("BUY") and allow_buy is False:
-            message = "자동청산 감시 모드라 신규 매수는 실행하지 않습니다."
-            self._append_runtime_log("info", f"{symbol} 신규 매수 차단: 자동청산 감시 전용", symbol=symbol, strategy_id=strategy_id, meta=self._compact_runtime_meta(status))
-            return {
-                "executed": False,
-                "message": message,
-                "status": status,
-                "action": action,
-                "order_value": 0,
-            }
-
-        if action == "HOLD":
-            return {
-                "executed": False,
-                "message": signal.get("reason", "현재 실행할 신호가 없습니다."),
-                "status": status,
-                "action": action,
-                "order_value": 0,
-            }
-
-        if runtime.get("risk_status") == "HALT":
-            halt_reason = runtime.get("halt_reason", "실행이 차단되었습니다.")
-            self._push_state_error(state, halt_reason)
-            state["updated_at"] = self._timestamp
-            return {
-                "executed": False,
-                "message": halt_reason,
-                "status": status,
-                "action": action,
-                "order_value": 0,
-            }
-
 
 Model = DomesticDaytradeEngine
