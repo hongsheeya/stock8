@@ -145,6 +145,20 @@ class Engine:
         except Exception as e:
             return {"states": {}, "error": str(e)}
 
+    def _firegate_reverse_states(self, symbol_filter=""):
+        """Without firegate_authoritative_reservations_only the reservations
+        follow the local cycle, but a FireGate portfolio in reverse mode (or
+        exhausted) must still get FireGate's reverse guide, which only the
+        FireGate state carries (10-29: LIVE placed the normal v4 lines
+        while FireGate said MOC). Load errors keep the old local behaviour."""
+        context = self._load_firegate_authoritative_states(symbol_filter=symbol_filter)
+        states = {
+            symbol: state for symbol, state in (context.get("states") or {}).items()
+            if not state.get("_firegate_ambiguous")
+            and (state.get("_firegate_reverse_mode") or state.get("_firegate_exhausted"))
+        }
+        return {"states": states, "error": ""}
+
     def _cycle_with_firegate_authority(self, cycle, firegate_states, required=False, load_error=""):
         symbol = str((cycle or {}).get("symbol", "") or "").upper().strip()
         state = dict((firegate_states or {}).get(symbol) or {})
@@ -3966,7 +3980,7 @@ class Engine:
         firegate_required = self._firegate_reservation_authority_required()
         firegate_context = (
             self._load_firegate_authoritative_states(symbol_filter=symbol_filter)
-            if firegate_required else {"states": {}, "error": ""}
+            if firegate_required else self._firegate_reverse_states(symbol_filter=symbol_filter)
         )
         firegate_states = firegate_context.get("states", {})
         firegate_error = firegate_context.get("error", "")
@@ -4441,7 +4455,7 @@ class Engine:
         firegate_required = self._firegate_reservation_authority_required()
         firegate_context = (
             self._load_firegate_authoritative_states(symbol_filter=symbol_filter)
-            if firegate_required else {"states": {}, "error": ""}
+            if firegate_required else self._firegate_reverse_states(symbol_filter=symbol_filter)
         )
         firegate_states = firegate_context.get("states", {})
         firegate_error = firegate_context.get("error", "")
