@@ -1,4 +1,5 @@
-"""Order-log retention keeps order/fill events and archives what it trims (10-21)."""
+"""Order-log retention keeps order/fill events and archives what it trims (10-21);
+repeated noise/error lines of finished days collapse to first + last (10-29)."""
 import ast
 import datetime
 import gzip
@@ -45,7 +46,7 @@ class TradeLogRetentionTests(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.path = os.path.join(self.dir, "trading.db")
         con = sqlite3.connect(self.path)
-        con.execute("create table trade_log (id text, event_type text, message text, created text)")
+        con.execute("create table trade_log (id text, symbol text, event_type text, message text, created text)")
         rows = [("1", "IB_LOC_AUTOMATION_RUN", "old noise", "2026-09-01 10:00:00"),
                 ("2", "IB_LOC_BUY_PRICE_MISMATCH", "old noise", "2026-09-30 10:00:00"),
                 ("3", "IB_LOC_AUTOMATION_RUN", "recent noise", "2026-10-20 10:00:00"),
@@ -53,7 +54,7 @@ class TradeLogRetentionTests(unittest.TestCase):
                 ("5", "IB_LOC_BUY_ERROR", "recent error", "2026-10-01 10:00:00"),
                 ("6", "DT_KS_BUY1", "old fill", "2026-07-01 10:00:00"),
                 ("7", "IB_LOC_BUY_SCHEDULED", "old order", "2026-07-01 10:00:00")]
-        con.executemany("insert into trade_log values (?,?,?,?)", rows)
+        con.executemany("insert into trade_log (id, event_type, message, created) values (?,?,?,?)", rows)
         con.commit()
         con.close()
         self.struct = SimpleNamespace(db=lambda name: SimpleNamespace(_db=_Raw(self.path)), **ATTRS)
@@ -63,7 +64,7 @@ class TradeLogRetentionTests(unittest.TestCase):
         result = trim(self.struct, now=now)
         left = {r[0] for r in sqlite3.connect(self.path).execute("select id from trade_log")}
         self.assertEqual(left, {"3", "5", "6", "7"})
-        self.assertEqual(result, {"removed": 3, "remaining": 4})
+        self.assertEqual(result, {"removed": 3, "deduped": 0, "remaining": 4, "vacuumed": False})
         archive = os.path.join(self.dir, "log-archive", "trade_log-20261021.jsonl.gz")
         with gzip.open(archive, "rt", encoding="utf-8") as fh:
             self.assertEqual(sorted(json.loads(line)["id"] for line in fh), ["1", "2", "4"])
@@ -73,6 +74,39 @@ class TradeLogRetentionTests(unittest.TestCase):
         trim(self.struct, now=datetime.datetime(2026, 10, 25, 12, 0))
         left = {r[0] for r in sqlite3.connect(self.path).execute("select id from trade_log")}
         self.assertEqual(left, {"5", "6", "7"})
+
+    def test_repeated_lines_of_finished_days_keep_first_and_last(self):
+        con = sqlite3.connect(self.path)
+        rows = [(f"r{i}", "SOXL", "IB_LOC_BUY_ERROR", f"LOC 예약매수 실패: 부족 | orderable_amount=${i}", f"2026-10-20 22:{i:02d}:00")
+                for i in range(10)]
+        rows += [(f"t{i}", "SOXL", "IB_LOC_BUY_ERROR", "LOC 예약매수 실패: 부족", f"2026-10-21 09:{i:02d}:00") for i in range(5)]
+        rows += [(f"f{i}", "SOXL", "IB_LOC_BUY_SCHEDULED", "same order line", f"2026-10-20 10:{i:02d}:00") for i in range(4)]
+        con.executemany("insert into trade_log values (?,?,?,?,?)", rows)
+        con.commit()
+        con.close()
+        result = trim(self.struct, now=datetime.datetime(2026, 10, 21, 12, 0))
+        left = {r[0] for r in sqlite3.connect(self.path).execute("select id from trade_log")}
+        self.assertIn("r0", left)
+        self.assertIn("r9", left)
+        self.assertFalse({f"r{i}" for i in range(1, 9)} & left)
+        self.assertTrue({f"t{i}" for i in range(5)} <= left)   # today stays whole
+        self.assertTrue({f"f{i}" for i in range(4)} <= left)   # order events never collapse
+        self.assertEqual(result["deduped"], 8)
+        with gzip.open(os.path.join(self.dir, "log-archive", "trade_log-20261021.jsonl.gz"), "rt", encoding="utf-8") as fh:
+            archived = [json.loads(line) for line in fh]
+        self.assertEqual(sorted(r["id"] for r in archived if r["id"].startswith("r")), [f"r{i}" for i in range(1, 9)])
+        self.assertNotIn("_rn", archived[0])
+
+    def test_vacuum_after_large_delete(self):
+        con = sqlite3.connect(self.path)
+        con.executemany("insert into trade_log values (?,?,?,?,?)",
+                        [(f"n{i}", "SOXL", "IB_LOC_AUTOMATION_RUN", "x" * 2000, "2026-09-01 10:00:00") for i in range(3000)])
+        con.commit()
+        con.close()
+        before = os.path.getsize(self.path)
+        result = trim(self.struct, now=datetime.datetime(2026, 10, 21, 12, 0))
+        self.assertTrue(result["vacuumed"])
+        self.assertLess(os.path.getsize(self.path), before / 4)
 
 
 if __name__ == "__main__":

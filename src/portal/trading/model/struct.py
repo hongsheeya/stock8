@@ -2901,6 +2901,15 @@ class Struct:
     _LOG_ERROR_DAYS = 60
     _LOG_SOFT_CAP = 60000
     _LOG_CAP_NOISE_DAYS = 3
+    # 10-29: the LOC retry loop wrote the same skip/error line hundreds of
+    # times a day (LIVE 10-22: 593 IB_LOC_BUY_ERROR rows, 154 distinct). For
+    # finished days only the first and last of each repeated noise/error line
+    # (same day, event, symbol and message before " | ") are kept.
+    _LOG_DEDUPE_KEY = ("substr(created,1,10), event_type, coalesce(symbol,''), "
+                       "CASE WHEN instr(coalesce(message,''),' | ')>0 THEN substr(message,1,instr(message,' | ')-1) "
+                       "ELSE coalesce(message,'') END")
+    _LOG_VACUUM_FREE_RATIO = 0.25
+    _LOG_VACUUM_MIN_FREE_BYTES = 2 * 1024 * 1024
 
     def _trim_trade_logs(self, now=None):
         import gzip
@@ -2915,6 +2924,16 @@ class Struct:
         plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_NOISE_DAYS)), (self._LOG_ERROR_SQL, cutoff(self._LOG_ERROR_DAYS))]
         archive_dir = _os.path.join(_os.path.dirname(_os.path.abspath(database.database)), "log-archive")
         removed = 0
+        deduped = 0
+        vacuumed = False
+
+        def archive(rows):
+            _os.makedirs(archive_dir, exist_ok=True)
+            path = _os.path.join(archive_dir, f"trade_log-{now.strftime('%Y%m%d')}.jsonl.gz")
+            with gzip.open(path, "at", encoding="utf-8") as fh:
+                for row in rows:
+                    fh.write(_json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
         raw._db_enter()
         try:
             for step in range(2):
@@ -2924,11 +2943,7 @@ class Struct:
                     rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
                     if not rows:
                         continue
-                    _os.makedirs(archive_dir, exist_ok=True)
-                    path = _os.path.join(archive_dir, f"trade_log-{now.strftime('%Y%m%d')}.jsonl.gz")
-                    with gzip.open(path, "at", encoding="utf-8") as fh:
-                        for row in rows:
-                            fh.write(_json.dumps(row, ensure_ascii=False, default=str) + "\n")
+                    archive(rows)
                     database.execute_sql(f'DELETE FROM "trade_log" WHERE {where} AND created < ?', (before,))
                     removed += len(rows)
                 total = database.execute_sql('SELECT count(*) FROM "trade_log"').fetchone()[0]
@@ -2936,10 +2951,38 @@ class Struct:
                     plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_CAP_NOISE_DAYS))]
                     continue
                 break
+
+            key = self._LOG_DEDUPE_KEY
+            cursor = database.execute_sql(
+                f'SELECT * FROM (SELECT t.*, row_number() OVER (PARTITION BY {key} ORDER BY created, id) AS _rn, '
+                f'count(*) OVER (PARTITION BY {key}) AS _cnt FROM "trade_log" t '
+                f'WHERE ({self._LOG_NOISE_SQL} OR {self._LOG_ERROR_SQL}) AND created < ?) WHERE _rn > 1 AND _rn < _cnt',
+                (now.strftime("%Y-%m-%d"),))
+            columns = [c[0] for c in cursor.description]
+            rows = [{k: v for k, v in zip(columns, r) if k not in ("_rn", "_cnt")} for r in cursor.fetchall()]
+            if rows:
+                archive(rows)
+                ids = [row["id"] for row in rows]
+                for i in range(0, len(ids), 500):
+                    chunk = ids[i:i + 500]
+                    database.execute_sql(f'DELETE FROM "trade_log" WHERE id IN ({",".join("?" * len(chunk))})', tuple(chunk))
+                deduped = len(rows)
+                total -= deduped
+
+            # Deleting frees pages inside the file but does not shrink it.
+            pages = database.execute_sql("PRAGMA page_count").fetchone()[0]
+            free = database.execute_sql("PRAGMA freelist_count").fetchone()[0]
+            page_size = database.execute_sql("PRAGMA page_size").fetchone()[0]
+            if pages and free / pages >= self._LOG_VACUUM_FREE_RATIO and free * page_size >= self._LOG_VACUUM_MIN_FREE_BYTES:
+                try:
+                    database.execute_sql("VACUUM")
+                    vacuumed = True
+                except Exception:
+                    pass  # another connection is busy; the next run retries
         finally:
             raw._close_connection()
             raw._db_exit()
-        return {"removed": removed, "remaining": total}
+        return {"removed": removed, "deduped": deduped, "remaining": total, "vacuumed": vacuumed}
 
     def _maybe_trim_trade_logs(self):
         """At most every 6 hours per process."""
@@ -2954,9 +2997,7 @@ class Struct:
 
     def _run_background_maintenance(self):
         try:
-            maintenance = self.model("maintenance")
-            result = maintenance.database_maintenance() or {}
-            result["trade_log_trim"] = self._maybe_trim_trade_logs()
+            result = {"trade_log_trim": self._maybe_trim_trade_logs()}
             return {
                 "enabled": True,
                 "executed": True,
@@ -3126,7 +3167,7 @@ class Struct:
                     publish_result()
 
                     if maintenance_due:
-                        result["maintenance"] = {"executed": False, "running": True, "message": "백그라운드 DB 최적화/요약 정리 중", "interval_sec": maintenance_interval_sec}
+                        result["maintenance"] = {"executed": False, "running": True, "message": "주문 로그 정리 중", "interval_sec": maintenance_interval_sec}
                         publish_result()
                         result["maintenance"] = self._run_background_maintenance()
                         state["last_background_maintenance_ts"] = time.time()
