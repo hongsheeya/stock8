@@ -176,6 +176,42 @@ class ReverseMocTests(unittest.TestCase):
         self.assertEqual(kis.sells, [])
 
 
+class LiveDefaultReservationTests(unittest.TestCase):
+    """LIVE runs without firegate_authoritative_reservations_only; on 10-29
+    it still placed the normal v4 lines for a reverse-mode SOXL."""
+
+    def engine(self, state):
+        engine, kis, _logs = base.InfiniteBuyLocScheduleRegressionTests._engine(
+            None, buying_power_info={"orderable_amount": 5000.0}, reservation_orders=[],
+            watchlist_rows=[{"id": "w1", "symbol": "SOXL", "exchange": "AMEX", "is_active": True}],
+            cycle_rows=[{"id": "c1", "symbol": "SOXL", "status": "ACTIVE", "total_qty": 90, "avg_price": 124.94,
+                         "total_spent": 11244.6, "target_profit": 20.0, "total_commission": 0.0, "current_round": 15,
+                         "t_value": 15.98, "division_count": 20, "total_investment": 15000.0}],
+            configs={})
+        engine.calculate_buy_decision = Engine.calculate_buy_decision.__get__(engine, engine.__class__)
+        engine._load_firegate_authoritative_states = lambda symbol_filter="": {
+            "states": {"SOXL": {**SOXL, "_firegate_reverse_state": state}}, "error": ""}
+        return engine, kis
+
+    def test_moc_day_places_no_reservations(self):
+        engine, kis = self.engine("NORMAL")
+        engine.schedule_loc_sells(symbol_filter="SOXL")
+        engine.schedule_loc_buys(symbol_filter="SOXL")
+        self.assertEqual(kis.sell_reservation_calls, [])
+        self.assertEqual(kis.buy_calls, [])
+
+    def test_active_day_places_the_reverse_sell(self):
+        engine, kis = self.engine("ACTIVE")
+        engine.schedule_loc_sells(symbol_filter="SOXL")
+        self.assertEqual([(c["price"], c["qty"]) for c in kis.sell_reservation_calls], [(90.62, 9)])
+
+    def test_normal_firegate_state_keeps_the_local_cycle(self):
+        engine, _ = self.engine("NORMAL")
+        engine._load_firegate_authoritative_states = lambda symbol_filter="": {
+            "states": {"SOXL": {**SOXL, "_firegate_reverse_mode": False, "total_qty": 1}}, "error": ""}
+        self.assertEqual(engine._firegate_reverse_states()["states"], {})
+
+
 class ReservationRejectionTests(unittest.TestCase):
     def setUp(self):
         from test_kis_api_buying_power import kis_api, _StructStub
