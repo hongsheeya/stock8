@@ -81,8 +81,7 @@ def run_maintenance_if_due(trading, force=False):
             "last_run_date": str(_config_value(trading, "maintenance_last_run_date", "") or ""),
         }
     try:
-        maintenance = trading.model("maintenance")
-        result = maintenance.database_maintenance() or {}
+        result = {"trade_log_trim": trading._maybe_trim_trade_logs()}
     except Exception as e:
         return {
             "executed": False,

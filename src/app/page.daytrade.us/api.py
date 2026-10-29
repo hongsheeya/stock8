@@ -288,10 +288,6 @@ def _require_daytrade_access():
     return payload
 
 
-def access_status():
-    wiz.response.status(200, **_daytrade_access_payload())
-
-
 def _normalized_us_seed(seed=0.0, service=None):
     service = service or _daytrade()
     try:
@@ -1081,24 +1077,6 @@ def us_manual_sell():
     wiz.response.status(200, result=result)
 
 
-def us_auto_cycle():
-    seed = _parse_us_seed("seed", 0)
-    try:
-        result = _engine().us_auto_cycle(requested_seed=seed)
-    except Exception as e:
-        wiz.response.status(400, message=str(e))
-    wiz.response.status(200, result=result)
-
-
-def us_execute_exit_watch():
-    seed = _parse_us_seed("seed", 0)
-    try:
-        result = _engine().us_execute_exit_watch(requested_seed=seed)
-    except Exception as e:
-        wiz.response.status(400, message=str(e))
-    wiz.response.status(200, result=result)
-
-
 def _guard_daytrade_api(name):
     original = globals().get(name)
     if not callable(original):
@@ -1123,7 +1101,5 @@ for _daytrade_api_name in [
     "us_toggle_auto",
     "us_get_auto_status",
     "us_manual_sell",
-    "us_auto_cycle",
-    "us_execute_exit_watch",
 ]:
     _guard_daytrade_api(_daytrade_api_name)

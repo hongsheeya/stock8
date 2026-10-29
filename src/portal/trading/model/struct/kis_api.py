@@ -1681,6 +1681,36 @@ class KisApi:
             "order_type": order_type,
         }
 
+    # KIS answers that reject a reservation outright (nothing was accepted).
+    # 10-23 22:20:05 LIVE: APBK1574 "예약주문접수는 10:00~22:20 에 가능합니다"
+    # was kept as an unknown outcome and blocked every reservation for 3 days.
+    DEFINITE_RESERVATION_REJECTIONS = {"APBK1574"}
+
+    def clear_definite_reservation_rejection(self):
+        """Lift the unknown-outcome barrier when the stored broker answer was
+        a definite rejection. Returns the cleared record or None."""
+        try:
+            pending = json.loads(self.struct.get_config('kis_reservation_pending', '') or '{}')
+        except (TypeError, ValueError):
+            return None
+        code = str(((pending or {}).get('response') or {}).get('msg_cd', '') or '')
+        if pending and code in self.DEFINITE_RESERVATION_REJECTIONS:
+            self.struct.set_config('kis_reservation_pending', '', description=f'Reservation definitely rejected by KIS ({code})')
+            return pending
+        return None
+
+    def _reservation_cutoff_guard(self, now=None):
+        """No new reservation in the last minute before the KIS cutoff
+        (22:20 KST in US summer time, 23:20 otherwise)."""
+        kst = now or self._kst_now()
+        et = self._us_eastern_now(kst)
+        offset = et.utcoffset()
+        summer = offset is not None and offset.total_seconds() == -4 * 3600
+        cutoff = (22, 20) if summer else (23, 20)
+        minutes = kst.hour * 60 + kst.minute
+        if cutoff[0] * 60 + cutoff[1] - 1 <= minutes <= cutoff[0] * 60 + cutoff[1]:
+            raise RuntimeError(f"예약 접수 마감({cutoff[0]:02d}:{cutoff[1]:02d}) 1분 전이라 예약을 보내지 않습니다.")
+
     def inspect_pending_reservation(self):
         """Read-only broker reconciliation. Absence is not proof of rejection."""
         pending = json.loads(self.struct.get_config('kis_reservation_pending', '') or '{}')
@@ -1714,6 +1744,7 @@ class KisApi:
         lock = _GATEWAY_STATE.setdefault('reservation_write_lock', threading.RLock())
         with lock:
             key = 'kis_reservation_pending'
+            self._reservation_cutoff_guard()
             if self.struct.get_config(key, ''):
                 raise RuntimeError('이전 예약 요청의 접수 여부가 불명확합니다. KIS 주문내역 대조 전 추가 예약/취소를 차단합니다.')
             receipt_key = 'kis_reservation_unseen_receipts'
@@ -1742,8 +1773,11 @@ class KisApi:
                 diagnostic = {k: str(data.get(k, ''))[:300] for k in ('rt_cd', 'msg_cd', 'msg1')} if isinstance(data, dict) else {'response_type': type(data).__name__}
                 record = json.loads(pending)
                 record['response'] = diagnostic
-                self.struct.set_config(key, json.dumps(record, ensure_ascii=False), description='Unresolved reservation response')
                 detail = ' / '.join(v for v in diagnostic.values() if v) or '상태 코드 누락'
+                if diagnostic.get('msg_cd') in self.DEFINITE_RESERVATION_REJECTIONS:
+                    self.struct.set_config(key, '', description=f"Reservation definitely rejected by KIS ({diagnostic.get('msg_cd')})")
+                    raise RuntimeError(f'예약 거절 (접수 안 됨): {detail}')
+                self.struct.set_config(key, json.dumps(record, ensure_ascii=False), description='Unresolved reservation response')
                 raise RuntimeError(f'예약 응답 불명 ({detail}): 재전송 차단, KIS 주문내역 확인 필요')
             output = data.get('output') or {}
             if str(data.get('rt_cd')) == '0' and path.endswith('/order-resv'):

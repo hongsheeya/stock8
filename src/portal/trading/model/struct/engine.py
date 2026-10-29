@@ -1244,6 +1244,147 @@ class Engine:
             "reason": f"FireGate v4 LOC 매수 계획 (★{star_percent:g}%)",
         }
 
+    # =========================================================================
+    # FireGate v4 reverse mode (10-29): the same guide the FireGate dashboard
+    # shows (getGuideV4Reverse), so the app places what FireGate tells it to.
+    # =========================================================================
+
+    @staticmethod
+    def firegate_reverse_plan(cycle):
+        """None when the FireGate portfolio is not in reverse mode. Otherwise
+        {"state", "state_name", "moc_qty", "sells", "buys"}:
+        - first day (state not ACTIVE) or re-exhausted: MOC sell of
+          holding / 10 (20 splits; /15 for 30, /20 otherwise), nothing else
+        - ACTIVE: LOC sell of the same quantity at the reverse star (5-day
+          average close), LOC buy at star - 0.01 for a quarter of the seed
+          left, plus FireGate's extra "crash" LOC buys below it."""
+        cycle = cycle or {}
+        if not cycle.get("_firegate_authoritative"):
+            return None
+        if not (cycle.get("_firegate_reverse_mode") or cycle.get("_firegate_exhausted")):
+            return None
+        division = int(float(cycle.get("division_count", 20) or 20))
+        holding = int(float(cycle.get("total_qty", 0) or 0))
+        avg = float(cycle.get("_firegate_raw_avg_price", cycle.get("avg_price", 0)) or 0)
+        remaining = float(cycle.get("_firegate_remaining_seed", 0) or 0)
+        star = float(cycle.get("_firegate_five_day_avg", 0) or 0) or float(cycle.get("_firegate_reverse_star_price", 0) or 0)
+        divisor = 10 if division == 20 else (15 if division == 30 else 20)
+        sell_qty = int(math.floor(holding / divisor))
+        buy_price = round(star - 0.01, 2)
+        quarter = remaining / 4
+        buy_qty = max(0, int(math.floor(quarter / buy_price))) if buy_price > 0 else 0
+        state = str(cycle.get("_firegate_reverse_state", "") or "NORMAL")
+        active = state == "ACTIVE"
+        re_exhausted = active and star > 0 and buy_price > 0 and int(math.floor(remaining / 4 / buy_price)) < 1
+        if not active or re_exhausted or buy_price <= 0:
+            return {"state": state, "state_name": "리버스모드 (재소진)" if re_exhausted else "리버스모드 (첫날)",
+                    "moc_qty": sell_qty, "star": star, "sells": [], "buys": []}
+        sells = [{"label": "FireGate LOC 리버스★", "order_type": "LOC", "order_qty": sell_qty, "price": round(star, 2),
+                  "source": "firegate_reverse"}] if sell_qty > 0 else []
+        buys = []
+        if buy_qty > 0:
+            buys.append({"label": "FireGate LOC 리버스★", "order_type": "LOC", "loc_price": buy_price, "order_qty": buy_qty,
+                         "source": "firegate_reverse"})
+        unit = 10 if buy_qty > 100 else (5 if buy_qty > 50 else 1)
+        if quarter > 0:
+            for k in range(1, 8):  # EXTRA_BUY_GUIDE_COUNT_V4
+                price = round(quarter / (buy_qty + k * unit), 2)
+                if price < buy_price and (avg <= 0 or price < avg):
+                    buys.append({"label": "FireGate LOC +@ 폭락 대비", "order_type": "LOC", "loc_price": price,
+                                 "order_qty": unit, "source": "firegate_reverse_extra"})
+        return {"state": state, "state_name": "리버스모드", "moc_qty": 0, "star": star, "sells": sells, "buys": buys}
+
+    REVERSE_MOC_WINDOW_ET = ((9, 35), (15, 40))
+    REVERSE_MOC_CHECK_SEC = 300
+
+    def run_firegate_reverse_moc(self, now_kst=None):
+        """Place the FireGate reverse-mode MOC sell once per US session.
+
+        A durable marker is written before the order is sent, so a timeout or
+        restart never sends it twice; an error is not retried that session.
+        Skipped when the broker already holds less than FireGate (an unsynced
+        sell) or a SELL order of the symbol already exists this session."""
+        state = self.__dict__.setdefault("_reverse_moc_state", {"checked_at": 0.0})
+        kis_api = self._load_kis_api()
+        if not kis_api:
+            return {"status": "error", "message": "브로커 API 미설정"}
+        et = kis_api._us_eastern_now(now_kst)
+        session = et.date().isoformat()
+        if et.weekday() >= 5 or kis_api.us_market_holiday_label(now_kst):
+            return {"status": "closed", "message": "미국 휴장"}
+        (h1, m1), (h2, m2) = self.REVERSE_MOC_WINDOW_ET
+        if not (h1 * 60 + m1 <= et.hour * 60 + et.minute < h2 * 60 + m2):
+            return {"status": "outside_window", "message": "MOC 접수 시간 아님 (미국 09:35~15:40)"}
+        if time.time() - float(state.get("checked_at") or 0) < self.REVERSE_MOC_CHECK_SEC:
+            return {"status": "throttled", "message": state.get("message", "")}
+        state["checked_at"] = time.time()
+        context = self._load_firegate_authoritative_states()
+        if context.get("error"):
+            state["message"] = f"FireGate 상태 조회 실패: {context['error'][:120]}"
+            return {"status": "error", "message": state["message"]}
+        results = []
+        for symbol, fg_state in (context.get("states") or {}).items():
+            cycle = self._best_cycle(symbol, [STATUS_ACTIVE])
+            if not cycle:
+                continue
+            merged, err = self._cycle_with_firegate_authority(cycle, context["states"], required=True)
+            if err or not merged:
+                continue
+            plan = self.firegate_reverse_plan(merged)
+            if not plan or int(plan.get("moc_qty") or 0) <= 0:
+                continue
+            results.append(self._place_reverse_moc(kis_api, merged, plan, session))
+        state["message"] = "; ".join(r.get("message", "") for r in results) or "MOC 대상 없음"
+        return {"status": "done", "results": results, "message": state["message"]}
+
+    def _place_reverse_moc(self, kis_api, cycle, plan, session):
+        symbol = str(cycle.get("symbol", "") or "").upper()
+        key = f"firegate_reverse_moc:{symbol}"
+        try:
+            marker = json.loads(self._get_config_value(key, "") or "{}")
+        except (TypeError, ValueError):
+            marker = {}
+        if marker.get("session") == session:
+            return {"symbol": symbol, "status": "already", "message": f"{symbol} 오늘 MOC 처리됨 ({marker.get('status', '')})"}
+        qty = int(plan["moc_qty"])
+        exchange = self._resolve_order_exchange(symbol, self._get_exchange(symbol) or "NASD")
+        balance = kis_api.get_balance(exchange=exchange) or {}
+        held = sum(int(float(row.get("qty", 0) or 0)) for row in balance.get("holdings", []) or []
+                   if str(row.get("symbol", "")).upper() == symbol)
+        firegate_qty = int(float(cycle.get("total_qty", 0) or 0))
+        if held < firegate_qty:
+            msg = f"{symbol} 계좌 {held}주 < FireGate {firegate_qty}주 — 반영 안 된 매도가 있어 MOC 보류"
+            self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
+            return {"symbol": symbol, "status": "skipped", "message": msg}
+        today = datetime.datetime.strptime(session, "%Y-%m-%d")
+        history = kis_api.get_overseas_order_history(start_date=(today - datetime.timedelta(days=1)).strftime("%Y%m%d"),
+                                                     end_date=(today + datetime.timedelta(days=1)).strftime("%Y%m%d"), symbol=symbol)
+        rows = history.get("orders", []) if isinstance(history, dict) else (history or [])
+        for row in rows:
+            if str(row.get("symbol", "")).upper() != symbol or str(row.get("side", row.get("action", ""))).upper() != "SELL":
+                continue
+            if str(row.get("status", "")).upper() in ("CANCELLED", "REJECTED"):
+                continue
+            if str(row.get("order_date", "")) >= session.replace("-", ""):
+                msg = f"{symbol} 이번 세션에 이미 매도 주문이 있어 MOC 보류 (주문번호 {row.get('order_no', '')})"
+                self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
+                self._set_config_value(key, json.dumps({"session": session, "status": "skipped_existing_sell"}))
+                return {"symbol": symbol, "status": "skipped", "message": msg}
+        qty = min(qty, held)
+        self._set_config_value(key, json.dumps({"session": session, "status": "sending", "qty": qty}))
+        try:
+            order = kis_api.sell_order(symbol, qty, price=0, order_type="MOC", exchange=exchange)
+        except Exception as exc:
+            self._set_config_value(key, json.dumps({"session": session, "status": "error", "qty": qty, "error": str(exc)[:200]}))
+            msg = f"{symbol} FireGate {plan['state_name']} MOC 매도 {qty}주 접수 실패: {str(exc)[:160]}"
+            self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_ERROR", action=ACTION_SELL, message=msg)
+            return {"symbol": symbol, "status": "error", "message": msg}
+        order_no = str((order or {}).get("order_no", "") or "")
+        self._set_config_value(key, json.dumps({"session": session, "status": "submitted", "qty": qty, "order_no": order_no}))
+        msg = f"{symbol} FireGate {plan['state_name']}: MOC 매도 {qty}주 접수 (주문번호 {order_no})"
+        self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SUBMITTED", action=ACTION_SELL, message=msg)
+        return {"symbol": symbol, "status": "submitted", "message": msg, "order_no": order_no}
+
     def calculate_buy_decision(self, cycle, prev_close, dip_reference=None):
         """
         매수 판단
@@ -1251,6 +1392,19 @@ class Engine:
         - prev_close: 전일 종가
         반환: dict {should_buy, buy_amount, loc_price, order_type, reason}
         """
+        reverse = self.firegate_reverse_plan(cycle)
+        if reverse is not None:
+            buys = reverse["buys"]
+            primary = buys[0] if buys else {}
+            return {
+                "should_buy": bool(buys),
+                "algorithm": "firegate_v4_reverse",
+                "loc_price": float(primary.get("loc_price", 0) or 0),
+                "order_type": "LOC",
+                "order_qty": int(primary.get("order_qty", 0) or 0),
+                "buy_orders": buys,
+                "reason": f"FireGate {reverse['state_name']}" + (" — 매수 없음 (MOC 매도일)" if reverse["moc_qty"] else ""),
+            }
         current_round = int(cycle["current_round"])
         division_count = int(cycle["division_count"])
         total_investment = float(cycle["total_investment"])
@@ -4392,7 +4546,18 @@ class Engine:
             if current_price > 0:
                 self.update_cycle_price(cycle["id"], current_price)
 
-            sell_orders = self._firegate_v4_sell_orders(cycle)
+            reverse = self.firegate_reverse_plan(cycle)
+            if reverse is not None:
+                # Reverse mode replaces the star/target lines entirely. On a
+                # MOC day there is no reservation: the MOC sell is a regular
+                # order placed in the US session (run_firegate_reverse_moc).
+                sell_orders = reverse["sells"]
+                if not sell_orders:
+                    skipped.append({"symbol": symbol, "cycle_id": cycle["id"], "label": "FireGate MOC", "price": 0,
+                                    "reason": f"FireGate {reverse['state_name']}: MOC 매도 {reverse['moc_qty']}주는 미국 장중에 접수"})
+                    continue
+            else:
+                sell_orders = self._firegate_v4_sell_orders(cycle)
             if not sell_orders:
                 target_price = self._loc_sell_target_price(cycle)
                 if target_price > 0:
@@ -4818,6 +4983,11 @@ class Engine:
     def _get_config_value(self, key, default=""):
         """struct 레벨 config 조회 헬퍼 — 캐시 사용"""
         return self.struct.get_config(key, default)
+
+    def _set_config_value(self, key, value, description="FireGate reverse-mode MOC marker"):
+        self.struct.set_config(key, value, description=description)
+        if self.struct.get_config(key, None) != value:
+            raise RuntimeError(f"설정 저장 확인 실패: {key}")
 
     def _configured_base_asset_krw(self):
         for key in ["dashboard_base_asset_krw", "daytrade_default_seed"]:

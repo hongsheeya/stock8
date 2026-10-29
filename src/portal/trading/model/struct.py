@@ -1101,6 +1101,10 @@ class Struct:
                                     state['message'] = str(result.get('message', '') or '')
                                     state['schedule_window'] = result.get('schedule_window', '')
                                     state['result_status'] = result.get('status', '')
+                                try:
+                                    state['reverse_moc'] = trading.run_firegate_reverse_moc()
+                                except Exception as exc:
+                                    state['reverse_moc'] = {'status': 'error', 'message': str(exc)[:200]}
                             else:
                                 for market in (('US',) if job.endswith('_us') else ('KS',)):
                                     seed_key = 'daytrade_us_default_seed' if market == 'US' else 'daytrade_default_seed'
@@ -2303,6 +2307,18 @@ class Struct:
             "rebuild": {"executed": False, "status": "locked", "message": message, "symbols": []},
         }
 
+    def run_firegate_reverse_moc(self):
+        """LIVE only: the MOC sell of a FireGate reverse-mode first day. KIS
+        takes MOC (ORD_DVSN 33) only as a regular order in the US session,
+        never as a reservation. Same switches as the LOC automation."""
+        if PAPER_MODE:
+            return {"status": "skipped", "message": "모의투자는 MOC 주문 미지원"}
+        if str(self.get_config("auto_trade_enabled", "false") or "false").lower() != "true":
+            return {"status": "off", "message": "무한매수 매매 OFF"}
+        if str(self.get_config("loc_auto_schedule_enabled", "true") or "true").lower() != "true":
+            return {"status": "off", "message": "LOC 자동 예약 비활성"}
+        return self.engine.run_firegate_reverse_moc()
+
     def run_due_loc_automation(self, force=False, reason="worker", verify=False, symbols=None):
         if PAPER_MODE:
             # Scheduler/API entry points must share the worker's capability
@@ -2330,6 +2346,15 @@ class Struct:
             return {"enabled": False, "executed": False, "message": "무한매수 매매 OFF"}
         if loc_enabled is False:
             return {"enabled": False, "executed": False, "message": "LOC 자동 예약 비활성"}
+        if self.get_config('kis_reservation_pending', ''):
+            try:
+                cleared = self.broker_api.clear_definite_reservation_rejection()
+            except Exception:
+                cleared = None
+            if cleared:
+                self.engine._log_event(str(cleared.get('symbol', '') or 'SYSTEM'), "", "LOC_RESERVATION_REJECTION_CLEARED",
+                                       message="KIS가 명확히 거절한 예약이라 접수 대기 표시를 해제했습니다: "
+                                               + str((cleared.get('response') or {}).get('msg1', ''))[:120])
         if self.get_config('kis_reservation_pending', ''):
             state = self._worker_state()
             if time.time() - state.get('pending_inspected_at', 0) >= 300:
@@ -2876,6 +2901,15 @@ class Struct:
     _LOG_ERROR_DAYS = 60
     _LOG_SOFT_CAP = 60000
     _LOG_CAP_NOISE_DAYS = 3
+    # 10-29: the LOC retry loop wrote the same skip/error line hundreds of
+    # times a day (LIVE 10-22: 593 IB_LOC_BUY_ERROR rows, 154 distinct). For
+    # finished days only the first and last of each repeated noise/error line
+    # (same day, event, symbol and message before " | ") are kept.
+    _LOG_DEDUPE_KEY = ("substr(created,1,10), event_type, coalesce(symbol,''), "
+                       "CASE WHEN instr(coalesce(message,''),' | ')>0 THEN substr(message,1,instr(message,' | ')-1) "
+                       "ELSE coalesce(message,'') END")
+    _LOG_VACUUM_FREE_RATIO = 0.25
+    _LOG_VACUUM_MIN_FREE_BYTES = 2 * 1024 * 1024
 
     def _trim_trade_logs(self, now=None):
         import gzip
@@ -2890,6 +2924,16 @@ class Struct:
         plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_NOISE_DAYS)), (self._LOG_ERROR_SQL, cutoff(self._LOG_ERROR_DAYS))]
         archive_dir = _os.path.join(_os.path.dirname(_os.path.abspath(database.database)), "log-archive")
         removed = 0
+        deduped = 0
+        vacuumed = False
+
+        def archive(rows):
+            _os.makedirs(archive_dir, exist_ok=True)
+            path = _os.path.join(archive_dir, f"trade_log-{now.strftime('%Y%m%d')}.jsonl.gz")
+            with gzip.open(path, "at", encoding="utf-8") as fh:
+                for row in rows:
+                    fh.write(_json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
         raw._db_enter()
         try:
             for step in range(2):
@@ -2899,11 +2943,7 @@ class Struct:
                     rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
                     if not rows:
                         continue
-                    _os.makedirs(archive_dir, exist_ok=True)
-                    path = _os.path.join(archive_dir, f"trade_log-{now.strftime('%Y%m%d')}.jsonl.gz")
-                    with gzip.open(path, "at", encoding="utf-8") as fh:
-                        for row in rows:
-                            fh.write(_json.dumps(row, ensure_ascii=False, default=str) + "\n")
+                    archive(rows)
                     database.execute_sql(f'DELETE FROM "trade_log" WHERE {where} AND created < ?', (before,))
                     removed += len(rows)
                 total = database.execute_sql('SELECT count(*) FROM "trade_log"').fetchone()[0]
@@ -2911,10 +2951,38 @@ class Struct:
                     plans = [(self._LOG_NOISE_SQL, cutoff(self._LOG_CAP_NOISE_DAYS))]
                     continue
                 break
+
+            key = self._LOG_DEDUPE_KEY
+            cursor = database.execute_sql(
+                f'SELECT * FROM (SELECT t.*, row_number() OVER (PARTITION BY {key} ORDER BY created, id) AS _rn, '
+                f'count(*) OVER (PARTITION BY {key}) AS _cnt FROM "trade_log" t '
+                f'WHERE ({self._LOG_NOISE_SQL} OR {self._LOG_ERROR_SQL}) AND created < ?) WHERE _rn > 1 AND _rn < _cnt',
+                (now.strftime("%Y-%m-%d"),))
+            columns = [c[0] for c in cursor.description]
+            rows = [{k: v for k, v in zip(columns, r) if k not in ("_rn", "_cnt")} for r in cursor.fetchall()]
+            if rows:
+                archive(rows)
+                ids = [row["id"] for row in rows]
+                for i in range(0, len(ids), 500):
+                    chunk = ids[i:i + 500]
+                    database.execute_sql(f'DELETE FROM "trade_log" WHERE id IN ({",".join("?" * len(chunk))})', tuple(chunk))
+                deduped = len(rows)
+                total -= deduped
+
+            # Deleting frees pages inside the file but does not shrink it.
+            pages = database.execute_sql("PRAGMA page_count").fetchone()[0]
+            free = database.execute_sql("PRAGMA freelist_count").fetchone()[0]
+            page_size = database.execute_sql("PRAGMA page_size").fetchone()[0]
+            if pages and free / pages >= self._LOG_VACUUM_FREE_RATIO and free * page_size >= self._LOG_VACUUM_MIN_FREE_BYTES:
+                try:
+                    database.execute_sql("VACUUM")
+                    vacuumed = True
+                except Exception:
+                    pass  # another connection is busy; the next run retries
         finally:
             raw._close_connection()
             raw._db_exit()
-        return {"removed": removed, "remaining": total}
+        return {"removed": removed, "deduped": deduped, "remaining": total, "vacuumed": vacuumed}
 
     def _maybe_trim_trade_logs(self):
         """At most every 6 hours per process."""
@@ -2929,9 +2997,7 @@ class Struct:
 
     def _run_background_maintenance(self):
         try:
-            maintenance = self.model("maintenance")
-            result = maintenance.database_maintenance() or {}
-            result["trade_log_trim"] = self._maybe_trim_trade_logs()
+            result = {"trade_log_trim": self._maybe_trim_trade_logs()}
             return {
                 "enabled": True,
                 "executed": True,
@@ -3101,7 +3167,7 @@ class Struct:
                     publish_result()
 
                     if maintenance_due:
-                        result["maintenance"] = {"executed": False, "running": True, "message": "백그라운드 DB 최적화/요약 정리 중", "interval_sec": maintenance_interval_sec}
+                        result["maintenance"] = {"executed": False, "running": True, "message": "주문 로그 정리 중", "interval_sec": maintenance_interval_sec}
                         publish_result()
                         result["maintenance"] = self._run_background_maintenance()
                         state["last_background_maintenance_ts"] = time.time()
