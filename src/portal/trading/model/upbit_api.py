@@ -181,9 +181,6 @@ class UpbitApi:
             }
         return out
 
-    def order_chance(self, market):
-        return self._request("GET", "/v1/orders/chance", {"market": market}, private=True)
-
     def buy_market_krw(self, market, krw_amount, identifier=""):
         """Market buy for a KRW amount (ord_type=price); the fee is charged on top."""
         amount = int(float(krw_amount))

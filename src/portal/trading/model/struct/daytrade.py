@@ -910,19 +910,6 @@ class Daytrade:
             "fee_buffer_ok": fee_buffer_ok,
         }
 
-    def volatility_profile(self, symbol, market="KS"):
-        sessions = self._prepare_dataset(symbol, market=market, period="5d", interval="5m")
-        result = self._volatility_from_sessions(sessions)
-        # 마지막 실제 가격 추가 (auto_candidates 예산 필터용, 이미 캐시된 데이터 사용)
-        last_price = 0.0
-        try:
-            if sessions and sessions[-1].get("bars"):
-                last_price = self._safe_float(sessions[-1]["bars"][-1].get("close", 0), 0)
-        except Exception:
-            pass
-        result["last_price"] = last_price
-        return result
-
     def _resolve_symbol_name(self, symbol):
         symbol = str(symbol or "").strip()
         if not symbol:
@@ -1074,19 +1061,6 @@ class Daytrade:
             return f"{symbol}.{market}"
         return symbol
 
-    def read_docs(self, market="KS"):
-        fs = self._fs()
-        report_path = self._market_docs_path("optimization-report.md", market=market)
-        if fs.exists(report_path) == False:
-            report_path = self._docs_path("optimization-report.md")
-        return {
-            "architecture": fs.read(self._docs_path("architecture.md")) if fs.exists(self._docs_path("architecture.md")) else "",
-            "vrev": fs.read(self._docs_path("vrev-model.md")) if fs.exists(self._docs_path("vrev-model.md")) else "",
-            "strategies": fs.read(self._docs_path("strategy-playbook.md")) if fs.exists(self._docs_path("strategy-playbook.md")) else "",
-            "live_mechanism": fs.read(self._docs_path("live-trading-mechanism.md")) if fs.exists(self._docs_path("live-trading-mechanism.md")) else "",
-            "report": fs.read(report_path) if fs.exists(report_path) else "",
-        }
-
     def latest_training(self, market="KS"):
         fs = self._fs()
         scoped_path = self._market_data_path("latest_training.json", market=market)
@@ -1224,17 +1198,6 @@ class Daytrade:
         result["market"] = market_scope
         result["cache_relaxed"] = True
         return result
-
-    def _validate_recommendation_cache(self, data, seed=0, strategy_id="", price_cap=0, market="KS"):
-        if not data or not data.get("recommendations"):
-            return None
-        
-        expected_key = self._recommendation_cache_key(seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market)
-        cached_key = data.get("cache_key", {}) if isinstance(data.get("cache_key", {}), dict) else {}
-        if self._recommendation_cache_matches(cached_key, expected_key, seed=seed, strategy_id=strategy_id, price_cap=price_cap, market=market) is False:
-            return None
-
-        return data
 
     def latest_recommendation(self, seed=0, strategy_id="", price_cap=0, max_age_sec=0, allow_stale_day=False, market="KS"):
         fs = self._fs()
@@ -3421,19 +3384,6 @@ print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
         self._save_profile_book_entries(profile_book_updates, market=market)
         self._save_recommendation(result, market=market)
         return result
-
-    def _recommendation_request_payload(self, candidates, seed, period, interval, min_sessions, price_cap, allowed_strategies, market="KS"):
-        profile = self._default_profile_for_market(market=market)
-        return {
-            "candidates": candidates,
-            "seed": seed,
-            "period": period,
-            "interval": interval,
-            "min_sessions": min_sessions,
-            "price_cap": price_cap,
-            "allowed_strategies": allowed_strategies,
-            "profile": profile,
-        }
 
     # =========================================================================
     # Artifacts

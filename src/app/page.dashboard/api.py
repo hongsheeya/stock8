@@ -52,15 +52,12 @@ _KIS_STATUS_FAILURE_TTL_SEC = 3.0
 _KIS_STICKY_SUCCESS_GRACE_SEC = 180.0
 _OVERVIEW_CACHE = _DASHBOARD_SHARED.setdefault('overview', {})
 _TRADE_PREVIEW_CACHE = _DASHBOARD_SHARED.setdefault('preview', {})
-_PROFIT_SUMMARY_CACHE = _DASHBOARD_SHARED.setdefault('profit', {})
 _US_LIVE_PRICE_CACHE = _DASHBOARD_SHARED.setdefault('us_price', {})
 _DUE_AUTOMATION_LAST_BUCKET = ""
 _CACHE_LOCK = _DASHBOARD_SHARED.setdefault('lock', threading.Lock())
 _SINGLEFLIGHT_EVENTS = _DASHBOARD_SHARED.setdefault('singleflight', {})
 _OVERVIEW_TTL_SEC = 30.0
 _TRADE_PREVIEW_TTL_SEC = 12.0
-_PROFIT_SUMMARY_TTL_SEC = 30.0
-_EXTERNAL_CYCLE_SYNC_TTL_SEC = 300.0
 _US_LIVE_PRICE_TTL_SEC = 10.0
 
 _FIREGATE_INFINITY_SOURCE = "infinitystock"
@@ -300,51 +297,6 @@ def _log(level, message):
 
 def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "y", "yes", "on")
-
-
-def _loc_schedule_mark_done(result):
-    if not isinstance(result, dict) or len(result) == 0:
-        return False
-    result = result or {}
-    status = str(result.get("status", "") or "").lower()
-    try:
-        error_count = int(float(result.get("error_count", 0) or 0))
-    except Exception:
-        error_count = 0
-    try:
-        scheduled_count = int(float(result.get("scheduled_count", 0) or 0))
-    except Exception:
-        scheduled_count = 0
-    try:
-        already_scheduled_count = int(float(result.get("already_scheduled_count", 0) or 0))
-    except Exception:
-        already_scheduled_count = 0
-    try:
-        skipped_count = int(float(result.get("skipped_count", 0) or 0))
-    except Exception:
-        skipped_count = 0
-    try:
-        missing_count = int(float(result.get("missing_count", 0) or 0))
-    except Exception:
-        missing_count = 0
-    expected_raw = result.get("expected_count", None)
-    expected_count = None
-    if expected_raw is not None:
-        try:
-            expected_count = int(float(expected_raw or 0))
-        except Exception:
-            expected_count = None
-    try:
-        satisfied_count = int(float(result.get("satisfied_count", scheduled_count + already_scheduled_count) or 0))
-    except Exception:
-        satisfied_count = scheduled_count + already_scheduled_count
-    if status in ("error", "partial_error", "partial_pending") or error_count > 0 or skipped_count > 0 or missing_count > 0:
-        return False
-    if expected_count is not None:
-        return satisfied_count >= expected_count
-    if scheduled_count > 0 or already_scheduled_count > 0:
-        return True
-    return status not in ("error", "partial_error") and error_count <= 0
 
 
 def _external_cycle_sync_verified(result):
@@ -636,24 +588,6 @@ def _yahoo_chart_extended_price(symbol, refresh=False):
     except Exception as e:
         _log("warning", f"Yahoo chart extended price failed [{symbol}]: {e}")
         return None
-
-
-def _config_or_env(trading, key, env_names, default=""):
-    value = ""
-    try:
-        getter = getattr(trading, "get_config", None)
-        if callable(getter):
-            value = getter(key, "")
-    except Exception:
-        value = ""
-    value = str(value or "").strip()
-    if value:
-        return value
-    for env_name in env_names or []:
-        env_value = str(os.environ.get(env_name, "") or "").strip()
-        if env_value:
-            return env_value
-    return default
 
 
 def _parse_feed_timestamp(value):
@@ -2554,62 +2488,6 @@ def cycle_detail():
         chart_data=chart_data,
         logs=log_list,
     )
-
-
-def _generate_mock_profit_summary(period):
-    """Mock 수익 요약 데이터 생성"""
-    now = _TIME.now()
-
-    # 기간에 따라 날짜 범위 결정
-    period_days = {"1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365, "ALL": 730}
-    days = period_days.get(period, 730)
-    start_date = now - datetime.timedelta(days=days)
-
-    # Mock 완료 사이클 통계
-    completed_count = max(2, days // 30)
-    realized_profit = round(random.uniform(180, 520) * (days / 90), 2)
-    unrealized_profit = round(random.uniform(-200, 450), 2)
-    total_invested = round(random.uniform(8000, 25000), 2)
-    total_profit = round(realized_profit + unrealized_profit, 2)
-    total_return = round((total_profit / total_invested * 100) if total_invested > 0 else 0, 2)
-
-    # Mock 사이클별 수익률
-    cycle_returns = [round(random.uniform(-8, 18), 2) for _ in range(completed_count)]
-    avg_cycle_return = round(sum(cycle_returns) / len(cycle_returns), 2) if cycle_returns else 0
-    best_cycle_return = max(cycle_returns) if cycle_returns else 0
-    worst_cycle_return = min(cycle_returns) if cycle_returns else 0
-
-    # Mock 일별 스냅샷 데이터 (자산 추이 차트용)
-    snapshots = []
-    base_asset = round(random.uniform(18000, 28000), 2)
-    trend = random.uniform(-0.001, 0.003)
-    # 최대 90포인트로 제한 (너무 많으면 차트가 느림)
-    step = max(1, days // 90)
-    for i in range(0, days, step):
-        d = start_date + datetime.timedelta(days=i)
-        noise = random.uniform(-0.015, 0.02)
-        asset = round(base_asset * (1 + trend * i + noise), 2)
-        profit = round(asset - base_asset, 2)
-        snapshots.append({
-            "date": d.strftime("%Y-%m-%d"),
-            "total_asset": asset,
-            "profit": profit,
-            "profit_rate": round((profit / base_asset * 100) if base_asset > 0 else 0, 2),
-        })
-
-    return {
-        "period": period,
-        "realized_profit": realized_profit,
-        "unrealized_profit": unrealized_profit,
-        "total_profit": total_profit,
-        "total_invested": total_invested,
-        "total_return": total_return,
-        "completed_cycles": completed_count,
-        "avg_cycle_return": avg_cycle_return,
-        "best_cycle_return": best_cycle_return,
-        "worst_cycle_return": worst_cycle_return,
-        "snapshots": snapshots,
-    }
 
 
 def _profit_store(trading):
