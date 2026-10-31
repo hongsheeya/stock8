@@ -190,6 +190,14 @@ export class Component implements OnInit, OnDestroy {
         return '';
     }
 
+    public get awakeLabel(): string {
+        const k = this.data?.worker?.keep_awake;
+        if (!k || !this.data?.available) return '';
+        if (!k.alive) return 'PC 절전 방지: 꺼짐 (서버 재시작 필요)';
+        if (k.error) return `PC 절전 방지 오류: ${k.error}`;
+        return k.awake ? `PC 절전 방지 중 · ${k.reason}` : 'PC 절전 방지: 필요 없는 시간 (대기)';
+    }
+
     public get progress(): any { return this.data?.shadow_progress || null; }
     public get feedLabel(): string {
         const f = this.engine?.feed || '';

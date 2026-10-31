@@ -1427,7 +1427,14 @@ class Struct:
             "hard_locked": COIN_HARD_LOCKED,
             "alive": bool(thread and thread.is_alive()),
             **{k: v for k, v in registry.items() if k not in ("thread", "wake", "lock_handle")},
+            "keep_awake": self._keep_awake_status(),
         }
+
+    def _keep_awake_status(self):
+        thread = _sys.__dict__.get("_stock8_keep_awake_thread")
+        state = dict(_sys.__dict__.get("_stock8_keep_awake") or {})
+        state["alive"] = bool(thread is not None and getattr(thread, "is_alive", lambda: False)())
+        return state
 
     def _coin_process_lock(self):
         """Non-blocking OS file lock held for the worker's lifetime: a second

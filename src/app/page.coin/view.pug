@@ -57,6 +57,7 @@ div(*ngIf="!loading", class="dx-page coin-page")
             div(class="dx-kpi-label") 다음 판단
             div(class="dx-kpi-value is-muted") {{mode === 'off' ? '-' : kst(engine?.next_decision_at)}}
             div(class="dx-kpi-sub") 4시간봉 마감 직후 (09·13·17·21·01·05시)
+            div(class="dx-kpi-sub", *ngIf="awakeLabel") {{awakeLabel}}
 
     section(class="dx-card", *ngIf="progress && !progress.error")
         div(class="dx-card-head")
