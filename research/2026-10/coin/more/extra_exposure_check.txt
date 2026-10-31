@@ -1,0 +1,2 @@
+select: W1 average weight 0.90 over 331 trades; V1 at fixed 0.90: {'cagr': 37.8, 'mdd': -19.5, 'mar': 1.94}; W1: {'cagr': 41.2, 'mdd': -17.5, 'mar': 2.35}
+holdout: W1 average weight 0.83 over 47 trades; V1 at fixed 0.83: {'cagr': 34.6, 'mdd': -16.2, 'mar': 2.13}; W1: {'cagr': 42.1, 'mdd': -16.6, 'mar': 2.53}

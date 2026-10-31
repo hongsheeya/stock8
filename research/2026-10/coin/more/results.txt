@@ -1,0 +1,20 @@
+kimchi premium days 3317: median +1.2%, >=5% on 10% of days
+V1 {'sel': {'cagr': 41.9, 'mdd': -21.3, 'mar': 1.97}, 'hold': {'cagr': 41.7, 'mdd': -18.6, 'mar': 2.24}, 'sel_hi': {'cagr': 38.4, 'mdd': -22.2, 'mar': 1.73}, 'sel_ex': {'cagr': 38.1, 'mdd': -33.8, 'mar': 1.13}} best coin KRW-ETH
+
+W1 {'target': 0.6}: sel {'cagr': 41.2, 'mdd': -17.5, 'mar': 2.35} | hold {'cagr': 42.1, 'mdd': -16.6, 'mar': 2.53} | x2 {'cagr': 38.0, 'mdd': -19.0, 'mar': 2.0} | ex-best {'cagr': 38.5, 'mdd': -24.3, 'mar': 1.58}
+   neighbors: [({'target': 0.4}, {'cagr': 34.9, 'mdd': -13.1, 'mar': 2.67}), ({'target': 0.8}, {'cagr': 43.0, 'mdd': -18.9, 'mar': 2.28})]
+   gates: {'1 sel MAR>=V1x1.1': True, '2 holdout MAR>=V1 & MDD>-35': True, '3 cost x2 MAR>=V1': True, '4 neighbors 2/2': True, '5 ex-best MAR>=V1': True} -> PASS
+
+W2 {'n': 50}: sel {'cagr': 38.1, 'mdd': -23.9, 'mar': 1.6} | hold {'cagr': 32.0, 'mdd': -17.0, 'mar': 1.88} | x2 {'cagr': 35.0, 'mdd': -25.3, 'mar': 1.38} | ex-best {'cagr': 39.2, 'mdd': -29.4, 'mar': 1.33}
+   neighbors: [({'n': 20}, {'cagr': 41.0, 'mdd': -20.4, 'mar': 2.01}), ({'n': 100}, {'cagr': 38.5, 'mdd': -19.4, 'mar': 1.99})]
+   gates: {'1 sel MAR>=V1x1.1': False, '2 holdout MAR>=V1 & MDD>-35': False, '3 cost x2 MAR>=V1': False, '4 neighbors 2/2': True, '5 ex-best MAR>=V1': True} -> FAIL
+
+W3 {'top': 2, 'weeks': 4}: sel {'cagr': 71.4, 'mdd': -55.8, 'mar': 1.28} | hold {'cagr': -31.1, 'mdd': -75.8, 'mar': -0.41} | x2 {'cagr': 68.2, 'mdd': -55.8, 'mar': 1.22} | ex-best {'cagr': 59.6, 'mdd': -56.2, 'mar': 1.06}
+   neighbors: [({'top': 1, 'weeks': 4}, {'cagr': 88.7, 'mdd': -63.5, 'mar': 1.4}), ({'top': 2, 'weeks': 2}, {'cagr': 82.8, 'mdd': -59.1, 'mar': 1.4}), ({'top': 2, 'weeks': 8}, {'cagr': 65.2, 'mdd': -66.9, 'mar': 0.97})]
+   gates: {'1 sel MAR>=V1x1.1': False, '2 holdout MAR>=V1 & MDD>-35': False, '3 cost x2 MAR>=V1': False, '4 neighbors 0/3': False, '5 ex-best MAR>=V1': False} -> FAIL
+
+W4 {'th': 0.05}: sel {'cagr': 40.4, 'mdd': -19.3, 'mar': 2.1} | hold {'cagr': 41.7, 'mdd': -18.6, 'mar': 2.24} | x2 {'cagr': 37.1, 'mdd': -20.1, 'mar': 1.84} | ex-best {'cagr': 39.8, 'mdd': -20.1, 'mar': 1.98}
+   neighbors: [({'th': 0.03}, {'cagr': 39.1, 'mdd': -18.4, 'mar': 2.12}), ({'th': 0.08}, {'cagr': 42.5, 'mdd': -18.4, 'mar': 2.31})]
+   gates: {'1 sel MAR>=V1x1.1': False, '2 holdout MAR>=V1 & MDD>-35': True, '3 cost x2 MAR>=V1': True, '4 neighbors 2/2': True, '5 ex-best MAR>=V1': True} -> FAIL
+
+verdict: {'W1': True, 'W2': False, 'W3': False, 'W4': False}
