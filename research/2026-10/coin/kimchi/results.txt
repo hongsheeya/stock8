@@ -1,0 +1,21 @@
+B window premium: median +15.3%, max +59.6%, >=5% on 48/61 days
+A window premium >=5% on 8% of days
+
+A base {'cagr': 18.3, 'mdd': -37.3, 'mar': 0.49} | filter {'cagr': 17.6, 'mdd': -36.0, 'mar': 0.49}
+   KRW-DOGE  base    +65.1% (64 trades)  filter    +43.2% (59 trades)
+   KRW-ADA   base   +659.0% (80 trades)  filter   +716.7% (74 trades)
+   KRW-SUI   base    +78.8% (40 trades)  filter    +93.2% (37 trades)
+   KRW-XLM   base   +764.3% (74 trades)  filter   +668.3% (69 trades)
+   KRW-TRX   base   +135.7% (96 trades)  filter    +64.5% (92 trades)
+   KRW-LINK  base    -40.2% (88 trades)  filter    -26.7% (82 trades)
+   KRW-AVAX  base    +30.4% (53 trades)  filter    +51.9% (49 trades)
+   KRW-DOT   base   +101.9% (67 trades)  filter   +159.7% (61 trades)
+   KRW-HBAR  base   +330.5% (80 trades)  filter   +247.3% (74 trades)
+   KRW-NEAR  base   +123.7% (54 trades)  filter    +90.7% (51 trades)
+   better 5, worse 5
+
+B base {'cagr': 641.9, 'mdd': -11.0, 'mar': 58.54} total +39.8% trades 16 | filter {'cagr': 149.1, 'mdd': -13.7, 'mar': 10.89} total +16.5% trades 7
+C select: base {'cagr': 41.2, 'mdd': -17.5, 'mar': 2.35} | filter {'cagr': 39.6, 'mdd': -15.2, 'mar': 2.61}
+C holdout: base {'cagr': 42.1, 'mdd': -16.6, 'mar': 2.53} | filter {'cagr': 42.1, 'mdd': -16.6, 'mar': 2.53}
+
+gates {'1 A MAR>=base x1.1': False, '2 A coins better 5 > worse 5': False, '3 B total>=base': False, '4 C select & holdout MAR>=base': True} -> FAIL
