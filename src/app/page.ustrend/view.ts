@@ -144,6 +144,12 @@ export class Component implements OnInit, OnDestroy {
         return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
     }
 
+    public weightPct(v: any): string {
+        if (v === null || v === undefined || v === '') return '-';
+        const n = Number(v);
+        return isFinite(n) ? Math.round(n * 100) + '%' : '-';
+    }
+
     public kst(sec: any): string {
         const n = Number(sec || 0);
         if (!n) return '-';

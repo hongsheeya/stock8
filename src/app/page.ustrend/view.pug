@@ -58,7 +58,7 @@ div(*ngIf="!loading", class="dx-page ust-page")
         div(class="dx-card-head")
             h2 종목별 현황
                 span(class="dx-count") {{sleeves.length}}
-            small 지수의 6개월(126거래일) 수익률이 플러스면 2배 ETF 보유, 마이너스면 현금
+            small 지수의 6개월(126거래일) 수익률이 플러스면 2배 ETF 보유, 마이너스면 현금 · 보유 비중은 min(100%, 35% ÷ 최근 20일 변동성), 20%p 이상 바뀔 때만 조정
         div(class="dx-empty", *ngIf="!sleeves.length") {{enabled ? '첫 판단을 준비하고 있습니다.' : '켜면 현황이 표시됩니다.'}}
         div(class="dx-table-wrap", *ngIf="sleeves.length")
             table(class="dx-table")
@@ -80,7 +80,9 @@ div(*ngIf="!loading", class="dx-page ust-page")
                                 small {{r.index}} 기준
                         td
                             span(class="dx-tag", [class.is-buy]="r.qty > 0", [class.is-warn]="r.pending") {{r.pending ? '주문 확인 중' : (r.qty > 0 ? '보유' : '현금')}}
-                        td(class="num", [class]="tone(r.signal?.mom_pct)") {{pct(r.signal?.mom_pct)}}
+                        td(class="num")
+                            span([class]="tone(r.signal?.mom_pct)") {{pct(r.signal?.mom_pct)}}
+                            small(*ngIf="r.signal?.vol_pct != null") 변동성 {{r.signal.vol_pct}}% · 목표 {{weightPct(r.signal?.target_w)}} · 지금 {{weightPct(r.weight)}}
                         td(class="num") {{r.qty}}
                         td(class="num") {{usd(r.price)}}
                         td(class="num")
