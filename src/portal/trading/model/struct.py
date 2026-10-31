@@ -966,6 +966,10 @@ class Struct:
                 self._ensure_live_coin_worker()
             except Exception as exc:
                 print(f"Stock8 coin worker start failed: {type(exc).__name__}")
+            try:
+                self._ensure_live_keep_awake_worker()
+            except Exception as exc:
+                print(f"Stock8 keep-awake worker start failed: {type(exc).__name__}")
             return
         owner = str(owner or self._current_user_id() or "").strip()
         if not owner:
@@ -1443,6 +1447,43 @@ class Struct:
         except OSError:
             handle.close()
             return None
+
+    def _ensure_live_keep_awake_worker(self):
+        """10-31: keep the PC from idle sleep while trading needs it (see
+        keep_awake.py). One thread owns the Windows request for the process."""
+        if PAPER_MODE or _os.name != "nt":
+            return
+        with _COIN_WORKER_LOCK:
+            if _sys.__dict__.get("_stock8_keep_awake_thread") is not None:
+                return
+            _sys.__dict__["_stock8_keep_awake_thread"] = True
+        mod = self.model("keep_awake")
+        coin_root = wiz.project.fs().abspath("data/live/coin")
+        state = mod.STATE
+
+        def run():
+            while True:
+                try:
+                    coin_on = False
+                    try:
+                        with wiz.server.app.flask.test_request_context("/"):
+                            coin_on = self.coin_policy_read().get("mode") in ("shadow", "live")
+                    except Exception:
+                        pass
+                    now = _dt.datetime.now(_dt.timezone.utc)
+                    awake, reason = mod.needed(now, coin_on=coin_on, coin_held=mod.coin_held(coin_root))
+                    if awake != state["awake"] or reason != state["reason"]:
+                        mod.apply(awake)
+                        state.update(awake=awake, reason=reason, since=_kst_now().strftime("%Y-%m-%d %H:%M:%S"))
+                        print(f"Stock8 keep-awake: {'ON ' + reason if awake else 'OFF'}")
+                    state["error"] = ""
+                except Exception as exc:
+                    state["error"] = str(exc)[:200]
+                time.sleep(60)
+
+        thread = threading.Thread(target=run, daemon=True, name="stock8-live-keep-awake")
+        _sys.__dict__["_stock8_keep_awake_thread"] = thread
+        thread.start()
 
     def _ensure_live_coin_worker(self):
         if PAPER_MODE or COIN_HARD_LOCKED:
