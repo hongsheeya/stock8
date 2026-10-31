@@ -184,6 +184,61 @@ class CoinEngineTests(unittest.TestCase):
         again = self.engine("shadow")
         self.assertEqual(again.state["sleeves"]["KRW-BTC"]["trades"], 1)
 
+    def _volatile(self):
+        """Same breakout, but the 75 days before swing +/-4% day to day."""
+        start = E0 - 76 * 24 * H
+
+        def price(i):
+            t = start + i * H
+            if t >= E0 - 4 * H:
+                return 130.0
+            return 100.0 * (1.04 if (i // 24) % 2 else 1.0)
+
+        self.api.candles = hourly(start, 76 * 24 + 12, price)
+
+    def test_w1_volatile_coin_enters_with_a_smaller_size(self):
+        self._volatile()
+        eng = self.engine("shadow")
+        eng.step()
+        sleeve = eng.state["sleeves"]["KRW-BTC"]
+        self.assertTrue(sleeve["long"], sleeve["last_reason"])
+        weight, vol = S.vol_weight(S.daily_closes(self.api.candles, E0))
+        self.assertGreater(vol, 0.6)
+        self.assertLess(weight, 0.9)
+        self.assertAlmostEqual(sleeve["cost_krw"], 1_000_000 * weight)
+        self.assertAlmostEqual(sleeve["cash"], 1_000_000 * (1 - weight))
+        self.assertIn("비중", sleeve["last_reason"])
+        # the leftover cash comes back with the proceeds
+        self.api.price = sleeve["stop"] * 0.99
+        self.clock.t += 600
+        eng.step()
+        sleeve = eng.state["sleeves"]["KRW-BTC"]
+        self.assertFalse(sleeve["long"])
+        self.assertGreater(sleeve["cash"], 1_000_000 * (1 - weight))
+
+    def test_w1_live_order_amount_and_switch_off(self):
+        self._volatile()
+        weight, _vol = S.vol_weight(S.daily_closes(self.api.candles, E0))
+        eng = self.engine("live", account_fp="fp", live_confirmed_at="2026-10-31")
+        eng.step()
+        self.assertEqual(len(self.api.buys), 1)
+        self.assertEqual(self.api.buys[0][1], int(1_000_000 * weight / (1 + engine_mod.FEE_SIDE)))
+        self.setUp()
+        self._volatile()
+        eng = self.engine("shadow", vol_sizing=False)
+        eng.step()
+        self.assertAlmostEqual(eng.state["sleeves"]["KRW-BTC"]["cost_krw"], 1_000_000)
+
+    def test_w1_weight_bounds(self):
+        # a breakout day inside the 30-day window counts toward the volatility
+        eng = self.engine("shadow")
+        eng.step()
+        weight, _vol = S.vol_weight(S.daily_closes(self.api.candles, E0))
+        self.assertAlmostEqual(eng.state["sleeves"]["KRW-BTC"]["cost_krw"], 1_000_000 * weight)
+        self.assertEqual(S.vol_weight([(0, 100.0)] * 5), (1.0, None))  # too little history: full size
+        calm = [(i, 100.0 * (1.001 if i % 2 else 1.0)) for i in range(40)]
+        self.assertEqual(S.vol_weight(calm)[0], 1.0)
+
     def test_entry_is_skipped_when_the_bid_is_already_at_the_stop(self):
         for mode in ("shadow", "live"):
             with self.subTest(mode=mode):

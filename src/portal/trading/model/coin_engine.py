@@ -93,6 +93,8 @@ def normalize_policy(raw):
         "live_confirmed_at": str(raw.get("live_confirmed_at", "") or ""),
         "resume_at": str(raw.get("resume_at", "") or ""),
         "probe": bool(raw.get("probe", True)),
+        # 10-31 W1: size entries by 30-day volatility (user applied it to the shadow run)
+        "vol_sizing": bool(raw.get("vol_sizing", True)),
         "updated_at": str(raw.get("updated_at", "") or ""),
     }
 
@@ -311,7 +313,8 @@ class CoinEngine:
                     elif float(sleeve.get("cash") or 0) < MIN_ORDER_KRW:
                         action, reason = "WAIT", "슬리브 현금 부족"
                     else:
-                        self._enter(market, sleeve, position, reason, E)
+                        weight, vol = S.vol_weight(daily) if self.policy.get("vol_sizing", True) else (1.0, None)
+                        self._enter(market, sleeve, position, reason, E, weight=weight, vol=vol)
                         action, reason = sleeve.get("last_action", action), sleeve.get("last_reason", reason)
             sleeve["last_action"], sleeve["last_reason"] = action, reason
             sleeve["decided_bar_end"] = E
@@ -324,7 +327,10 @@ class CoinEngine:
     def _identifier(self, market, side, stamp):
         return f"s8c-{market.split('-')[-1]}-{int(stamp)}-{side}"
 
-    def _enter(self, market, sleeve, position, reason, E):
+    def _enter(self, market, sleeve, position, reason, E, weight=1.0, vol=None):
+        weight = max(0.0, min(1.0, float(weight)))
+        if weight < 1.0:
+            reason += f" · 비중 {weight * 100:.0f}% (30일 변동성 {vol * 100:.0f}%)" if vol else f" · 비중 {weight * 100:.0f}%"
         book = self.api.orderbook([market]).get(market, {})
         bid = float(book.get("bid") or 0)
         if 0 < bid <= float(position["stop"]):
@@ -340,18 +346,19 @@ class CoinEngine:
                 sleeve.update(last_action="SKIP", last_reason="호가 없음 — 진입 보류")
                 return
             cash = float(sleeve["cash"])
-            volume = self.S.floor_volume(cash * (1 - FEE_SIDE) / ask)
-            cost = cash
-            sleeve.update(long=True, volume=volume, entry_px=ask, entry_time=int(self.now()), cost_krw=cost, cash=0.0,
+            invest = cash * weight
+            volume = self.S.floor_volume(invest * (1 - FEE_SIDE) / ask)
+            cost = invest
+            sleeve.update(long=True, volume=volume, entry_px=ask, entry_time=int(self.now()), cost_krw=cost, cash=cash - invest,
                           hh=position["hh"], stop=position["stop"], signal_bar_end=E, last_bar_end=E,
                           last_action="ENTER", last_reason=reason)
             self._log("COIN_SHADOW_BUY", market, "BUY", f"[모의] {market} 매수 {volume} @ ₩{ask:,.4f} · {reason}",
-                      {"volume": volume, "price": ask, "funds": cost, "stop": position["stop"], "bar_end": E}, price=ask)
+                      {"volume": volume, "price": ask, "funds": cost, "stop": position["stop"], "bar_end": E, "weight": round(weight, 3)}, price=ask)
             return
         # live
         balances = self.api.balances()
         krw = float((balances.get("KRW") or {}).get("balance", 0) or 0)
-        amount = int(math.floor(min(float(sleeve["cash"]), float(self.policy["max_order_krw"]), krw) / (1 + FEE_SIDE)))
+        amount = int(math.floor(min(float(sleeve["cash"]) * weight, float(self.policy["max_order_krw"]), krw) / (1 + FEE_SIDE)))
         if amount < MIN_ORDER_KRW:
             sleeve.update(last_action="SKIP", last_reason=f"주문 가능 원화 부족 (가능 ₩{int(krw):,}, 슬리브 ₩{int(sleeve['cash']):,})")
             self._log("COIN_BUY_SKIPPED", market, "SKIP", f"{market} 매수 보류: {sleeve['last_reason']}", {}, noise=True)

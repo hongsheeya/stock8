@@ -26,6 +26,11 @@ DONCHIAN_N = 55
 ATR_N = 14
 ATR_K = 4.0
 DAILY_MA = 50
+# 10-31 W1 volatility sizing (research/2026-10/coin/more, pre-registered):
+# entry size = min(1, 60% / the coin's 30-day daily-return volatility,
+# annualized with 365 days), fixed for the trade. Signals are unchanged.
+VOL_SIZE_TARGET = 0.60
+VOL_SIZE_DAYS = 30
 
 
 def build_bars(candles, bar_sec=BAR_SEC):
@@ -61,6 +66,19 @@ def daily_closes(candles, now_sec):
         if bar["end"] <= now_sec:
             out.append((bar["start"], bar["c"]))
     return out
+
+
+def vol_weight(daily, target=VOL_SIZE_TARGET, days=VOL_SIZE_DAYS):
+    """daily: [(day_start, close)] of completed days -> (weight, annual vol or None)."""
+    closes = [float(c) for _t, c in daily[-(days + 1):]]
+    if len(closes) < days + 1:
+        return 1.0, None
+    rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+    mean = sum(rets) / len(rets)
+    vol = (sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)) ** 0.5 * 365 ** 0.5
+    if vol <= 0:
+        return 1.0, vol
+    return min(1.0, target / vol), vol
 
 
 def atr_series(bars, n=ATR_N):
@@ -194,6 +212,8 @@ class CoinStrategy:
     replay = staticmethod(replay)
     trade_return = staticmethod(trade_return)
     floor_volume = staticmethod(floor_volume)
+    vol_weight = staticmethod(vol_weight)
+    VOL_SIZE_TARGET = VOL_SIZE_TARGET
 
 
 Model = CoinStrategy
