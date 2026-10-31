@@ -13,6 +13,13 @@ MDD -44%; whole period +18.7%/yr MDD -44% vs QLD+SSO held +20.7%/yr MDD -84%
 and QQQ+SPY held +13.8%/yr MDD -54%. It is risk control, not extra return:
 V-shaped rebounds (2019, 2020, 2023) are missed.
 
+10-31 E3 volatility targeting (research/2026-10/us/a_plus, pre-registered,
+the only one of four A-plus candidates to pass; user applied it to PAPER):
+while a sleeve is ON its weight is min(1, 35% / the ETF's 20-day realized
+volatility, annualized), the rest cash. The weight is changed only when the
+new target differs from the last applied one by 20%p or more. 2007-2026:
+MAR 0.47 vs 0.42, MDD -36% vs -44%, 2022 -30% vs -38.5%, CAGR -1.4%p.
+
 The engine keeps its own ledger (cash, qty per sleeve) and trades only the
 quantity it owns; nothing here touches the day-trade or infinite-buy lanes.
 """
@@ -37,6 +44,9 @@ TRADE_END = (15, 30)
 LIMIT_BUFFER = 0.01           # KIS has no US market order: marketable limit
 CASH_USE = 0.99               # leave room for the limit buffer and fees
 FEE_SIDE = 0.0007             # PAPER ledger estimate per side (event rate)
+VOL_TARGET = 0.35             # E3: annualized volatility target per sleeve
+VOL_DAYS = 20
+VOL_BAND = 0.20               # E3: re-size only on a 20%p change of the target
 PENDING_CHECK_SEC = 60
 PENDING_GIVE_UP_SEC = 15 * 60
 SEED_MIN, SEED_MAX, SEED_DEFAULT = 1000, 1_000_000, 20_000
@@ -61,6 +71,25 @@ def momentum(closes, lookback=LOOKBACK):
         return None, None
     pct = (values[-1] / values[-1 - lookback] - 1) * 100
     return pct > 0, pct
+
+
+def realized_vol(closes, days=VOL_DAYS):
+    """Annualized stdev of the last `days` daily returns (sample), or None."""
+    values = [float(c) for c in closes if c and float(c) > 0]
+    if len(values) <= days:
+        return None
+    rets = [values[i] / values[i - 1] - 1 for i in range(len(values) - days, len(values))]
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    return math.sqrt(var) * math.sqrt(252)
+
+
+def target_weight(on, vol):
+    if not on:
+        return 0.0
+    if not vol or vol <= 0:
+        return 1.0
+    return min(1.0, VOL_TARGET / vol)
 
 
 def completed(rows, session_date):
@@ -184,32 +213,46 @@ class UsTrendHold:
         if cached.get("session") == session:
             return cached.get("by_index") or {}
         by_index = {}
-        for index, _etf in PAIRS:
+        for index, etf in PAIRS:
             try:
                 closes = completed(self.closes_fn(index) or [], session)
             except Exception as exc:
                 closes = []
                 self._log("USTH_DATA", index, "DATA", f"{index} 일봉 조회 실패: {exc}", {})
+            try:
+                vol = realized_vol(completed(self.closes_fn(etf) or [], session))
+            except Exception as exc:
+                vol = None
+                self._log("USTH_DATA", etf, "DATA", f"{etf} 일봉 조회 실패: {exc}", {})
             on, pct = momentum(closes)
             by_index[index] = {"on": on, "mom_pct": None if pct is None else round(pct, 2),
-                               "last_close": closes[-1] if closes else None, "bars": len(closes)}
-        if all(row["on"] is not None for row in by_index.values()):
+                               "last_close": closes[-1] if closes else None, "bars": len(closes),
+                               "vol_pct": None if vol is None else round(vol * 100, 1),
+                               "target_w": None if on is None or (on and vol is None) else round(target_weight(on, vol), 3)}
+        if all(row["on"] is not None and row["target_w"] is not None for row in by_index.values()):
             # cache only a complete read; a failed source is retried next tick
             self.state["signals"] = {"session": session, "by_index": by_index}
         return by_index
 
     def _rebalance(self, etf, sleeve, signal, session, now):
-        if not signal or signal.get("on") is None:
+        if not signal or signal.get("on") is None or signal.get("target_w") is None:
             sleeve["last_reason"] = "일봉 데이터 부족 — 이번 회차는 현 상태 유지"
             return
         want = bool(signal["on"])
-        held = int(sleeve.get("qty") or 0) > 0
+        held_qty = int(sleeve.get("qty") or 0)
         mom = signal.get("mom_pct")
+        want_w = float(signal["target_w"])
+        cur_w = sleeve.get("target_w")
+        if cur_w is None:  # ledgers from before E3 held the full sleeve
+            cur_w = 1.0 if held_qty > 0 else 0.0
+        cur_w = float(cur_w)
         reason = f"{sleeve['index']} 6개월 수익률 {mom:+.2f}% → {'보유' if want else '현금'}"
+        if want:
+            reason += f" · 변동성 {signal.get('vol_pct')}% → 목표 비중 {want_w * 100:.0f}%"
         self._decision(session, etf, want, mom)
-        if want == held:
+        if (not want and held_qty == 0) or (want and cur_w > 0 and abs(want_w - cur_w) < VOL_BAND):
             sleeve["last_session"] = session
-            sleeve["last_reason"] = reason + " (변경 없음)"
+            sleeve["last_reason"] = reason + (f" (변경 없음, 적용 중 {cur_w * 100:.0f}%)" if want else " (변경 없음)")
             return
         quote = self.broker.get_current_price(etf, exchange=PRICE_EXCHANGE) or {}
         price = float(quote.get("price") or 0)
@@ -217,8 +260,11 @@ class UsTrendHold:
             sleeve["last_reason"] = f"{etf} 현재가 없음 — 다음 확인 때 재시도"
             return
         before = self._broker_qty(etf)
-        if want:
-            qty = int(math.floor(float(sleeve["cash"]) * CASH_USE / (price * (1 + LIMIT_BUFFER))))
+        equity = float(sleeve["cash"]) + held_qty * price
+        desired = int(math.floor(equity * want_w / (price * (1 + LIMIT_BUFFER)))) if want else 0
+        delta = desired - held_qty
+        if delta > 0:
+            qty = min(delta, int(math.floor(float(sleeve["cash"]) * CASH_USE / (price * (1 + LIMIT_BUFFER)))))
             if qty <= 0:
                 sleeve["last_session"] = session
                 sleeve["last_reason"] = reason + " · 시드 부족으로 매수 불가"
@@ -226,20 +272,26 @@ class UsTrendHold:
             limit = round_usd(price * (1 + LIMIT_BUFFER))
             order = self.broker.buy_order(etf, qty, price=limit, order_type="MARKET", exchange=ORDER_EXCHANGE)
             side = "BUY"
-        else:
-            qty = int(sleeve["qty"])
+        elif delta < 0:
+            qty = -delta
             if before < qty:
                 # the account holds less than this ledger: sell what exists, never more
                 qty = before
             if qty <= 0:
                 self._close(etf, sleeve, 0, 0.0, reason + " · 계좌에 보유 없음 (원장 정리)", session)
+                sleeve["target_w"] = want_w
                 return
             limit = round_usd(price * (1 - LIMIT_BUFFER))
             order = self.broker.sell_order(etf, qty, price=limit, order_type="MARKET", exchange=ORDER_EXCHANGE)
             side = "SELL"
+        else:
+            sleeve["target_w"] = want_w
+            sleeve["last_session"] = session
+            sleeve["last_reason"] = reason + " (수량 변화 없음)"
+            return
         sleeve["pending"] = {"side": side, "qty": qty, "limit": limit, "quote": price, "before_qty": before,
                              "before_cost": self._broker_cost(etf), "order_no": str((order or {}).get("order_no", "")),
-                             "submitted_at": now, "session": session, "reason": reason}
+                             "submitted_at": now, "session": session, "reason": reason, "target_w": want_w}
         sleeve["last_action"] = side
         sleeve["last_reason"] = reason + f" · {('매수' if side == 'BUY' else '매도')} {qty}주 주문 (지정가 ${limit})"
         self._log("USTH_ORDER", etf, side, f"미장 추세 보유 {etf} {'매수' if side == 'BUY' else '매도'} {qty}주 주문 · {reason}",
@@ -301,6 +353,7 @@ class UsTrendHold:
                     sleeve["qty"] = int(sleeve.get("qty") or 0) + done
                     sleeve["cost_usd"] = float(sleeve.get("cost_usd") or 0) + cost
                     sleeve["entry_px"] = fill_px
+                    sleeve["target_w"] = float(pending.get("target_w", 1.0))
                     sleeve["last_session"] = pending["session"]
                     sleeve["last_reason"] = pending["reason"] + f" · 매수 {done}주 @ ${fill_px:.2f} 체결"
                     self._log("USTH_FILL", etf, "BUY", f"미장 추세 보유 {etf} {done}주 매수 체결 ${fill_px:.2f}",
@@ -310,6 +363,7 @@ class UsTrendHold:
             else:
                 if done > 0:
                     self._close(etf, sleeve, done, fill_px, pending["reason"], pending["session"], order_no=pending.get("order_no", ""))
+                    sleeve["target_w"] = float(pending.get("target_w", 0.0)) if sleeve["qty"] > 0 else 0.0
                 else:
                     sleeve["last_reason"] = pending["reason"] + " · 매도 미체결 — 다음 확인 때 재시도"
 
@@ -374,6 +428,8 @@ class UsTrendHold:
                             "unrealized_usd": round(int(s.get("qty") or 0) * price - float(s.get("cost_usd") or 0), 2) if s.get("qty") else 0.0,
                             "realized_usd": round(float(s.get("realized_usd") or 0), 2), "trades": s.get("trades", 0),
                             "wins": s.get("wins", 0), "pending": bool(s.get("pending")), "signal": sig,
+                            "target_w": s.get("target_w"),
+                            "weight": round(int(s.get("qty") or 0) * price / value, 3) if value > 0 else 0.0,
                             "last_session": s.get("last_session", ""), "last_reason": s.get("last_reason", "")})
         equity = float(self.state.get("equity") or 0)
         peak = float(self.state.get("peak_equity") or 0)
@@ -404,5 +460,9 @@ UsTrendHold.SEED_MAX = SEED_MAX
 UsTrendHold.normalize_policy = staticmethod(normalize_policy)
 UsTrendHold.momentum = staticmethod(momentum)
 UsTrendHold.completed = staticmethod(completed)
+UsTrendHold.realized_vol = staticmethod(realized_vol)
+UsTrendHold.target_weight = staticmethod(target_weight)
+UsTrendHold.VOL_TARGET = VOL_TARGET
+UsTrendHold.VOL_BAND = VOL_BAND
 
 Model = UsTrendHold

@@ -1,4 +1,5 @@
-"""US daily trend hold (10-23, PAPER only): frozen 6-month momentum rule, own ledger."""
+"""US daily trend hold (10-23, PAPER only): frozen 6-month momentum rule, own ledger.
+10-31: E3 volatility targeting sizes the held sleeve."""
 import calendar
 import datetime
 import importlib.util
@@ -31,6 +32,23 @@ def closes(trend_up, n=200, end="2026-10-20"):
         rows.append((d.isoformat(), price))
     rows.append((end, 1.0))  # today's partial bar must be ignored
     return sorted(rows)
+
+
+def choppy(daily_move, n=60, end="2026-10-20"):
+    """An ETF alternating +/- daily_move: annualized vol ~ daily_move * sqrt(252)."""
+    day = datetime.date.fromisoformat(end)
+    rows, d, price = [], day, 100.0
+    dates = []
+    for _ in range(n):
+        d -= datetime.timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= datetime.timedelta(days=1)
+        dates.append(d)
+    for i, d in enumerate(sorted(dates)):
+        price *= (1 + daily_move) if i % 2 else (1 - daily_move)
+        rows.append((d.isoformat(), price))
+    rows.append((end, 1.0))
+    return rows
 
 
 class FakeBroker:
@@ -90,6 +108,7 @@ class TrendHoldTests(unittest.TestCase):
         self.broker = FakeBroker()
         self.clock = Clock(T0)
         self.up = {"QQQ": True, "SPY": True}
+        self.etf_move = {}  # ETF -> daily +/- move; default: calm (full weight)
         self.fail = set()
         self.logs = []
 
@@ -100,7 +119,9 @@ class TrendHoldTests(unittest.TestCase):
         if symbol in self.fail:
             raise RuntimeError("no data")
         session = mod.et_now(self.clock.t).date().isoformat()
-        return closes(self.up[symbol], end=session)
+        if symbol in self.etf_move:
+            return choppy(self.etf_move[symbol], end=session)
+        return closes(self.up.get(symbol, True), end=session)
 
     def engine(self, enabled=True, seed=20000, holiday=""):
         return E(self.broker, self.tmp.name, {"enabled": enabled, "seed_usd": seed}, self._closes,
@@ -112,6 +133,59 @@ class TrendHoldTests(unittest.TestCase):
         self.assertTrue(on)
         self.assertAlmostEqual(pct, 10.0)
         self.assertEqual(E.completed([("2026-10-19", 2.0), ("2026-10-20", 3.0)], "2026-10-20"), [2.0])
+
+    def test_realized_vol_and_target_weight(self):
+        self.assertIsNone(E.realized_vol([100.0] * 20))
+        rows = [c for _d, c in choppy(0.03)][:-1]
+        vol = E.realized_vol(rows)
+        self.assertAlmostEqual(vol, 0.03 * 252 ** 0.5, delta=0.02)
+        self.assertEqual(E.target_weight(False, vol), 0.0)
+        self.assertEqual(E.target_weight(True, 0.20), 1.0)
+        self.assertAlmostEqual(E.target_weight(True, 0.70), 0.5)
+
+    def test_high_volatility_enters_at_the_target_weight(self):
+        self.etf_move = {"QLD": 0.04}  # ~63% vol -> ~55% weight
+        engine = self.engine()
+        engine.step()
+        qld = [o for o in self.broker.orders if o[1] == "QLD"][0]
+        want = E.STATUS["sleeves"][0]["signal"]["target_w"]
+        self.assertLess(want, 0.6)
+        self.assertEqual(qld[2], int(10000 * want // (100 * 1.01)))
+        self.assertEqual([o[2] for o in self.broker.orders if o[1] == "SSO"], [196])  # calm SSO: full
+        self.clock.t += 61
+        engine.step()
+        self.assertAlmostEqual(engine.state["sleeves"]["QLD"]["target_w"], want)
+
+    def test_held_sleeve_is_trimmed_only_on_a_20pt_change(self):
+        engine = self.engine()
+        engine.step()
+        self.clock.t += 61
+        engine.step()
+        self.assertEqual(engine.state["sleeves"]["QLD"]["qty"], 98)
+        engine.state["sleeves"]["QLD"].pop("target_w")  # a ledger from before E3
+        # next session: vol ~32% -> target ~100%: no order
+        self.etf_move = {"QLD": 0.02}
+        self.clock.t += 24 * 3600
+        engine.step()
+        self.assertEqual(len(self.broker.orders), 2)
+        self.assertIn("변경 없음", engine.state["sleeves"]["QLD"]["last_reason"])
+        # following session: vol ~63% -> ~55%: sell down to it, keep the rest
+        self.etf_move = {"QLD": 0.04}
+        self.clock.t += 24 * 3600
+        engine.step()
+        side, sym, qty, _ = self.broker.orders[-1]
+        self.assertEqual((side, sym), ("SELL", "QLD"))
+        self.clock.t += 61
+        engine.step()
+        qld = engine.state["sleeves"]["QLD"]
+        self.assertEqual(qld["qty"], 98 - qty)
+        self.assertGreater(qld["qty"], 40)
+        self.assertLess(qld["target_w"], 0.6)
+        # momentum off: sell the rest
+        self.up["QQQ"] = False
+        self.clock.t += 24 * 3600
+        engine.step()
+        self.assertEqual(self.broker.orders[-1][:3], ("SELL", "QLD", 98 - qty))
 
     def test_policy_is_clamped(self):
         self.assertEqual(E.normalize_policy({"seed_usd": 5})["seed_usd"], E.SEED_MIN)
