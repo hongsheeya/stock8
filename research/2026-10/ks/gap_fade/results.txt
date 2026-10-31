@@ -1,0 +1,8 @@
+G1 gap 0.5%: trades 1013 (100.2/yr)  full (np.float64(-17.0), np.float64(-91.8), np.float64(-0.19))  first (np.float64(1.8), np.float64(-49.9), np.float64(0.04))  second (np.float64(-32.2), np.float64(-87.1), np.float64(-0.37))  @0.15% (np.float64(-32.2), np.float64(-98.3), np.float64(-0.33))
+   gap up -> inverse: n 590 mean/trade -0.052% (after cost) gross +0.048%  full (np.float64(-5.6), np.float64(-67.9), np.float64(-0.08))
+   gap down -> leverage: n 423 mean/trade -0.259% (after cost) gross -0.159%  full (np.float64(-12.1), np.float64(-77.6), np.float64(-0.16))
+   by year: {2017: np.float64(-1.2), 2018: np.float64(28.7), 2019: np.float64(-1.1), 2020: np.float64(-23.2), 2021: np.float64(17.5), 2022: np.float64(-18.2), 2023: np.float64(-18.0), 2024: np.float64(-23.2), 2025: np.float64(-24.0), 2026: np.float64(-64.9)}
+   placebo: mean/trade -0.138% vs random -0.087%  p=0.785
+   neighbors: {0.003: (np.float64(-24.2), np.float64(-94.1), np.float64(-0.26)), 0.008: (np.float64(-16.4), np.float64(-90.0), np.float64(-0.18))}
+   unseen 2010-02~2016-09 long side: n 191 (np.float64(-7.4), np.float64(-45.5), np.float64(-0.16)) mean/trade -0.246%
+gates {'1 halves>0': np.False_, '2 @0.15%>0': np.False_, '3 placebo p<0.01': np.False_, '4 MAR>=0.3': np.False_, '5 neighbors>0': False, '6 unseen long>0': np.False_} -> FAIL
