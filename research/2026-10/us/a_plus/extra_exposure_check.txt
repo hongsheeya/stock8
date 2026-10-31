@@ -1,0 +1,6 @@
+E3 average weight while A is on: 0.932
+A x0.93: CAGR +17.4 MDD -41.7 MAR 0.42 | halves 0.39 / 0.52 | 2022 -36.2
+A x0.75: CAGR +14.3 MDD -34.8 MAR 0.41 | halves 0.40 / 0.51 | 2022 -29.8
+A x0.85: CAGR +16.0 MDD -38.7 MAR 0.41 | halves 0.39 / 0.52 | 2022 -33.4
+E3 rolling 3y CAGR minus A x avg, share of windows E3 better:
+  44% of 3-year windows

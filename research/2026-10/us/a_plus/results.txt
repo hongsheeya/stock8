@@ -1,0 +1,22 @@
+data 2006-06-21 ~ 2026-10-30 (5123 days)
+
+        CAGR     MDD   MAR | 1st MAR 2nd MAR | MAR@.25 |   2022 | turn/yr
+A      +18.5   -44.2  0.42 |    0.39    0.53 |    0.38 |  -38.5 | 6.5
+E1     +18.7   -49.9  0.37 |    0.41    0.45 |    0.31 |  -44.5 | 13.0
+E2     +20.2   -47.0  0.43 |    0.40    0.55 |    0.36 |  -42.5 | 13.4
+E3     +17.1   -36.1  0.47 |    0.48    0.56 |    0.43 |  -30.4 | 5.6
+E4      +6.3   -31.6  0.20 |    0.37    0.19 |    0.16 |  -11.3 | 6.4
+
+rebound years: {'A': {2010: np.float64(-0.4), 2011: np.float64(-20.3), 2015: np.float64(-7.6), 2019: np.float64(23.4), 2020: np.float64(39.6), 2023: np.float64(56.3)}, 'E1': {2010: np.float64(-3.2), 2011: np.float64(-18.5), 2015: np.float64(-9.3), 2019: np.float64(25.7), 2020: np.float64(38.2), 2023: np.float64(57.9)}, 'E2': {2010: np.float64(-2.8), 2011: np.float64(-20.6), 2015: np.float64(-9.6), 2019: np.float64(21.4), 2020: np.float64(44.1), 2023: np.float64(67.0)}, 'E3': {2010: np.float64(3.8), 2011: np.float64(-12.7), 2015: np.float64(-7.8), 2019: np.float64(16.9), 2020: np.float64(30.8), 2023: np.float64(45.8)}, 'E4': {2010: np.float64(-1.8), 2011: np.float64(0.6), 2015: np.float64(-7.8), 2019: np.float64(7.6), 2020: np.float64(-3.1), 2023: np.float64(14.3)}}
+
+neighbors (full MAR @0.10%, A = 0.418 )
+  E1: {'bond': 'TLT'} 0.325, {'bond': 'SHY'} 0.391
+     gates: {'1 MAR>=A+0.05': np.False_, '2 halves>=A': np.False_, '3 MAR@0.25>=A': np.False_, '4 neighbors 0/2 (need 2)': False} -> FAIL
+  E2: {'lookback': 63} 0.402, {'lookback': 252} 0.387
+     gates: {'1 MAR>=A+0.05': np.False_, '2 halves>=A': np.True_, '3 MAR@0.25>=A': np.False_, '4 neighbors 0/2 (need 2)': False} -> FAIL
+  E3: {'target': 0.25, 'band': 0.2} 0.524, {'target': 0.45, 'band': 0.2} 0.456, {'target': 0.35, 'band': 0.1} 0.490, {'target': 0.35, 'band': 0.3} 0.467
+     gates: {'1 MAR>=A+0.05': np.True_, '2 halves>=A': np.True_, '3 MAR@0.25>=A': np.True_, '4 neighbors 4/4 (need 3)': True} -> PASS
+  E4: {'top': 2, 'lookback': 126} 0.177, {'top': 4, 'lookback': 126} 0.177, {'top': 3, 'lookback': 63} 0.191, {'top': 3, 'lookback': 252} 0.234
+     gates: {'1 MAR>=A+0.05': np.False_, '2 halves>=A': np.False_, '3 MAR@0.25>=A': np.False_, '4 neighbors 0/4 (need 3)': False} -> FAIL
+
+verdict: {'E1': False, 'E2': False, 'E3': True, 'E4': False}
