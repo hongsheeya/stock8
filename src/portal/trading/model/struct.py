@@ -1087,6 +1087,17 @@ class Struct:
                         if trading.order_policy._key() != policy_key:
                             state['status'] = 'account_changed'
                             return
+                        if job == 'verify':
+                            # Read-only: checks orders already sent, so it also
+                            # finishes them after a switch is turned OFF.
+                            state['status'] = 'checking'
+                            result = trading.run_trade_verification()
+                            state['message'] = f"검증 {int(result.get('checked', 0) or 0)}건"
+                            state['status'] = 'waiting'
+                            state['last_check'] = _kst_now().isoformat()
+                            state['error'] = ''
+                            time.sleep(30)
+                            continue
                         policy = trading.order_policy.read()
                         lane = 'infinite_buy' if job in ('loc', 'sync') else ('daytrade_us' if job.endswith('_us') else 'daytrade_ks')
                         state['status'] = 'off'
@@ -1147,8 +1158,8 @@ class Struct:
                             continue
                         if not self.orm.use('user').get(id=owner):
                             continue
-                        for job in ('loc', 'sync', 'exit_ks', 'entry_ks', 'exit_us', 'entry_us'):
-                            if job not in ('loc', 'sync') and not self._current_user_is_admin(owner):
+                        for job in ('loc', 'sync', 'verify', 'exit_ks', 'entry_ks', 'exit_us', 'entry_us'):
+                            if job not in ('loc', 'sync', 'verify') and not self._current_user_is_admin(owner):
                                 continue
                             key = (row['key'], job)
                             existing = registry['jobs'].get(key, {})
@@ -3093,6 +3104,18 @@ class Struct:
                             pass
                     state["reconcile_thread"] = threading.Thread(target=self._account_worker_target(reconcile_history), daemon=True, name="stock8-fill-reconcile")
                     state["reconcile_thread"].start()
+                # 11-04 per-trade verification: read-only, every 30 s, on its
+                # own thread so slow KIS reads never delay exits.
+                verify_thread = state.get("trade_verify_thread")
+                if (verify_thread is None or not verify_thread.is_alive()) and now_ts - float(state.get("last_trade_verify_ts", 0)) >= 30:
+                    state["last_trade_verify_ts"] = now_ts
+                    def verify_trades():
+                        try:
+                            state["trade_verify_result"] = self.run_trade_verification()
+                        except Exception as exc:
+                            state["trade_verify_result"] = {"error": str(exc)[:200]}
+                    state["trade_verify_thread"] = threading.Thread(target=self._account_worker_target(verify_trades), daemon=True, name="stock8-trade-verify")
+                    state["trade_verify_thread"].start()
                 # PAPER keeps the daily KS minute-bar archive (market data
                 # only; LIVE would just duplicate it). Passes every 5 minutes
                 # until it is saved.
@@ -3489,6 +3512,47 @@ class Struct:
         if self._kis_api_obj is None:
             self._kis_api_obj = self._KisApi(self)
         return self._kis_api_obj
+
+    # ------------------------------------------------- per-trade verification
+    def _trade_verification_path(self):
+        account = str(getattr(self.kis_api, 'account_no', '') or '').strip()
+        if not account:
+            return ''
+        import hashlib
+        scope = hashlib.sha256(('kis:' + account).encode()).hexdigest()[:24]
+        mode = 'paper' if PAPER_MODE else 'live'
+        return wiz.project.fs().abspath(f"data/{mode}/trade_verification/{scope}.json")
+
+    def _trade_verification_notify(self, text):
+        owner = str(self._current_user_id() or '')
+        if not owner:
+            return
+        webhook = self.coin_alert_settings(owner).get('webhook', '')
+        if webhook:
+            prefix = '[stock8 거래검증·모의]' if PAPER_MODE else '[stock8 거래검증]'
+            self.model("notifier").shared().discord(webhook, f"{prefix} {text}")
+
+    @property
+    def trade_verifier(self):
+        """Per-trade verifier for the current KIS account (trade_verifier.py);
+        None when no account is configured."""
+        path = self._trade_verification_path()
+        if not path:
+            return None
+        mod = self.model("trade_verifier")
+        return mod.Verifier(
+            path,
+            broker=mod.KisReader(self.kis_api),
+            local=mod.local_filled_reader(self.db("trade_log"), self.db("cycle_trade")),
+            notify=self._trade_verification_notify,
+        )
+
+    def run_trade_verification(self, limit=20):
+        """Read-only pass: check due orders against KIS (no order is sent)."""
+        verifier = self.trade_verifier
+        if verifier is None:
+            return {"checked": 0, "changes": [], "message": "KIS 계좌 미설정"}
+        return verifier.verify_due(limit=limit)
 
     @property
     def toss_api(self):

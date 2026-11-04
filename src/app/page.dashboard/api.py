@@ -3490,3 +3490,52 @@ def get_watchlist_defaults():
     )
 def account_context():
     wiz.response.status(200, wiz.model("portal/trading/account_context").context())
+
+
+def _trade_verification_payload(trading):
+    verifier = trading.trade_verifier
+    if verifier is None:
+        return {"configured": False, "holds": [], "recent": [], "counts": {}, "total": 0, "last_run": {},
+                "message": "KIS 계좌를 설정하면 주문마다 검증합니다."}
+    payload = verifier.summary(limit=40)
+    payload["configured"] = True
+    return payload
+
+
+def trade_verification():
+    """Per-trade verification results and buy holds (read-only)."""
+    trading = _require_dashboard_access(require_connection=False)
+    try:
+        payload = _trade_verification_payload(trading)
+    except Exception as e:
+        wiz.response.status(500, message=f"거래 검증 기록을 읽지 못했습니다: {str(e)[:160]}")
+    wiz.response.status(200, **payload)
+
+
+def trade_verification_run():
+    """Check due orders against KIS now (reads only; sends no order)."""
+    trading = _require_dashboard_access(require_connection=False)
+    try:
+        result = trading.run_trade_verification(limit=40)
+        payload = _trade_verification_payload(trading)
+    except Exception as e:
+        wiz.response.status(500, message=f"거래 검증 실행 실패: {str(e)[:160]}")
+    payload["run"] = {"checked": int(result.get("checked", 0) or 0)}
+    wiz.response.status(200, **payload)
+
+
+def trade_verification_ack():
+    """User acknowledges a mismatch: lifts that symbol's buy hold. The record
+    stays as 불일치 for review; nothing is sent to the broker."""
+    trading = _require_dashboard_access(require_connection=False)
+    symbol = str(wiz.request.query("symbol", "") or "").strip().upper()
+    record_id = str(wiz.request.query("record_id", "") or "").strip()
+    if not symbol and not record_id:
+        wiz.response.status(400, message="해제할 종목이 없습니다.")
+    verifier = trading.trade_verifier
+    if verifier is None:
+        wiz.response.status(400, message="KIS 계좌가 설정되지 않았습니다.")
+    count = verifier.acknowledge(symbol=symbol, record_id=record_id, user=_session_user_id())
+    payload = _trade_verification_payload(trading)
+    payload["released"] = count
+    wiz.response.status(200, **payload)

@@ -24,7 +24,8 @@ class WorkerPaths(unittest.TestCase):
         policy_read = Mock(side_effect=policies) if policies else lambda: enabled
         trading = NS(order_policy=NS(_key=lambda: 'test', read=policy_read, daytrade_allowed=lambda:admin),
                      get_config=lambda *a: '5000000', daytrade_engine=engine,
-                     run_due_loc_automation=Mock())
+                     run_due_loc_automation=Mock(),
+                     run_trade_verification=Mock(return_value={'checked': 2, 'changes': []}))
         app = flask.Flask('worker-test'); app.secret_key = 'test-only'
         sleeps = []
         def stop(_):
@@ -84,6 +85,18 @@ class WorkerPaths(unittest.TestCase):
                     getattr(trading.daytrade_engine, method).assert_called_once_with(requested_seed=5000000.0, market=market)
                     self.assertEqual(len(trading.daytrade_engine.mock_calls), 1)
                     self.assertEqual(state['status'], 'waiting')
+
+    def test_verify_job_only_reads_and_runs_with_switches_off(self):
+        # 11-04: per-trade verification finishes orders already sent even
+        # after OFF, and never reaches an engine that could order.
+        for policy in ({}, {'daytrade_ks': True, 'infinite_buy': True}):
+            with self.subTest(policy=policy):
+                trading, state = self.run_job('verify', policy)
+                trading.run_trade_verification.assert_called_once_with()
+                self.assertEqual(trading.daytrade_engine.mock_calls, [])
+                trading.run_due_loc_automation.assert_not_called()
+                self.assertEqual(state['status'], 'waiting')
+                self.assertEqual(state['message'], '검증 2건')
 
     def test_other_market_on_cannot_start_off_market(self):
         for job in ('entry_us', 'exit_us'):
