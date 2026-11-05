@@ -459,6 +459,9 @@ div(*ngIf="!legacyMode", class="dx-alerts")
     div(*ngIf="(infiniteBuySummary.loc_attention || 0) > 0", class="dx-alert is-warn")
         strong LOC 예약 확인 필요 {{infiniteBuySummary.loc_attention}}건
         span 무한매수 표에서 예약 상태를 확인하세요.
+    div(*ngFor="let h of tradeVerify.holds", class="dx-alert is-danger")
+        strong 거래 검증 불일치 · {{h.symbol}} 신규 매수 보류
+        span {{h.reason}} — 아래 '거래 검증'에서 KIS 내역을 확인한 뒤 해제하세요.
 
 //- Key numbers
 div(*ngIf="!legacyMode", class="dx-kpis")
@@ -593,6 +596,44 @@ section(*ngIf="!legacyMode", class="dx-card")
                     td(class="num dx-strong", [class]="profitClass(p.pnl_krw || 0)")
                         div {{signedKRW(p.pnl_krw || 0)}}
                         small {{(p.pnl_pct || 0) > 0 ? '+' : ''}}{{(p.pnl_pct || 0) | number:'1.2-2'}}%
+
+//- Per-trade verification (every KIS order checked against the broker)
+section(*ngIf="!legacyMode && tradeVerify.configured", class="dx-card")
+    div(class="dx-card-head")
+        h2 거래 검증
+        div(class="dx-pills")
+            span {{tradeVerifyCount('PASS')}} 정상
+            span(*ngIf="tradeVerifyCount('PENDING') > 0") {{tradeVerifyCount('PENDING')}} 대기
+            span(*ngIf="tradeVerifyCount('FAIL') + tradeVerifyCount('UNCONFIRMED') > 0", class="is-warn") {{tradeVerifyCount('FAIL') + tradeVerifyCount('UNCONFIRMED')}} 불일치
+            span(*ngIf="tradeVerify.last_run?.at") 확인 {{tradeVerify.last_run.at.slice(11, 16)}}
+            button(type="button", class="dx-toggle", (click)="runTradeVerification()", [disabled]="tradeVerifyBusy") {{tradeVerifyBusy ? '확인 중' : '지금 검증'}}
+    div(*ngIf="tradeVerify.recent.length === 0", class="dx-empty") 아직 검증할 주문이 없습니다. 주문이 나가면 KIS 내역과 하나씩 대조합니다.
+    div(*ngIf="tradeVerify.recent.length > 0", class="dx-table-wrap")
+        table(class="dx-table")
+            thead
+                tr
+                    th 주문 시각
+                    th 종목
+                    th(class="num") 주문
+                    th(class="num") 체결
+                    th 결과
+            tbody
+                tr(*ngFor="let r of tradeVerify.recent")
+                    td
+                        div {{r.at?.slice(5, 16)}}
+                        small(class="dx-muted") {{r.order_no ? '#' + r.order_no : '접수번호 없음'}}
+                    td
+                        div(class="dx-sym")
+                            span(class="dx-market", [class]="marketBadgeClass(r.market)") {{marketLabel(r.market)}}
+                            strong {{r.symbol}}
+                    td(class="num") {{r.side_label}} {{r.qty}}주
+                    td(class="num")
+                        span(*ngIf="r.filled_qty") {{r.filled_qty}}주 @ {{r.filled_price | number:'1.0-4'}}
+                        span(*ngIf="!r.filled_qty", class="dx-muted") -
+                    td
+                        strong([class]="tradeVerifyClass(r.status)") {{r.status_label}}{{r.acknowledged ? ' · 확인됨' : ''}}
+                        small(class="dx-muted") {{r.reason}}
+                        button(*ngIf="(r.status === 'FAIL' || r.status === 'UNCONFIRMED') && !r.acknowledged", type="button", class="dx-toggle", (click)="acknowledgeTradeVerification(r)", [disabled]="tradeVerifyBusy") 확인·매수 보류 해제
 
 //- Admin details, collapsed
 details(*ngIf="!legacyMode && showAdminControls", class="dx-card dx-details")

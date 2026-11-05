@@ -24,6 +24,9 @@ export class Component implements OnInit {
 
     // Mock indicator
     public isMock: boolean = false;
+    // Per-trade verification (trade_verifier.py): every KIS order vs broker.
+    public tradeVerify: any = { configured: false, holds: [], recent: [], counts: {}, last_run: {} };
+    public tradeVerifyBusy: boolean = false;
 
     // Summary cards
     public buyingPower: number = 0;
@@ -389,6 +392,7 @@ export class Component implements OnInit {
         if (this.legacyMode !== true) void this.loadProfitSummary();
         await this.load(restored, false);
         if (this.destroyed) return;
+        if (this.legacyMode !== true) void this.loadTradeVerification();
         this.startPolling();
 
     }
@@ -861,6 +865,78 @@ export class Component implements OnInit {
         return labels[id] || position?.strategy_name || id || '-';
     }
 
+    // ─── Per-trade verification ───
+    private applyTradeVerification(data: any) {
+        if (!data) return;
+        this.tradeVerify = {
+            configured: data.configured === true,
+            holds: Array.isArray(data.holds) ? data.holds : [],
+            recent: Array.isArray(data.recent) ? data.recent : [],
+            counts: data.counts || {},
+            last_run: data.last_run || {},
+        };
+    }
+
+    public async loadTradeVerification() {
+        try {
+            const { code, data } = await wiz.call('trade_verification');
+            if (code === 200) this.applyTradeVerification(data);
+        } catch (e) {
+        }
+        await this.renderIfAlive();
+    }
+
+    public async runTradeVerification() {
+        if (this.tradeVerifyBusy) return;
+        this.tradeVerifyBusy = true;
+        await this.renderIfAlive();
+        try {
+            const { code, data } = await wiz.call('trade_verification_run');
+            if (code === 200) {
+                this.applyTradeVerification(data);
+                this.addToast('info', '거래 검증', `KIS 내역과 ${data?.run?.checked || 0}건을 대조했습니다.`);
+            } else {
+                this.addToast('error', '거래 검증 실패', data?.message || '잠시 후 다시 시도하세요.');
+            }
+        } catch (e) {
+            this.addToast('error', '거래 검증 실패', '잠시 후 다시 시도하세요.');
+        }
+        this.tradeVerifyBusy = false;
+        await this.renderIfAlive();
+    }
+
+    public async acknowledgeTradeVerification(record: any) {
+        if (this.tradeVerifyBusy || !record) return;
+        const ok = window.confirm(`${record.symbol} 검증 불일치를 확인했나요?\n\nKIS 주문·잔고 내역을 직접 확인한 경우에만 해제하세요. 해제하면 이 종목의 신규 매수 보류가 풀립니다. (주문은 보내지 않습니다)`);
+        if (!ok) return;
+        this.tradeVerifyBusy = true;
+        await this.renderIfAlive();
+        try {
+            const { code, data } = await wiz.call('trade_verification_ack', { symbol: record.symbol });
+            if (code === 200) {
+                this.applyTradeVerification(data);
+                this.addToast('success', '매수 보류 해제', `${record.symbol} 검증 불일치를 확인 처리했습니다.`);
+            } else {
+                this.addToast('error', '해제 실패', data?.message || '잠시 후 다시 시도하세요.');
+            }
+        } catch (e) {
+            this.addToast('error', '해제 실패', '잠시 후 다시 시도하세요.');
+        }
+        this.tradeVerifyBusy = false;
+        await this.renderIfAlive();
+    }
+
+    public tradeVerifyCount(status: string): number {
+        return Number(this.tradeVerify?.counts?.[status] || 0);
+    }
+
+    public tradeVerifyClass(status: string): string {
+        if (status === 'PASS') return 'text-emerald-400';
+        if (status === 'FAIL' || status === 'UNCONFIRMED') return 'text-rose-400';
+        if (status === 'PENDING') return 'text-amber-400';
+        return 'dx-muted';
+    }
+
     public marketLabel(market: string): string {
         const m = String(market || '').toUpperCase();
         if (m === 'US') return '미장';
@@ -1030,6 +1106,7 @@ export class Component implements OnInit {
             if (this.destroyed) return;
             if (this.autoRefresh) {
                 await this.load(true);
+                if (this.legacyMode !== true) void this.loadTradeVerification();
             }
         }, this.pollSeconds * 1000);
         // Countdown timer (매초)

@@ -39,3 +39,19 @@
 - 상세 작업 규칙은 `/opt/app/.github/copilot-instructions.md`를 따른다.
 - 프로젝트 개요는 [README.md](README.md)를 먼저 본다.
 - 트레이딩 패키지 설명은 [src/portal/trading/README.md](src/portal/trading/README.md)를 본다.
+
+## 기능별 에이전트
+
+`.claude/agents/`에 기능별 Claude Code 서브에이전트가 있다. 해당 기능을 수정·조사할 때 그 에이전트에 맡기고, 주문 경로 변경은 `stock8-order-safety` 기준으로 함께 점검한다.
+
+| 에이전트 | 담당 |
+|---|---|
+| `stock8-infinitebuy` | 무한매수 사이클, LOC 예약·리버스·MOC, FireGate, 체결 동기화 |
+| `stock8-daytrade-ks` | 국내 단타 추천·재학습·진입·청산, KRX/NXT 라우팅 |
+| `stock8-daytrade-us` | 미국 단타, USD 예산·시장시간·MOC, PAPER 미국 추세보유 |
+| `stock8-coin` | 업비트 코인 자동매매(관리자·LIVE 전용) |
+| `stock8-dashboard` | 대시보드·이력·설정·계정·배당, 빌드·배포 |
+| `stock8-research` | 시뮬레이션, 사전 등록 연구, 읽기 전용 감사 스크립트 |
+| `stock8-order-safety` | 주문 안전 경계, 주문 건별 거래 검증·매수 보류 |
+
+모든 에이전트는 결론을 한국어로 보고하고, OFF 무동작·브로커 기준 정합성·`data/` 비커밋 원칙을 지키며, 실계좌 스위치·잠금·재시작은 사용자 지시 없이 하지 않는다.

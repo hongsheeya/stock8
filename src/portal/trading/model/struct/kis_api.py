@@ -57,6 +57,11 @@ _GATEWAY_STATE = sys.__dict__.setdefault("_stock8_kis_gateway_v1", {
 _CALL_LOG = sys.__dict__.setdefault("_stock8_kis_call_log", collections.deque(maxlen=6000))
 _CALL_COUNTS = sys.__dict__.setdefault("_stock8_kis_cache_hits", {"hits": 0})
 
+# 11-04 per-trade verification (trade_verifier.py): regular orders recorded at
+# this boundary, and the BUY TR IDs a verification hold refuses.
+_VERIFIED_ORDER_PATHS = ("/uapi/domestic-stock/v1/trading/order-cash", "/uapi/overseas-stock/v1/trading/order")
+_VERIFIED_BUY_TR_IDS = ("TTTC0012U", "VTTC0012U", "TTTT1002U", "VTTT1002U", "TTTT3014U", "VTTT3014U")
+
 
 @contextmanager
 def _shared_paper_gateway(scope, deadline=None):
@@ -583,7 +588,45 @@ class KisApi:
             )
         return cooldown
 
+    def _trade_verifier(self):
+        """The account's per-trade verifier (trade_verifier.py), or None."""
+        try:
+            return getattr(self.struct, "trade_verifier", None)
+        except Exception:
+            return None
+
     def _request(self, method, path, tr_id, params=None, body=None, retries=2, tr_cont=""):
+        """Every request; regular orders are also recorded for per-trade
+        verification, and a BUY for a symbol on verification hold is refused
+        before anything is sent (sells and cancels are never held)."""
+        if str(method or "").upper() != "POST" or "/trading/" not in str(path or ""):
+            return self._send_request(method, path, tr_id, params=params, body=body, retries=retries, tr_cont=tr_cont)
+        verifier = self._trade_verifier()
+        if verifier is not None and str(tr_id or "").upper() in _VERIFIED_BUY_TR_IDS:
+            verifier.assert_buy_allowed((body or {}).get("PDNO") or (body or {}).get("OVRS_PDNO") or "")
+        if verifier is None or path not in _VERIFIED_ORDER_PATHS:
+            return self._send_request(method, path, tr_id, params=params, body=body, retries=retries, tr_cont=tr_cont)
+        _REQUEST_OPTIONS.order_sent = False
+        try:
+            data = self._send_request(method, path, tr_id, params=params, body=body, retries=retries, tr_cont=tr_cont)
+        except Exception as exc:
+            self._record_for_verification(verifier, path, tr_id, body, None, getattr(_REQUEST_OPTIONS, "order_sent", False), exc)
+            raise
+        self._record_for_verification(verifier, path, tr_id, body, data, True, None)
+        return data
+
+    def _record_for_verification(self, verifier, path, tr_id, body, data, sent, error):
+        try:
+            lane = ""
+            context = sys.__dict__.get("_stock8_order_policy_context")
+            if context is not None:
+                lane = str((context.get() or ("", ""))[0] or "")
+            verifier.record(path, tr_id, body, data=data, sent=sent, error=error, lane=lane)
+        except Exception as exc:
+            # The order already happened; a ledger failure must not hide it.
+            self._log("error", f"거래 검증 기록 실패 ({tr_id}): {str(exc)[:200]}")
+
+    def _send_request(self, method, path, tr_id, params=None, body=None, retries=2, tr_cont=""):
         """
         API 요청 공통 래퍼 (Rate limiting 포함)
         - method: "GET" | "POST"
@@ -646,6 +689,9 @@ class KisApi:
                     # Recheck after token refresh / rate-limit wait as OFF or
                     # symbol locks may have changed while this request queued.
                     self._assert_safe_request(method, path, tr_id, body=body, url=url)
+                    # From here the broker may have the order: an error is an
+                    # unknown outcome for verification, not "not sent".
+                    _REQUEST_OPTIONS.order_sent = True
                     resp = client.post(url, headers=headers, json=body, timeout=request_timeout)
 
                 data = resp.json()
