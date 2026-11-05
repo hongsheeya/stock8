@@ -628,7 +628,7 @@ section(*ngIf="!legacyMode && tradeVerify.configured", class="dx-card")
                             strong {{r.symbol}}
                     td(class="num") {{r.side_label}} {{r.qty}}주
                     td(class="num")
-                        span(*ngIf="r.filled_qty") {{r.filled_qty}}주 @ {{r.filled_price | number:'1.0-4'}}
+                        span(*ngIf="r.filled_qty") {{r.filled_qty}}주 · {{r.filled_price | number:'1.0-4'}}
                         span(*ngIf="!r.filled_qty", class="dx-muted") -
                     td
                         strong([class]="tradeVerifyClass(r.status)") {{r.status_label}}{{r.acknowledged ? ' · 확인됨' : ''}}
