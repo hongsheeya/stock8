@@ -8,7 +8,9 @@
 2. 실행 프로세스의 포트·프로젝트 경로를 확인합니다. 현재 Windows 런처 기본 포트는 LIVE 3001, PAPER 3002입니다.
 3. 원본 `src`, 빌드된 `build/src`, 실행용 `bundle/src`와 `bundle/www`를 구분합니다. 원본 diff만으로 배포 완료라고 판단하지 않습니다.
 4. 기존 WIZ 런타임을 지정하여 `scripts/rebuild-stock8-frontend.ps1`을 실행합니다. 기본 경로는 해당 개발 PC의 `C:\stock8-runtime2\app`이며 다른 PC에서는 맞춰야 합니다.
-5. `bundle/.stock8-build-stamp`와 새로운 산출물을 확인합니다. 빌드 스크립트는 WIZ 종료 코드 외에 산출물의 생성 시각·크기도 검사합니다.
+   - 빌드 전에 `scripts/patch-wiz-runtime-windows.py`가 런타임의 WIZ 빌더(`plugin/workspace/model/builder.py`)에 Windows 수정 두 가지를 적용합니다. 이미 적용돼 있으면 건너뜁니다. 수정이 없으면 빌드는 성공으로 끝나도 화면이 깨집니다. 경로 구분자 문제로 `main.js`에 앱이 빠져 **모든 페이지가 빈 화면**이 되고, Tailwind 명령이 실행되지 않아 `tailwind.min.css`가 없으면 **레이아웃이 깨집니다**(아이콘이 화면 크기로 커지고 버튼에 스타일이 없음).
+   - WIZ를 업그레이드해 빌더 코드가 달라지면 패치 스크립트가 적용을 멈추고 오류를 냅니다. 빌더를 직접 확인한 뒤 스크립트를 고칩니다. 원본은 `builder.py.stock8-orig`로 한 번 백업됩니다.
+5. `bundle/.stock8-build-stamp`와 새로운 산출물을 확인합니다. 빌드 스크립트는 WIZ 종료 코드 외에 `main.js`와 `build/tailwind.min.css`의 생성 시각·크기도 검사합니다.
 6. Python 실행 코드 변경이면 현재 학습/주문 작업과 저장된 운용 상태를 확인한 후 해당 프로세스의 재시작이 필요한지 판단합니다. 무관한 서버를 종료하지 않습니다.
 7. 브라우저에서 실제 표시, API 응답의 갱신 시각, 서버 상태를 함께 확인합니다. “빌드 성공”과 “사용자 화면 검증 완료”를 별도로 기록합니다.
 
