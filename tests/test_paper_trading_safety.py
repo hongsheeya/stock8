@@ -67,6 +67,21 @@ class PaperTradingSafetyTests(unittest.TestCase):
             self.assertTrue(self.api.validate_paper_readiness()['success'])
         self.assertIsNone(getattr(self.module._REQUEST_OPTIONS, 'deadline', None))
 
+    def test_validation_chain_gets_35s_not_the_5s_request_timeout(self):
+        seen = {}
+
+        def chain():
+            seen['timeout'] = self.module._REQUEST_OPTIONS.timeout
+            seen['budget'] = self.module._REQUEST_OPTIONS.deadline - self.module.time.monotonic()
+            return {'success': True}
+
+        with patch.object(self.api, '_validate_paper_readiness', side_effect=chain):
+            self.api.validate_paper_readiness()
+        self.assertEqual(seen['timeout'], 5)
+        # ~9 calls at 1.1 s each cannot fit in 5 s (the fifth, AMEX balance, timed out).
+        self.assertGreater(seen['budget'], 30)
+        self.assertIsNone(getattr(self.module._REQUEST_OPTIONS, 'deadline', None))
+
     def test_live_token_success_is_not_account_connection_success(self):
         with patch.object(self.module, 'PAPER_MODE', False), patch.object(self.api, 'get_token', return_value='test-token'), patch.object(self.api, 'get_present_balance', side_effect=RuntimeError('mock key rejected')):
             result = self.api.test_connection()
