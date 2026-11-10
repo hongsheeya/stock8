@@ -450,9 +450,16 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
             }],
         }
 
+        from types import SimpleNamespace
+        logged = []
+        engine.struct.db =lambda name: SimpleNamespace(rows=lambda **query: [], insert=logged.append)
+        engine._append_runtime_log = lambda *args, **kwargs: None
+
         status = engine._sync_pending_buy(state, "069500", "KS")
 
         self.assertEqual(status, "filled")
+        # The confirmed fill gets its own trade_log row (11-10 251340 had none).
+        self.assertEqual([(row["action"], row["filled_qty"]) for row in logged], [("BUY", 3)])
         self.assertEqual(state["pending_buy_order_no"], "")
         self.assertEqual(state["position_qty"], 3)
         self.assertEqual(state["avg_price"], 104900)
