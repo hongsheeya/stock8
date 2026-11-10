@@ -24,6 +24,16 @@ if TRADING_MODE not in ("PAPER", "LIVE"):
 PAPER_MODE = TRADING_MODE == "PAPER"
 DAYTRADE_HARD_LOCKED = str(_os.environ.get("STOCK8_DAYTRADE_HARD_LOCK", "false")).lower() in ("1", "true", "yes", "on")
 PAPER_DAYTRADE_FULL_ACCESS = PAPER_MODE and not DAYTRADE_HARD_LOCKED
+# A fresh PAPER database starts with these automation switches OFF (OFF is no-op).
+PAPER_AUTOMATION_DEFAULT_OFF_KEYS = (
+    "auto_trade_enabled",
+    "loc_auto_schedule_enabled",
+    "auto_start_next_cycle_enabled",
+    "daytrade_auto_enabled",
+    "daytrade_exit_watch_enabled",
+    "daytrade_us_auto_enabled",
+    "daytrade_us_exit_watch_enabled",
+)
 DAYTRADE_LOCK_MESSAGE = "단타 기능은 현재 운영 안정화를 위해 완전히 봉인되어 있습니다."
 DAYTRADE_ENABLE_KEYS = {
     "daytrade_feature_enabled",
@@ -801,7 +811,13 @@ class Struct:
                 Struct._cfg[key] = "false"
 
     def _initialize_paper_full_access(self):
-        """Enable every PAPER automation lane once, while preserving later user toggles."""
+        """Seed PAPER defaults once, while preserving later user toggles.
+
+        11-09: PAPER keeps full feature access and limits, but every automation
+        switch starts OFF. These are global rows the first (admin) user inherits,
+        so ON defaults made a fresh PAPER account start trading as soon as its
+        keys were saved. OFF is written explicitly because some readers treat a
+        missing value as ON (loc_auto_schedule_enabled, US exit watch)."""
         if PAPER_DAYTRADE_FULL_ACCESS is False:
             return
         allocation_marker = "paper_dynamic_allocation_initialized_v1"
@@ -819,14 +835,8 @@ class Struct:
         if str(self.get_config(marker, "false") or "false").lower() == "true":
             return
         defaults = {
-            "auto_trade_enabled": "true",
-            "loc_auto_schedule_enabled": "true",
-            "auto_start_next_cycle_enabled": "true",
+            **{key: "false" for key in PAPER_AUTOMATION_DEFAULT_OFF_KEYS},
             "daytrade_feature_enabled": "true",
-            "daytrade_auto_enabled": "true",
-            "daytrade_exit_watch_enabled": "true",
-            "daytrade_us_auto_enabled": "true",
-            "daytrade_us_exit_watch_enabled": "true",
             "daytrade_daily_loss_halt_enabled": "true",
             "daytrade_daily_loss_limit_krw": "1000000",
             "daytrade_max_gross_exposure_ratio": "1.0",
