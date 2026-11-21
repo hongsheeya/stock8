@@ -5,6 +5,7 @@
 # =============================================================================
 import datetime
 import contextlib
+import re
 import math
 import time
 import os
@@ -150,8 +151,17 @@ class Engine:
         follow the local cycle, but a FireGate portfolio in reverse mode (or
         exhausted) must still get FireGate's reverse guide, which only the
         FireGate state carries (10-29: LIVE placed the normal v4 lines
-        while FireGate said MOC). Load errors keep the old local behaviour."""
+        while FireGate said MOC).
+
+        A load error with the bridge configured is returned, so the caller
+        blocks the reservations instead of placing the local v4 lines: an
+        unreadable FireGate may be in reverse mode (11-18 LIVE placed the
+        normal star/target sells that way). Without a configured bridge
+        the local plan is the only plan and stays."""
         context = self._load_firegate_authoritative_states(symbol_filter=symbol_filter)
+        error = str(context.get("error", "") or "")
+        if error and self._firegate_bridge_configured():
+            return {"states": {}, "error": error}
         states = {
             symbol: state for symbol, state in (context.get("states") or {}).items()
             if not state.get("_firegate_ambiguous")
@@ -159,21 +169,105 @@ class Engine:
         }
         return {"states": states, "error": ""}
 
+    def _firegate_bridge_configured(self):
+        raw = str(self._get_config_value("fire_gate_bridge", "") or "").strip()
+        if not raw:
+            return False
+        try:
+            cfg = json.loads(raw)
+        except (TypeError, ValueError):
+            return True  # unreadable here: assume it is in use
+        if isinstance(cfg, dict):
+            return bool(cfg.get("enabled"))
+        return True
+
+    @staticmethod
+    def _firegate_link_mismatch(cycle, state):
+        """Message when the FireGate portfolio names another local cycle."""
+        source_cycle_id = str((state or {}).get("_firegate_source_cycle_id", "") or "").strip()
+        cycle_id = str((cycle or {}).get("id", "") or "").strip()
+        if not source_cycle_id or not cycle_id or source_cycle_id == cycle_id:
+            return ""
+        symbol = str((cycle or {}).get("symbol", "") or (state or {}).get("symbol", "") or "").upper().strip()
+        return (f"FireGate {symbol} 포트폴리오({(state or {}).get('_firegate_portfolio_id', '') or '-'})의 "
+                f"연결 대상 사이클({source_cycle_id})이 현재 사이클({cycle_id})과 달라 FireGate 값을 적용하지 않았습니다. "
+                "FireGate 포트폴리오 연결을 대조하세요.")
+
     def _cycle_with_firegate_authority(self, cycle, firegate_states, required=False, load_error=""):
         symbol = str((cycle or {}).get("symbol", "") or "").upper().strip()
         state = dict((firegate_states or {}).get(symbol) or {})
         if state and not state.get("_firegate_ambiguous"):
+            mismatch = self._firegate_link_mismatch(cycle, state)
+            if mismatch:
+                # Neither FireGate's plan (another cycle's) nor the local v4
+                # plan (the one FireGate overrides) is known to be right.
+                return None, f"{mismatch} 이 종목의 예약/주문을 보류합니다."
             merged = dict(cycle or {})
             merged.update(state)
             return merged, ""
+        if load_error and not state and (required or self._firegate_load_error_applies(symbol)):
+            # Only set when the bridge is configured (see _firegate_reverse_states).
+            return None, f"FireGate 원본 상태 조회 실패로 로컬 DB 기준 예약을 차단했습니다: {self._short_error(load_error)}"
         if not required:
             return cycle, ""
         if state.get("_firegate_ambiguous"):
             ids = ", ".join(state.get("_firegate_duplicate_portfolio_ids", []) or [])
             return None, f"FireGate {symbol} 포트폴리오가 중복되어 예약을 차단했습니다. 중복 ID: {ids or 'unknown'}"
         if load_error:
-            return None, f"FireGate 원본 상태 조회 실패로 로컬 DB 기준 예약을 차단했습니다: {load_error}"
+            return None, f"FireGate 원본 상태 조회 실패로 로컬 DB 기준 예약을 차단했습니다: {self._short_error(load_error)}"
         return None, f"FireGate {symbol} 원본 포트폴리오를 찾지 못해 로컬 DB 기준 예약을 차단했습니다."
+
+    @staticmethod
+    def _short_error(text, limit=120):
+        """A stable, short error text, so _log_event folds repeats into one row a day."""
+        text = re.sub(r"https?://\S+", "<url>", str(text or ""))
+        text = re.sub(r"\d+", "#", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:limit]
+
+    FIREGATE_WATCHLIST_MEMO_PREFIX = "FireGate portfolio "
+
+    def _firegate_load_error_applies(self, symbol):
+        """Whether an account-wide FireGate read error must block `symbol`.
+
+        Every successful pull stamps the watchlist row of each FireGate
+        portfolio with "FireGate portfolio <id>" (and drops stale ones), so
+        a symbol whose rows carry no stamp, next to rows that do, had no
+        portfolio at the last pull and keeps its local plan. With no stamp
+        anywhere (a pull never succeeded), no watchlist row for the symbol,
+        or an unreadable watchlist, it cannot be told apart: block."""
+        symbol = str(symbol or "").upper().strip()
+        try:
+            rows = self._watchlist_db().rows(dump=500) or []
+        except Exception:
+            return True
+        prefix = self.FIREGATE_WATCHLIST_MEMO_PREFIX
+        stamped = {str((row or {}).get("symbol", "") or "").upper().strip()
+                   for row in rows if str((row or {}).get("memo", "") or "").startswith(prefix)}
+        if not stamped or symbol in stamped:
+            return True
+        own = [row for row in rows if str((row or {}).get("symbol", "") or "").upper().strip() == symbol]
+        return not own
+
+    def _firegate_rebuild_blocks(self, symbols):
+        """{symbol: reason} for symbols whose reservations are blocked by
+        FireGate authority, judged before anything is cancelled."""
+        firegate_required = self._firegate_reservation_authority_required()
+        symbol_filter = symbols[0] if len(symbols) == 1 else ""
+        context = (self._load_firegate_authoritative_states(symbol_filter=symbol_filter)
+                   if firegate_required else self._firegate_reverse_states(symbol_filter=symbol_filter))
+        states = context.get("states", {}) or {}
+        load_error = context.get("error", "") or ""
+        blocked = {}
+        for symbol in symbols:
+            cycle = self._best_cycle(symbol, [STATUS_ACTIVE, STATUS_HOLDING, STATUS_PENDING_EXTENSION])
+            if not cycle:
+                continue
+            _merged, error = self._cycle_with_firegate_authority(cycle, states, required=firegate_required,
+                                                                 load_error=load_error)
+            if error:
+                blocked[symbol] = error
+        return blocked
 
     # =========================================================================
     # DB 헬퍼
@@ -759,6 +853,8 @@ class Engine:
         had_sell = False
         applied_rows = 0
         audit_only_rows = 0
+        row_updates = []
+        oversold = 0  # deepest a SELL took the running ledger below zero
         try:
             anchor = json.loads(self.struct.get_config(f"cycle_bookkeeping_anchor:{cycle_id}", "{}") or "{}")
         except Exception:
@@ -797,6 +893,7 @@ class Engine:
             if anchor.get("trade_id") == row.get("id") and anchor.get("verified") is True:
                 total_qty = int(anchor["qty_before"])
                 total_spent = float(anchor["avg_before"]) * total_qty
+                oversold = 0  # the verified basis replaces everything before it
             avg_before = total_spent / total_qty if total_qty > 0 else 0.0
             if action == ACTION_BUY:
                 applied_rows += 1
@@ -818,19 +915,49 @@ class Engine:
                 total_qty -= qty
                 total_spent -= avg_before * qty
                 total_commission += commission
+                if total_qty < 0:
+                    oversold = max(oversold, -total_qty)
 
             running_qty = max(total_qty, 0)
             running_spent = max(total_spent, 0.0)
             running_avg = (running_spent / running_qty) if running_qty > 0 else 0.0
+            row_updates.append((row["id"], {
+                "round": buy_round,
+                "avg_buy_price": round(avg_before if action == ACTION_SELL else running_avg, 6),
+                "total_qty_after": running_qty,
+                "total_spent_after": round(running_spent, 4),
+                **({"profit_rate": round((amount - commission - avg_before * qty) / (avg_before * qty) * 100, 2)}
+                   if action == ACTION_SELL and avg_before > 0 and qty > 0 else {}),
+            }))
+
+        if oversold > 0:
+            # A SELL took more shares than the ledger held at that point: the
+            # buys that built the position are not in it (11-17 LIVE: a rebuilt
+            # DB held only [SELL 20, SELL 11, BUY 20] for a 134-share position,
+            # and this closed the cycle at 0 shares). Later buys can bring the
+            # sum back to 0 or above without making the history complete, so
+            # the running total decides, not the final one. Keep the cycle and
+            # the rows as they are instead of rebuilding them from it.
+            message = (f"사이클 원장 불완전: 매도가 그 시점 원장 보유보다 최대 {oversold}주 많아 재계산을 건너뜁니다. "
+                       "기존 사이클 값을 유지합니다. 과거 매수 기록 대조 필요")
             try:
-                trade_db.update({
-                    "round": buy_round,
-                    "avg_buy_price": round(avg_before if action == ACTION_SELL else running_avg, 6),
-                    "total_qty_after": running_qty,
-                    "total_spent_after": round(running_spent, 4),
-                    **({"profit_rate": round((amount - commission - avg_before * qty) / (avg_before * qty) * 100, 2)}
-                       if action == ACTION_SELL and avg_before > 0 and qty > 0 else {}),
-                }, id=row["id"])
+                self._log_event(cycle.get("symbol", ""), cycle_id, "CYCLE_LEDGER_INCOMPLETE", message=message)
+            except Exception:
+                pass
+            return {
+                "recalculated": False,
+                "reason": "ledger_incomplete",
+                "cycle_id": cycle_id,
+                "ledger_qty": total_qty,
+                "oversold_qty": oversold,
+                "total_qty": int(float(cycle.get("total_qty", 0) or 0)),
+                "total_spent": round(float(cycle.get("total_spent", 0) or 0), 2),
+                "message": message,
+            }
+
+        for row_id, update in row_updates:
+            try:
+                trade_db.update(update, id=row_id)
             except Exception:
                 pass
 
@@ -1342,7 +1469,17 @@ class Engine:
             if not cycle:
                 continue
             merged, err = self._cycle_with_firegate_authority(cycle, context["states"], required=True)
-            if err or not merged:
+            if err and not (fg_state.get("_firegate_reverse_mode") or fg_state.get("_firegate_exhausted")):
+                continue  # no MOC to hold back in normal mode
+            if err:
+                # Say why instead of "MOC 대상 없음". The message is fixed for a
+                # given portfolio/cycle pair, so _log_event folds it daily.
+                event = "FIREGATE_LINK_MISMATCH" if self._firegate_link_mismatch(cycle, fg_state) else "REVERSE_MOC_SKIPPED"
+                msg = f"{symbol} 리버스 MOC 보류: {err}"
+                self._log_event(symbol, cycle.get("id", ""), event, action=ACTION_SELL, message=msg)
+                results.append({"symbol": symbol, "status": "skipped", "message": msg})
+                continue
+            if not merged:
                 continue
             plan = self.firegate_reverse_plan(merged)
             if not plan or int(plan.get("moc_qty") or 0) <= 0:
@@ -1362,12 +1499,22 @@ class Engine:
             return {"symbol": symbol, "status": "already", "message": f"{symbol} 오늘 MOC 처리됨 ({marker.get('status', '')})"}
         qty = int(plan["moc_qty"])
         exchange = self._resolve_order_exchange(symbol, self._get_exchange(symbol) or "NASD")
-        balance = kis_api.get_balance(exchange=exchange) or {}
+        try:
+            balance = kis_api.get_balance(exchange=exchange) or {}
+        except Exception as exc:
+            msg = f"{symbol} 계좌 잔고를 확인하지 못해 MOC 보류: {str(exc)[:120]}"
+            self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
+            return {"symbol": symbol, "status": "skipped", "message": msg}
         held = sum(int(float(row.get("qty", 0) or 0)) for row in balance.get("holdings", []) or []
                    if str(row.get("symbol", "")).upper() == symbol)
         firegate_qty = int(float(cycle.get("total_qty", 0) or 0))
-        if held < firegate_qty:
-            msg = f"{symbol} 계좌 {held}주 < FireGate {firegate_qty}주 — 반영 안 된 매도가 있어 MOC 보류"
+        if held != firegate_qty:
+            # Fewer: a sell FireGate has not booked. More: buys FireGate has
+            # not booked (11-21 LIVE: 165 held, FireGate 112) — its tenth of
+            # the holding is then a tenth of the wrong number. No session
+            # marker: the next pass checks again once the two agree.
+            reason = "반영 안 된 매도가 있어" if held < firegate_qty else "FireGate에 반영 안 된 매수가 있어"
+            msg = f"{symbol} 계좌 {held}주 ≠ FireGate {firegate_qty}주 — {reason} MOC 보류"
             self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
             return {"symbol": symbol, "status": "skipped", "message": msg}
         today = datetime.datetime.strptime(session, "%Y-%m-%d")
@@ -3021,6 +3168,39 @@ class Engine:
         if not symbols:
             return {"status": "skipped", "message": "재예약 대상 종목 없음", "symbols": []}
 
+        # schedule_loc_* would refuse a FireGate-blocked symbol only after its
+        # reservations were cancelled, leaving it with none (11-21 SOXL: link
+        # mismatch). Judge first and leave blocked symbols' orders alone.
+        requested_symbols = list(symbols)
+        firegate_blocked = [{"symbol": symbol, "reason": reason}
+                            for symbol, reason in self._firegate_rebuild_blocks(symbols).items()]
+        for item in firegate_blocked:
+            self._log_event(item["symbol"], "", "LOC_REBUILD_FIREGATE_BLOCKED",
+                            message=f"FireGate 기준 차단으로 기존 예약을 취소하지 않고 재예약도 하지 않습니다: {item['reason']}")
+        blocked_symbols = {item["symbol"] for item in firegate_blocked}
+        symbols = [symbol for symbol in symbols if symbol not in blocked_symbols]
+        if not symbols:
+            return {
+                "status": "firegate_blocked",
+                "symbols": requested_symbols,
+                "message": "FireGate 기준으로 예약이 차단된 종목이라 기존 예약을 취소하지 않았고 새 예약도 접수하지 않았습니다.",
+                "firegate_blocked": firegate_blocked,
+                "cancel": {"status": "skipped", "cancelled_count": 0, "error_count": 0},
+                "buy": [],
+                "sell": [],
+                "error_count": len(firegate_blocked),
+            }
+
+        rebuild = self._rebuild_loc_reservations_unblocked(symbols)
+        if firegate_blocked:
+            rebuild["firegate_blocked"] = firegate_blocked
+            rebuild["requested_symbols"] = requested_symbols
+            rebuild["error_count"] = int(rebuild.get("error_count", 0) or 0) + len(firegate_blocked)
+            if rebuild.get("status") == "completed":
+                rebuild["status"] = "partial_error"
+        return rebuild
+
+    def _rebuild_loc_reservations_unblocked(self, symbols):
         cancel_result = self.cancel_active_loc_reservations(symbols=symbols)
         cancel_result["passes"] = [dict(cancel_result)]
         if int(cancel_result.get("error_count", 0) or 0) > 0:
@@ -3611,6 +3791,11 @@ class Engine:
                 continue
             cycle = self._find_external_cycle(symbol)
             if not cycle:
+                continue
+            mismatch = self._firegate_link_mismatch(cycle, state)
+            if mismatch:
+                # Another cycle's T would turn a PENDING_EXTENSION back to ACTIVE.
+                self._log_event(symbol, cycle.get('id', ''), 'FIREGATE_LINK_MISMATCH', message=mismatch)
                 continue
             data = {key: state[key] for key in ('current_round', 't_value', 'division_count')}
             # Never undo a user's pause/holding choice or recreate a closed cycle.

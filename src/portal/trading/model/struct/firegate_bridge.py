@@ -551,6 +551,44 @@ def _cycle_status_from_portfolio(portfolio, holding_qty=0, total_buy=0.0, total_
     return "PAUSED"
 
 
+def portfolio_source_cycle_id(portfolio):
+    return str((portfolio or {}).get("sourceCycleId", "") or "").strip()
+
+
+def portfolio_link_mismatch(source_cycle_id, cycle):
+    """True when a FireGate portfolio names a different local cycle.
+
+    11-21 LIVE: the running SOXL portfolio still named a cycle ID from a
+    rebuilt DB; the pull mapped it onto the new cycle by symbol alone and
+    wrote that portfolio's 112 shares over a cycle the broker held 165 of.
+    An empty link keeps the old by-symbol behaviour."""
+    source_cycle_id = str(source_cycle_id or "").strip()
+    if not source_cycle_id or not cycle:
+        return False
+    return source_cycle_id != str((cycle or {}).get("id", "") or "").strip()
+
+
+def _log_link_mismatch(trading, symbol, cycle, portfolio_id, source_cycle_id):
+    message = (
+        f"FireGate {symbol} 포트폴리오({portfolio_id or '-'})의 연결 대상 사이클({source_cycle_id})이 "
+        f"현재 사이클({(cycle or {}).get('id', '') or '-'})과 달라 FireGate 값을 적용하지 않았습니다. "
+        "FireGate 포트폴리오 연결을 대조하세요."
+    )
+    _log_event_via_engine(trading, symbol, (cycle or {}).get("id", ""), "FIREGATE_LINK_MISMATCH", message)
+    return message
+
+
+def _log_event_via_engine(trading, symbol, cycle_id, event_type, message):
+    try:
+        engine = getattr(trading, "engine", None)
+        log_event = getattr(engine, "_log_event", None)
+        if callable(log_event):
+            # _log_event folds the same message into one row per day.
+            log_event(symbol, cycle_id, event_type, message=message)
+    except Exception:
+        pass
+
+
 def _cycle_from_portfolio(trading, portfolio):
     symbol = _portfolio_symbol(portfolio)
     if not symbol:
@@ -558,7 +596,25 @@ def _cycle_from_portfolio(trading, portfolio):
     cycle_db = trading.db("trading_cycle")
     now = datetime.datetime.now()
     active = _active_cycle(cycle_db, symbol)
-    existing = active or _latest_cycle(cycle_db, symbol)
+    existing = active
+    if not existing:
+        latest = _latest_cycle(cycle_db, symbol)
+        if latest and str(latest.get("status", "") or "").upper() == "COMPLETED":
+            # A closed cycle is never reopened or rewritten by a pull, and a
+            # new one is not created beside it (it would be re-created on
+            # every poll). Starting the next cycle is the engine's job.
+            if not (_firegate_running(portfolio) or _safe_int((portfolio or {}).get("holdingQty"), 0) > 0):
+                return "unchanged_completed"  # both sides finished: nothing to report
+            _log_event_via_engine(
+                trading, symbol, latest.get("id", ""), "FIREGATE_CYCLE_COMPLETED_LOCALLY",
+                f"FireGate {symbol} 포트폴리오({(portfolio or {}).get('id', '') or '-'})는 진행 중인데 로컬 사이클이 "
+                "완료 상태라 FireGate 값을 적용하지 않았습니다. 사이클 상태를 대조하세요.")
+            return "skipped_completed"
+        existing = latest
+    source_cycle_id = portfolio_source_cycle_id(portfolio)
+    if existing and portfolio_link_mismatch(source_cycle_id, existing):
+        _log_link_mismatch(trading, symbol, existing, (portfolio or {}).get("id", ""), source_cycle_id)
+        return "link_mismatch"
     seed = _safe_float((portfolio or {}).get("seed"), 0)
     division_count = max(_safe_int((portfolio or {}).get("divisionDate"), 20), 1)
     target_profit = _safe_float((portfolio or {}).get("targetProfit"), 10)
@@ -573,8 +629,15 @@ def _cycle_from_portfolio(trading, portfolio):
     remaining = max(seed - max(total_buy - total_sell, 0), 0)
     current_round = int(math.floor(max(t_value, 0)))
     status = _cycle_status_from_portfolio(portfolio, holding_qty=holding_qty, total_buy=total_buy, total_sell=total_sell)
+    existing_status = str((existing or {}).get("status", "") or "").upper()
+    if status == "ACTIVE" and existing_status in ("PAUSED", "HOLDING"):
+        # isRunning only says FireGate is still tracking it; a pause or a
+        # keep-holding choice made here is the user's and stays.
+        status = existing_status
     started_at = _parse_firegate_datetime((portfolio or {}).get("startDate"), now)
-    completed_at = _parse_firegate_datetime((portfolio or {}).get("endDate"), now if status == "COMPLETED" else None)
+    # FireGate keeps an old endDate on running portfolios; only a completed
+    # cycle carries an end date.
+    completed_at = _parse_firegate_datetime((portfolio or {}).get("endDate"), now) if status == "COMPLETED" else None
     # 10-20: FireGate's sellPrice is its sell-table price, not a quote. A pull
     # wrote SOXL $164.27 (close $98.65) and the pages showed +22.4%. Keep the
     # broker-updated price; sellPrice only fills an empty one.
@@ -818,6 +881,7 @@ def sync_portfolios_to_local(struct, symbol_filter=""):
         cycles_created = 0
         cycles_updated = 0
         transaction_derived = 0
+        cycles_skipped = []
         symbols = []
         for portfolio in rows:
             try:
@@ -840,18 +904,28 @@ def sync_portfolios_to_local(struct, symbol_filter=""):
                 cycles_created += 1
             elif cycle_result == "updated":
                 cycles_updated += 1
+            elif cycle_result in ("link_mismatch", "skipped_completed"):
+                cycles_skipped.append({"symbol": symbol, "portfolio_id": portfolio.get("id", ""), "reason": cycle_result})
 
         cleanup = _cleanup_removed_portfolios(struct, symbols, symbol_filter=symbol_filter)
+        message = f"FireGate 포트폴리오 {len(rows)}건을 로컬 사이클/워치리스트에 반영했습니다."
+        if cycles_skipped:
+            mismatched = sum(1 for item in cycles_skipped if item["reason"] == "link_mismatch")
+            completed = len(cycles_skipped) - mismatched
+            message = (f"FireGate 포트폴리오 {len(rows)}건 중 {len(rows) - len(cycles_skipped)}건을 반영했습니다. "
+                       f"{len(cycles_skipped)}건은 사이클에 적용하지 않았습니다"
+                       f"(연결 불일치 {mismatched}건, 로컬 완료 사이클 {completed}건).")
 
         return {
             "executed": True,
             "mode": "firegate_pull_authoritative",
-            "message": f"FireGate 포트폴리오 {len(rows)}건을 로컬 사이클/워치리스트에 반영했습니다.",
+            "message": message,
             "firegate_portfolios": len(rows),
             "watchlist_created": watchlist_created,
             "watchlist_updated": watchlist_updated,
             "cycles_created": cycles_created,
             "cycles_updated": cycles_updated,
+            "cycles_skipped": cycles_skipped,
             "transaction_derived_portfolios": transaction_derived,
             "removed_watchlists": cleanup.get("removed_watchlists", 0),
             "archived_cycles": cleanup.get("archived_cycles", 0),
@@ -1079,6 +1153,8 @@ def sync_firegate_authoritative(struct, symbol_filter=""):
         "mode": "firegate_pull_authoritative",
         "message": (
             f"FireGate 기준 동기화 완료: 풀 {(pull or {}).get('firegate_portfolios', 0)}건"
+            + (f" (사이클 미적용 {len((pull or {}).get('cycles_skipped') or [])}건: {(pull or {}).get('message', '')})"
+               if (pull or {}).get("cycles_skipped") else "")
         ),
         "pull": pull,
         "pushed_portfolios": 0,
