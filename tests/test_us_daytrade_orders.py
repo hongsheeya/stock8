@@ -276,6 +276,9 @@ class UsSellFillTests(unittest.TestCase):
 
     def _engine(self, rows):
         engine, _ = _engine()
+        self.logged = []
+        engine.struct.db = lambda _name: Mock(rows=lambda **_q: [], insert=self.logged.append)
+        engine._append_runtime_log = lambda *_a, **_k: None
         broker = Mock()
         broker.request_options = lambda **_k: contextlib.nullcontext()
         broker.get_overseas_order_history.return_value = rows

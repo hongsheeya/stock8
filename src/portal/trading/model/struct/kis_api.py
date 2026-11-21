@@ -2727,6 +2727,11 @@ class KisApi:
         errors = []
         attempted_queries = 0
         failed_queries = 0
+        try:
+            max_pages = int(float(self.struct.get_config("kis_overseas_order_history_max_pages", "200") or 200))
+        except Exception:
+            max_pages = 200
+        max_pages = max(1, max_pages)
 
         for pdno_value in pdno_values:
             if pdno_value == "%" and orders:
@@ -2734,7 +2739,8 @@ class KisApi:
             for exchange in exchanges:
                 ctx_nk = ""
                 ctx_fk = ""
-                for _ in range(10):
+                seen_cursors = set()
+                for page in range(max_pages):
                     params = {
                         "CANO": self.account_prefix,
                         "ACNT_PRDT_CD": self.account_suffix,
@@ -2753,7 +2759,12 @@ class KisApi:
                     }
 
                     attempted_queries += 1
-                    data = self._request("GET", path, tr_id, params=params)
+                    # 11-12 PAPER: page 2+ went out without tr_cont "N", so KIS
+                    # answered page 1 again with the same cursor and every
+                    # strict lookup covering a US day with more than 20 orders
+                    # failed ("연속조회 미완료"), leaving 19 orders unverified.
+                    data = self._request("GET", path, tr_id, params=params,
+                                         tr_cont="N" if (ctx_nk or ctx_fk) else "")
                     if not data or data.get("rt_cd") != "0":
                         if strict:
                             raise RuntimeError('주문/체결 대조 조회 실패: 부분 결과로 미접수를 판단하지 않습니다.')
@@ -2784,14 +2795,21 @@ class KisApi:
                     next_nk = str(data.get("ctx_area_nk200", data.get("CTX_AREA_NK200", "")) or "")
                     next_fk = str(data.get("ctx_area_fk200", data.get("CTX_AREA_FK200", "")) or "")
                     tr_cont = str(data.get("tr_cont", "") or "")
-                    if strict and tr_cont in ('M', 'F') and (not (next_nk or next_fk) or (next_nk == ctx_nk and next_fk == ctx_fk) or _ == 9):
+                    cursor = (next_nk.strip(), next_fk.strip())
+                    more = tr_cont in ('M', 'F')
+                    stuck = more and (not any(cursor) or cursor == (ctx_nk.strip(), ctx_fk.strip())
+                                      or cursor in seen_cursors or page == max_pages - 1)
+                    if strict and stuck:
                         raise RuntimeError('주문/체결 연속조회 미완료')
                     if strict and not tr_cont and len(self._overseas_ccnl_rows(data)) >= 20:
                         raise RuntimeError('주문/체결 연속조회 완료 정보 누락')
+                    if stuck:
+                        # Non-strict callers get what was read; say it is partial.
+                        self._log("warning", f"해외 체결 조회 {exchange}/{pdno_value or 'ALL'}: 연속조회 미완료 — {page + 1}페이지까지만 반영")
+                        break
                     if (next_nk == "" and next_fk == "") or tr_cont in ("", "D", "E"):
                         break
-                    if next_nk == ctx_nk and next_fk == ctx_fk:
-                        break
+                    seen_cursors.add(cursor)
                     ctx_nk = next_nk
                     ctx_fk = next_fk
 
