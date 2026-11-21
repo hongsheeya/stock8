@@ -2564,8 +2564,13 @@ class DomesticDaytradeEngine:
                 or not self._us_moc_window_open()):
             return "idle"
         try:
-            order = self._broker().sell_order(symbol, qty, price=0, order_type="MOC", exchange=self._us_exchange(symbol))
+            order = self._submit_order(self._broker().sell_order, symbol, qty, price=0, order_type="MOC",
+                                       exchange=self._us_exchange(symbol), market="US", side="SELL")
+        except self.OrderBackoff:
+            return "error"
         except Exception as exc:
+            if self._order_rejection_kind(exc) == "account":
+                self._record_account_halt(str(exc), "US")
             self._append_runtime_log("warning", f"{symbol} 장마감 보호(MOC) 주문 실패: {exc}", symbol=symbol, market="US", dedup_sec=600)
             return "error"
         state["moc_order_no"] = str((order or {}).get("order_no", "") or "")
@@ -4294,6 +4299,159 @@ class DomesticDaytradeEngine:
                 return "주문 시점에 장이 닫혀 있어 매수하지 않습니다."
         return ""
 
+    # KIS rejections that a retry cannot fix. 11-16 PAPER: after the mock
+    # account stopped taking orders ("모의투자 주문이 불가한 계좌입니다") the
+    # engine kept re-sending: 114800 SELL 34x (every 20-30 s), 251340 BUY 35x
+    # (every ~6 min), AVEX/HUBS SELL ~50x, tripping EGW00201 rate limits.
+    # 252670 BUY was re-sent every 5-6 min for three days although KIS
+    # answered "매매불가 종목". The broker exception carries msg1, not msg_cd,
+    # so only the message text is matched (digits could hit CANO/qty/price).
+    _ACCOUNT_REJECT_MARKERS = ("주문이 불가한 계좌",)
+    _SYMBOL_REJECT_MARKERS = ("매매불가 종목",)
+    # Classified for logs/tests only; the regular failure cooldown handles it.
+    _RATE_LIMIT_MARKERS = ("EGW00201", "초당 거래건수")
+
+    class OrderBackoff(Exception):
+        """Raised by _submit_order instead of sending; nothing reached the broker."""
+
+    @classmethod
+    def _order_rejection_kind(cls, message):
+        """'account' | 'symbol' | 'rate' | 'other' for a broker order error."""
+        text = str(message or "")
+        if any(marker in text for marker in cls._ACCOUNT_REJECT_MARKERS):
+            return "account"
+        if any(marker in text for marker in cls._SYMBOL_REJECT_MARKERS):
+            return "symbol"
+        if any(marker in text for marker in cls._RATE_LIMIT_MARKERS):
+            return "rate"
+        return "other"
+
+    def _account_halt_key(self, market="KS"):
+        """Process-wide halt records, one per account and market lane.
+
+        Keyed by account (PAPER users each have their own mock account) and by
+        lane, so a rejection of overseas orders never stops domestic exits."""
+        store_key = "_trading_daytrade_account_halt"
+        store = getattr(sys, store_key, None)
+        if not isinstance(store, dict):
+            store = {}
+            setattr(sys, store_key, store)
+        try:
+            account = str(self.struct.live_data_scope or "")
+        except Exception:
+            account = ""
+        lane = "US" if self._is_us_market(market) else "KS"
+        return store, f"{'paper' if _PAPER_MODE else 'live'}:{account or 'default'}:{lane}"
+
+    def _account_sell_probe_sec(self):
+        return max(60, self._safe_int(self._config("daytrade_account_reject_sell_probe_sec", "120"), 120))
+
+    def _account_buy_probe_sec(self):
+        return max(300, self._safe_int(self._config("daytrade_account_reject_buy_probe_sec", "1800"), 1800))
+
+    def _account_halt_status(self, market="KS"):
+        store, key = self._account_halt_key(market)
+        halt = store.get(key)
+        return dict(halt) if isinstance(halt, dict) else None
+
+    def _record_account_halt(self, message, market="KS"):
+        store, key = self._account_halt_key(market)
+        with self._global_lock("account_halt"):
+            previous = store.get(key) if isinstance(store.get(key), dict) else {}
+            now = _clock.time()
+            next_buy = self._safe_float(previous.get("next_buy_probe", 0), 0)
+            store[key] = {
+                "since": previous.get("since") or self._timestamp(),
+                "message": str(message or "")[:300],
+                "next_sell_probe": now + self._account_sell_probe_sec(),
+                # Separate slots: a rejected buy probe never delays a sell probe.
+                "next_buy_probe": next_buy if next_buy > now else now + self._account_buy_probe_sec(),
+                "rejections": self._safe_int(previous.get("rejections", 0), 0) + 1,
+            }
+            return dict(store[key])
+
+    def _clear_account_halt(self, market="KS"):
+        store, key = self._account_halt_key(market)
+        with self._global_lock("account_halt"):
+            cleared = store.pop(key, None)
+        if cleared:
+            try:
+                self._append_runtime_log("info", "계좌 주문 접수가 다시 확인되어 자동 주문 정지를 해제했습니다.",
+                                         market="US" if self._is_us_market(market) else "KS")
+            except Exception:
+                pass
+
+    def _account_halt_issue(self, action="", market="KS"):
+        """Why an order of `action` may not go out now ('' = it may). No side effects.
+
+        While halted, one sell per short interval and one buy per long
+        interval may go out, so exits are not held for long and a recovered
+        account is noticed even with nothing to sell."""
+        halt = self._account_halt_status(market)
+        if not halt:
+            return ""
+        is_sell = str(action).startswith(("SELL", "PRE_SELL"))
+        next_probe = self._safe_float(halt.get("next_sell_probe" if is_sell else "next_buy_probe", 0), 0)
+        if _clock.time() >= next_probe:
+            return ""
+        probe_at = datetime.datetime.fromtimestamp(next_probe).strftime("%H:%M:%S")
+        return (f"KIS가 계좌 주문을 거부해 자동 주문을 정지했습니다 ({halt.get('since', '')}부터 · "
+                f"{'매도' if is_sell else '매수'}는 {probe_at}에 한 건만 다시 시도). KIS 모의투자/계좌 상태를 확인해 주세요.")
+
+    def _submit_order(self, send, *args, market="KS", side="SELL", **kwargs):
+        """Send one broker order; the account-halt slot is taken right here.
+
+        Taking the probe slot only at the moment of sending means paths that
+        stop before sending (budget, session, signal age) never use it up.
+        An accepted order lifts the halt; a shadow order proves nothing."""
+        store, key = self._account_halt_key(market)
+        with self._global_lock("account_halt"):
+            halt = store.get(key)
+            if isinstance(halt, dict):
+                is_sell = str(side).upper().startswith("SELL")
+                slot = "next_sell_probe" if is_sell else "next_buy_probe"
+                if _clock.time() < self._safe_float(halt.get(slot, 0), 0):
+                    raise self.OrderBackoff(self._account_halt_issue("SELL" if is_sell else "BUY", market))
+                halt[slot] = _clock.time() + (self._account_sell_probe_sec() if is_sell else self._account_buy_probe_sec())
+        order = send(*args, **kwargs)
+        if not (order or {}).get("shadow"):
+            self._clear_account_halt(market)
+        return order
+
+    def _buy_blocked_today(self, state):
+        today = self._now().strftime("%Y-%m-%d")
+        if str((state or {}).get("buy_blocked_date", "") or "") == today:
+            return str((state or {}).get("buy_blocked_reason", "") or "매매불가 종목")
+        return ""
+
+    @staticmethod
+    def _failure_cooldown_group(action):
+        action = str(action or "").upper()
+        return "SELL" if action.startswith("SELL") else action
+
+    def _order_failure_cooldown_issue(self, state, action):
+        """Wait after a rejected order before sending the same kind again.
+
+        All SELL_* exits share one cooldown: SELL_FULL and SELL_STOP_LOSS
+        alternating must not each re-send on their own clock."""
+        failure_at = str((state or {}).get("last_order_failure_at", "") or "")
+        failure_action = str((state or {}).get("last_order_failure_action", "") or "")
+        if not failure_at:
+            return ""
+        if failure_action and self._failure_cooldown_group(failure_action) != self._failure_cooldown_group(action):
+            return ""
+        try:
+            failure_ts = datetime.datetime.strptime(failure_at, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return ""
+        failure_age = max(0, int((self._now().replace(tzinfo=None) - failure_ts).total_seconds()))
+        configured = max(30, self._safe_int(self._config("daytrade_order_failure_cooldown_sec", "300"), 300))
+        # 손절 주문은 신속히 다시 시도하되 API 폭주는 막는다.
+        cooldown = min(configured, 30) if str(action).upper().startswith("SELL") else configured
+        if failure_age < cooldown:
+            return f"최근 {failure_action or action} 주문 실패 후 재시도 대기 중 ({cooldown - failure_age}초)"
+        return ""
+
     def _blocked_order_result(self, reason, status, action, symbol, market, strategy_id):
         self._append_runtime_log("warning", f"{symbol} 주문 보류: {reason}", symbol=symbol, strategy_id=strategy_id, market=market)
         return {"executed": False, "submitted": False, "action": "STALE_SIGNAL", "status": status,
@@ -4438,6 +4596,25 @@ class DomesticDaytradeEngine:
                 "order_value": 0,
             }
 
+        # Last checks before anything reaches the broker. The exit watch's
+        # fast path builds its own status without _guardrails, so a rejected
+        # sell was re-sent on every tick (114800, 11-16: 34x in 20-30 s steps).
+        pre_send_block = ""
+        if isinstance(precomputed_status, dict):
+            pre_send_block = self._order_failure_cooldown_issue(latest_state, action) \
+                or self._order_failure_cooldown_issue(state, action)
+        if not pre_send_block and str(action).startswith("BUY"):
+            pre_send_block = self._buy_blocked_today(latest_state) or self._buy_blocked_today(state)
+            if pre_send_block:
+                pre_send_block = f"KIS가 매매불가 종목으로 거부해 오늘은 매수하지 않습니다 ({pre_send_block[:80]})"
+        if not pre_send_block:
+            pre_send_block = self._account_halt_issue(action, market)
+        if pre_send_block:
+            self._append_runtime_log("warning", f"{symbol} 주문 보류: {pre_send_block}", symbol=symbol,
+                                     strategy_id=strategy_id, market=market)
+            return {"executed": False, "submitted": False, "action": "ORDER_BACKOFF", "status": status,
+                    "order_value": 0, "message": pre_send_block}
+
         order = None
         realized = 0.0
         prev_qty = self._safe_int(state.get("position_qty", 0), 0)
@@ -4446,7 +4623,7 @@ class DomesticDaytradeEngine:
         try:
             if action == "PRE_SELL_JACKPOT":
                 limit_price = self._round_krw_price(self._safe_float(signal.get("pre_sell_price", current_price), current_price))
-                order = self._broker().sell_domestic_order(symbol, qty, price=limit_price, order_type="LIMIT")
+                order = self._submit_order(self._broker().sell_domestic_order, symbol, qty, price=limit_price, order_type="LIMIT", market=market, side="SELL")
                 state["pending_sell_order_no"] = str(order.get("order_no", "") or "")
                 state["pending_sell_price"] = limit_price
                 state["pending_sell_qty"] = qty
@@ -4575,7 +4752,7 @@ class DomesticDaytradeEngine:
                         blocked = "이전 장마감 보호(MOC) 매도 체결 확인 전이라 매수하지 않습니다."
                     if blocked:
                         return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
-                    order = self._broker().buy_order(symbol, qty, price=self._us_marketable_price(current_price, "BUY"), order_type="MARKET", exchange=exchange)
+                    order = self._submit_order(self._broker().buy_order, symbol, qty, price=self._us_marketable_price(current_price, "BUY"), order_type="MARKET", exchange=exchange, market="US", side="BUY")
                     # 주문 접수와 체결은 다르다. 해외 체결 조회가 없는 동안
                     # 주문 수량 전체를 체결로 간주하면 모의자산이 부풀려진다.
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
@@ -4583,7 +4760,7 @@ class DomesticDaytradeEngine:
                     blocked = self._order_blocked_reason(started_at, action, market)
                     if blocked:
                         return self._blocked_order_result(blocked, status, action, symbol, market, strategy_id)
-                    order = self._broker().buy_domestic_order(symbol, qty, price=0, order_type="MARKET")
+                    order = self._submit_order(self._broker().buy_domestic_order, symbol, qty, price=0, order_type="MARKET", market="KS", side="BUY")
                     fill = self._resolve_domestic_fill(symbol, "BUY", order, fallback_price=current_price, fallback_qty=qty)
                 exec_price = self._safe_float(fill.get("filled_price", 0), 0)
                 exec_qty = max(0, self._safe_int(fill.get("filled_qty", 0), 0))
@@ -4684,10 +4861,10 @@ class DomesticDaytradeEngine:
                                 "order_value": 0, "message": f"{symbol} 장마감 보호(MOC) 주문 취소 확인 후 매도합니다."}
                     qty = min(qty, self._safe_int(state.get("position_qty", 0), 0))
                     exchange = self._us_exchange(symbol)
-                    order = self._broker().sell_order(symbol, qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
+                    order = self._submit_order(self._broker().sell_order, symbol, qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange, market="US", side="SELL")
                     fill = {"filled_price": 0, "filled_qty": 0, "status": "ACCEPTED_UNVERIFIED"}
                 else:
-                    order = self._broker().sell_domestic_order(symbol, qty, price=0, order_type="MARKET")
+                    order = self._submit_order(self._broker().sell_domestic_order, symbol, qty, price=0, order_type="MARKET", market="KS", side="SELL")
                     fill = self._resolve_domestic_fill(symbol, "SELL", order, fallback_price=current_price, fallback_qty=qty)
                 exec_price = self._safe_float(fill.get("filled_price", 0), 0)
                 exec_qty = max(0, self._safe_int(fill.get("filled_qty", 0), 0))
@@ -4803,6 +4980,12 @@ class DomesticDaytradeEngine:
                     "action": action,
                     "order_value": order_value,
                 }
+        except self.OrderBackoff as backoff:
+            # Nothing was sent: another lane took the probe slot meanwhile.
+            self._append_runtime_log("warning", f"{symbol} 주문 보류: {backoff}", symbol=symbol,
+                                     strategy_id=strategy_id, market=market)
+            return {"executed": False, "submitted": False, "action": "ORDER_BACKOFF", "status": status,
+                    "order_value": 0, "message": str(backoff)}
         except Exception as e:
             error_message = str(e)
             self._push_state_error(state, error_message)
@@ -4811,8 +4994,16 @@ class DomesticDaytradeEngine:
             # 재전송하여 초당 거래건수 제한과 중복 주문을 유발한다.
             state["last_order_failure_at"] = self._timestamp()
             state["last_order_failure_action"] = action
+            rejection = self._order_rejection_kind(error_message)
+            if rejection == "symbol" and str(action).startswith("BUY"):
+                state["buy_blocked_date"] = self._now().strftime("%Y-%m-%d")
+                state["buy_blocked_reason"] = error_message[:200]
             state["updated_at"] = self._timestamp()
             self._store_state(state)
+            if rejection == "account":
+                self._record_account_halt(error_message, market)
+                self._append_runtime_log("error", self._account_halt_issue(action, market) or f"계좌 주문 거부: {error_message}",
+                                         symbol=symbol, strategy_id=strategy_id, market=market)
             self._log_order_failure(
                 symbol,
                 action,
@@ -5333,10 +5524,14 @@ class DomesticDaytradeEngine:
             sell_qty = min(sell_qty, self._safe_int(state.get("position_qty", 0), 0))
             exchange = self._us_exchange(symbol)
             order = self._broker().sell_order(symbol, sell_qty, price=self._us_marketable_price(current_price, "SELL"), order_type="MARKET", exchange=exchange)
+            if not (order or {}).get("shadow"):
+                self._clear_account_halt("US")
             fill = {"filled_price": current_price, "filled_qty": sell_qty, "status": "UNKNOWN"}
             exec_price = self._safe_float(fill.get("filled_price", current_price), current_price)
         else:
             order = self._broker().sell_domestic_order(symbol, sell_qty, price=0, order_type="MARKET")
+            if not (order or {}).get("shadow"):
+                self._clear_account_halt("KS")
             exec_price = current_price
 
         prev_avg = self._safe_float(state.get("avg_price", 0), 0)
@@ -7549,25 +7744,12 @@ class DomesticDaytradeEngine:
         operational_exit = bool(exit_only or is_sell)
         # A page view reads cached balances and prices; orders never pass this.
         cached_reads = bool(operational_exit or view_only)
-        failure_at = str(state.get("last_order_failure_at", "") or "")
-        failure_action = str(state.get("last_order_failure_action", "") or "")
-        if failure_at and (not failure_action or failure_action == str(action)):
-            try:
-                failure_ts = datetime.datetime.strptime(failure_at, "%Y-%m-%d %H:%M:%S")
-                failure_age = max(0, int((self._now() - failure_ts).total_seconds()))
-                configured_failure_cooldown = max(
-                    30,
-                    self._safe_int(self._config("daytrade_order_failure_cooldown_sec", "300"), 300),
-                )
-                # 손절 주문은 신속히 다시 시도하되 API 폭주는 막는다.
-                failure_cooldown = min(configured_failure_cooldown, 30) if is_sell else configured_failure_cooldown
-                if failure_age < failure_cooldown:
-                    issues.append(
-                        f"최근 {failure_action or action} 주문 실패 후 재시도 대기 중 "
-                        f"({failure_cooldown - failure_age}초)"
-                    )
-            except Exception:
-                pass
+        if str(action) != "HOLD":
+            for blocker in (self._account_halt_issue(action, market), self._order_failure_cooldown_issue(state, action)):
+                if blocker:
+                    issues.append(blocker)
+        if is_buy and self._buy_blocked_today(state):
+            issues.append(f"KIS가 매매불가 종목으로 거부해 오늘은 매수하지 않습니다 ({self._buy_blocked_today(state)[:80]})")
         connection = self.check_kis_connection()
         if connection.get("connected") is False:
             issues.append("KIS API 연결이 준비되지 않았습니다.")
