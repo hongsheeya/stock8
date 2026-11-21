@@ -1910,25 +1910,26 @@ class DomesticDaytradeEngine:
                 original = snapshot.get(prefix + "_order_no")
                 if not original:
                     continue
-                outcome = self._sync_us_pending_order(snapshot, snapshot.get("symbol", ""), side)
-                if outcome == "open" and self._us_pending_session_over(snapshot.get(prefix + "_placed_at", "")):
-                    # 10-22: a SPCX sell from 23:06 stayed "pending" with no
-                    # position left, and every minute re-queried 3 exchanges
-                    # (168 calls/h, 33 timeouts). US orders are day orders, so
-                    # 18 h after placement its session is over: settle it.
-                    self._expire_us_pending(snapshot, prefix, original)
+                # Query without the lock, then apply to the current state under
+                # it. Merging fields of a snapshot dropped the settlement
+                # (realized P&L, holdings, last exit) and kept cleared keys.
+                try:
+                    matched = self._query_us_pending_order(snapshot, snapshot.get("symbol", ""), side)
+                except Exception:
+                    matched = None
                 with self._global_lock("state_io"):
                     current = self._load_state_map()
                     state = current.get(key, {})
                     if not self._same_order_no(state.get(prefix + "_order_no"), original):
                         continue
-                    # Merge only evidence, never overwrite concurrently refreshed holdings.
-                    for field, value in snapshot.items():
-                        if field.startswith(prefix + "_"):
-                            state[field] = value
-                    for evidence in snapshot.get("orders", []):
-                        if self._same_order_no(evidence.get("order_no"), original):
-                            self._mark_state_order_fill(state, original, evidence)
+                    outcome = self._apply_us_pending_evidence(state, state.get("symbol", ""), side, original, matched) \
+                        if matched else "open"
+                    if outcome == "open" and self._us_pending_session_over(state.get(prefix + "_placed_at", "")):
+                        # 10-22: a SPCX sell from 23:06 stayed "pending" with no
+                        # position left, and every minute re-queried 3 exchanges
+                        # (168 calls/h, 33 timeouts). US orders are day orders, so
+                        # 18 h after placement its session is over: settle it.
+                        self._expire_us_pending(state, prefix, original)
                     current[key] = state
                     self._save_state_map(current)
                     updated += 1
@@ -2131,7 +2132,7 @@ class DomesticDaytradeEngine:
         message = (f"{symbol} {action} 실행 | {filled_qty}주 · 체결가 ₩{round(filled_price):,} · "
                    f"체결금액 ₩{round(order_value):,} | 접수 후 체결 확인")
         with self._global_lock("trade_log_fill"):
-            if self._trade_log_has_fill(order_no):
+            if self._trade_log_has_fill(order_no, symbol, "BUY", state.get("pending_buy_placed_at", "")):
                 return True
             self._log_execution(
                 symbol, action, filled_qty, filled_price,
@@ -2149,63 +2150,174 @@ class DomesticDaytradeEngine:
         return True
 
     def _sync_us_pending_order(self, state, symbol, side):
-        """Broker cumulative evidence only; balance sync owns position quantity.
-
-        No inferred fills, automatic cancellation, or retries on an empty query.
-        Keeping the order pending prevents replacement orders during ambiguity.
-        """
+        """Broker cumulative evidence only; no inferred fills, automatic
+        cancellation, or retries on an empty query. Keeping the order pending
+        prevents replacement orders during ambiguity."""
         prefix = "pending_buy" if side == "BUY" else "pending_sell"
         order_no = str(state.get(prefix + "_order_no", "") or "")
         if not order_no:
             return "none"
         try:
-            import datetime as dt
-            placed = str(state.get(prefix + "_placed_at", "") or "")[:10]
-            date = dt.date.fromisoformat(placed) if placed else self._now().date()
-            # Stored timestamps are KST; include the preceding US session date.
-            start = (date - dt.timedelta(days=1)).strftime("%Y%m%d")
-            end = self._now().strftime("%Y%m%d")
-            broker = self._broker()
-            with broker.request_options(timeout=5, retries=0):
-                fills = broker.get_overseas_order_history(start_date=start, end_date=end,
-                    symbol=symbol, exchanges=[self._us_exchange(symbol)], strict=True)
-            matched = next((row for row in fills if self._same_order_no(row.get("order_no"), order_no)
-                            and str(row.get("symbol", "")).upper() == str(symbol).upper()
-                            and str(row.get("side", "")).upper() == side), None)
-            if not matched:
-                return "open"
-            previous = next((row for row in state.get("orders", [])
-                             if self._same_order_no(row.get("order_no"), order_no)), {})
-            if self._safe_int(matched.get("filled_qty", 0), 0) < self._safe_int(previous.get("filled_qty", 0), 0):
-                return "open"  # Never regress a cumulative fill on a stale query.
-            self._mark_state_order_fill(state, order_no, matched)
-            previous["verification"] = "kis"
-            status = str(matched.get("status", "OPEN")).upper()
-            if status in ("FILLED", "CANCELLED"):
-                if side == "SELL":
-                    filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
-                    before = state.get("pending_sell_position_before")
-                    if filled_qty > 0 and before is not None:
-                        # Leaving the sold shares on the books until the balance
-                        # caught up made the exit watch re-send sells for shares
-                        # already gone (TQQQ: 1,128 rejected SELL_FULL retries).
-                        # Count from the position at order time: the balance sync
-                        # may already have applied part of this fill.
-                        remaining = max(0, self._safe_int(before, 0) - filled_qty)
-                        state["position_qty"] = min(self._safe_int(state.get("position_qty", 0), 0), remaining)
-                        if state["position_qty"] == 0:
-                            state["avg_price"] = 0.0
-                        filled_price = self._safe_float(matched.get("filled_price", 0), 0)
-                        state["last_exit_price"] = round(filled_price, 4)
-                        self._mark_exit_watch(state, reason=f"미장 매도 체결 확인 ${filled_price:,.2f}",
-                                              action=self._pending_sell_exit_action(state), order_no=order_no)
-                    self._clear_pending_sell(state)
-                else:
-                    self._clear_pending_buy(state)
-                return status.lower()
+            matched = self._query_us_pending_order(state, symbol, side)
         except Exception:
             return "open"
-        return "open"
+        if not matched:
+            return "open"
+        return self._apply_us_pending_evidence(state, symbol, side, order_no, matched)
+
+    def _query_us_pending_order(self, state, symbol, side):
+        """The broker row of this pending US order, or None. Raises on a failed query."""
+        import datetime as dt
+        prefix = "pending_buy" if side == "BUY" else "pending_sell"
+        order_no = str(state.get(prefix + "_order_no", "") or "")
+        placed = str(state.get(prefix + "_placed_at", "") or "")[:10]
+        date = dt.date.fromisoformat(placed) if placed else self._now().date()
+        # Stored timestamps are KST; include the preceding US session date.
+        start = (date - dt.timedelta(days=1)).strftime("%Y%m%d")
+        end = self._now().strftime("%Y%m%d")
+        broker = self._broker()
+        with broker.request_options(timeout=5, retries=0):
+            fills = broker.get_overseas_order_history(start_date=start, end_date=end,
+                symbol=symbol, exchanges=[self._us_exchange(symbol)], strict=True)
+        rows = [row for row in fills if self._same_order_no(row.get("order_no"), order_no)
+                and str(row.get("symbol", "")).upper() == str(symbol).upper()
+                and str(row.get("side", "")).upper() == side]
+        # Rows come oldest first and KIS numbers orders per day: the latest
+        # row is this order, an older one may be a previous day's.
+        return rows[-1] if rows else None
+
+    def _apply_us_pending_evidence(self, state, symbol, side, order_no, matched):
+        """Apply one broker row to the pending US order: 'open' | 'filled' | 'cancelled'."""
+        previous = next((row for row in state.get("orders", [])
+                         if self._same_order_no(row.get("order_no"), order_no)), {})
+        if self._safe_int(matched.get("filled_qty", 0), 0) < self._safe_int(previous.get("filled_qty", 0), 0):
+            return "open"  # Never regress a cumulative fill on a stale query.
+        self._mark_state_order_fill(state, order_no, matched)
+        previous["verification"] = "kis"
+        status = str(matched.get("status", "OPEN")).upper()
+        if status not in ("FILLED", "CANCELLED"):
+            return "open"
+        filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
+        settle = self._settle_us_pending_sell if side == "SELL" else self._settle_us_pending_buy
+        if filled_qty > 0 and not settle(state, symbol, order_no, matched):
+            return "open"  # a fill without a price books nothing: keep waiting
+        if side == "SELL":
+            self._clear_pending_sell(state)
+        else:
+            self._clear_pending_buy(state)
+        return status.lower()
+
+    @staticmethod
+    def _us_fees(entry_price, exit_price, qty):
+        """KIS US: 0.25% each side plus the SEC fee ($8 per $1M) on the sale."""
+        buy_fee = entry_price * qty * 0.0025
+        sell_fee = exit_price * qty * 0.0025 + exit_price * qty / 1_000_000 * 8.0
+        return round(buy_fee + sell_fee, 4)
+
+    def _settle_us_pending_sell(self, state, symbol, order_no, matched):
+        """Book a US sell once the broker reports its fill.
+
+        11-13 PAPER: SSO, ENGN, INGM, CLS, SM and WTI filled at KIS, but the US
+        path only updated the state file: trade_log kept the PENDING rows (the
+        verifier saw 0 shares) and realized P&L was never booked, so the daily
+        loss limit could not see US losses. Counted from the quantity held at
+        order time, so a balance sync that already applied the fill is not
+        subtracted again (TQQQ: 1,128 rejected SELL_FULL retries)."""
+        filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
+        filled_price = self._safe_float(matched.get("filled_price", 0), 0)
+        if filled_qty <= 0 or filled_price <= 0:
+            return False
+        entry_avg = (self._safe_float(state.get("pending_sell_entry_avg", 0), 0)
+                     or self._safe_float(state.get("avg_price", 0), 0))
+        current_qty = self._safe_int(state.get("position_qty", 0), 0)
+        before = state.get("pending_sell_position_before")
+        # Without the quantity at order time the balance sync owns holdings.
+        new_qty = min(current_qty, max(0, self._safe_int(before, 0) - filled_qty)) if before is not None else current_qty
+        realized = (filled_price - entry_avg) * filled_qty if entry_avg > 0 else 0.0
+        self._book_realized(state, realized)
+        if entry_avg > 0:
+            # Later fill evidence for this order books only what is new.
+            for order in reversed(list(state.get("orders", []) or [])):
+                if self._same_order_no(order.get("order_no", ""), order_no):
+                    order.update(entry_avg=round(entry_avg, 4), booked_qty=filled_qty,
+                                 booked_price=round(filled_price, 4))
+                    break
+        state["position_qty"] = new_qty
+        if new_qty == 0:
+            state["avg_price"] = 0.0
+            state["buy1_used"] = False
+            state["buy2_used"] = False
+            state["first_buy_date"] = ""
+            state["carried_overnight"] = False
+        exit_action = self._pending_sell_exit_action(state)
+        state["last_exit_price"] = round(filled_price, 4)
+        reason = f"미장 매도 체결 확인 ${filled_price:,.2f}"
+        self._mark_exit_watch(state, reason=reason, action=exit_action, order_no=order_no)
+        gross = round(realized, 4)
+        fees = self._us_fees(entry_avg, filled_price, filled_qty) if entry_avg > 0 else 0.0
+        message = (f"{symbol} {exit_action} 실행 | {filled_qty}주 · ${filled_price:.2f} | 손익 ${gross:+.2f} | "
+                   f"수수료 ${fees:.4f} | 순손익 ${gross - fees:+.2f} | 접수 후 체결 확인")
+        with self._global_lock("trade_log_fill"):
+            if self._trade_log_has_fill(order_no, symbol, "SELL", state.get("pending_sell_placed_at", "")):
+                return True
+            self._log_execution(
+                symbol, exit_action, filled_qty, filled_price,
+                {"order_no": str(order_no), "order_type": "MARKET", "price": filled_price, "qty": filled_qty,
+                 "market": "US"},
+                message,
+                strategy_id=state.get("strategy_id", "us_premarket"),
+                runtime={"action": exit_action, "reason": reason, "risk_status": "SAFE", "market": "US",
+                         "order_value": round(filled_price * filled_qty, 2), "realized": round(realized, 4),
+                         "post_position_qty": new_qty,
+                         "post_avg_price": round(self._safe_float(state.get("avg_price", 0), 0), 4)},
+                name=state.get("name", ""),
+                filled_price=filled_price,
+                filled_qty=filled_qty,
+            )
+        return True
+
+    def _settle_us_pending_buy(self, state, symbol, order_no, matched):
+        """Book a US buy once the broker reports its fill (one trade_log row)."""
+        filled_qty = self._safe_int(matched.get("filled_qty", 0), 0)
+        filled_price = self._safe_float(matched.get("filled_price", 0), 0)
+        if filled_qty <= 0 or filled_price <= 0:
+            return False
+        action = str(state.get("pending_buy_action", "") or "BUY1").upper()
+        current_qty = self._safe_int(state.get("position_qty", 0), 0)
+        before = state.get("pending_buy_position_before")
+        if before is not None:
+            before_qty = max(0, self._safe_int(before, 0))
+            target_qty = before_qty + filled_qty
+            # The balance sync may already hold the bought shares; never add twice.
+            if current_qty < target_qty:
+                before_avg = self._safe_float(state.get("pending_buy_avg_before", 0), 0)
+                state["position_qty"] = target_qty
+                state["avg_price"] = round((before_avg * before_qty + filled_price * filled_qty) / target_qty, 4)
+        if not state.get("first_buy_date"):
+            state["first_buy_date"] = self._now().strftime("%Y%m%d")
+        state["carried_overnight"] = False
+        state["last_signal"] = action
+        state["updated_at"] = self._timestamp()
+        order_value = round(filled_price * filled_qty, 2)
+        message = (f"{symbol} {action} 실행 | {filled_qty}주 · ${filled_price:.2f} · 체결금액 ${order_value:.2f} | "
+                   f"접수 후 체결 확인")
+        with self._global_lock("trade_log_fill"):
+            if self._trade_log_has_fill(order_no, symbol, "BUY", state.get("pending_buy_placed_at", "")):
+                return True
+            self._log_execution(
+                symbol, action, filled_qty, filled_price,
+                {"order_no": str(order_no), "order_type": "MARKET", "price": filled_price, "qty": filled_qty,
+                 "market": "US"},
+                message,
+                strategy_id=state.get("strategy_id", "us_premarket"),
+                runtime={"action": action, "reason": "접수 후 체결 확인", "market": "US", "order_value": order_value,
+                         "realized": 0.0, "post_position_qty": self._safe_int(state.get("position_qty", 0), 0),
+                         "post_avg_price": round(self._safe_float(state.get("avg_price", 0), 0), 4)},
+                name=state.get("name", ""),
+                filled_price=filled_price,
+                filled_qty=filled_qty,
+            )
+        return True
 
     def _open_sell_orders(self, symbol):
         rows = []
@@ -2363,7 +2475,7 @@ class DomesticDaytradeEngine:
         state["last_exit_price"] = round(filled_price, 4)
         self._mark_exit_watch(state, reason=exit_reason, action=exit_action, order_no=str(order_no))
         with self._global_lock("trade_log_fill"):
-            if not self._trade_log_has_fill(order_no):
+            if not self._trade_log_has_fill(order_no, symbol, "SELL", state.get("pending_sell_placed_at", "")):
                 name = state.get("name", "")
                 gross = round(realized)
                 fees = (round(entry_avg * filled_qty * self._KR_FEE_RATE)
@@ -2482,12 +2594,14 @@ class DomesticDaytradeEngine:
         return self._us_market_open() and self._regime_trend_clock("US")[1] < self._US_MOC_LAST_PLACE_HHMM
 
     def _clear_us_moc(self, state):
-        for key in ("moc_order_no", "moc_qty", "moc_placed_at", "moc_cancel_requested_at", "moc_cancel_error"):
+        for key in ("moc_order_no", "moc_qty", "moc_placed_at", "moc_cancel_requested_at", "moc_cancel_error",
+                    "moc_entry_avg"):
             state.pop(key, None)
 
     _MOC_SYNC_KEYS = ("position_qty", "avg_price", "orders", "last_exit_price", "last_exit_watch_at",
                       "last_exit_reason", "last_exit_action", "last_exit_order_no", "flat_after_exit_at",
-                      "regime_reversal_exit_at")
+                      "regime_reversal_exit_at", "realized_profit", "daily_realized_profit", "daily_realized_date",
+                      "buy1_used", "buy2_used", "first_buy_date", "carried_overnight")
 
     def _us_moc_reconcile(self, state, symbol):
         """Book a filled or cancelled MOC through the pending-sell sync.
@@ -2501,7 +2615,9 @@ class DomesticDaytradeEngine:
         moc_qty = self._safe_int(state.get("moc_qty", 0), 0)
         probe = dict(state)
         probe.update(pending_sell_order_no=order_no, pending_sell_placed_at=state.get("moc_placed_at", ""),
-                     pending_sell_qty=moc_qty, pending_sell_type="SELL_MOC", pending_sell_position_before=moc_qty)
+                     pending_sell_qty=moc_qty, pending_sell_type="SELL_MOC", pending_sell_position_before=moc_qty,
+                     pending_sell_entry_avg=self._safe_float(state.get("moc_entry_avg", 0), 0)
+                     or self._safe_float(state.get("avg_price", 0), 0))
         status = self._sync_us_pending_order(probe, symbol, "SELL")
         if status in ("filled", "cancelled"):
             for key in self._MOC_SYNC_KEYS:
@@ -2576,6 +2692,7 @@ class DomesticDaytradeEngine:
         state["moc_order_no"] = str((order or {}).get("order_no", "") or "")
         state["moc_qty"] = qty
         state["moc_placed_at"] = self._timestamp()
+        state["moc_entry_avg"] = round(self._safe_float(state.get("avg_price", 0), 0), 4)
         self._append_order(state, "SELL_MOC", qty, self._safe_float(state.get("last_price", 0), 0), order or {},
                            strategy_id=state.get("strategy_id", "vrev"), reason="장마감 보호 MOC 매도 (PC 절전 대비)", status="OPEN")
         self._append_runtime_log("info", f"{symbol} 장마감 보호 MOC 매도 {qty}주 접수", symbol=symbol, market="US", dedup_sec=60)
@@ -9054,15 +9171,19 @@ class DomesticDaytradeEngine:
             return f"{symbol} {action} 주문 접수 · 즉시 조회 {seen_qty}/{qty}주 체결 · 최종 체결 확인 대기"
         return f"{symbol} {action} 주문 접수 · 체결 확인 대기"
 
-    def _trade_log_has_fill(self, order_no):
+    def _trade_log_has_fill(self, order_no, symbol="", side="", since=""):
         """True once trade_log holds an executed row for this order number.
 
         The verifier sums every non-pending row of an order, so the delayed
         fill confirmation (signal sync or reconciliation, whichever sees it
-        first) must be written only once."""
+        first) must be written only once. KIS numbers orders per day, so a
+        row of another symbol, side or an earlier day is not this order."""
         order_no = str(order_no or "").strip()
         if not order_no:
             return False
+        symbol = str(symbol or "").strip().upper()
+        side = str(side or "").strip().upper()
+        since = str(since or "")[:10]
         try:
             db = self.struct.db("trade_log")
             for number in {order_no, self._normalized_order_no(order_no)} - {""}:
@@ -9070,6 +9191,13 @@ class DomesticDaytradeEngine:
                     action = str(row.get("action", "") or "").upper()
                     event = str(row.get("event_type", "") or "").upper()
                     if action in ("PENDING", "ERROR", "") or event.endswith(("_PENDING", "_ERROR")):
+                        continue
+                    row_symbol = str(row.get("symbol", "") or "").strip().upper()
+                    if symbol and row_symbol and row_symbol != symbol:
+                        continue
+                    if side and action != side:
+                        continue
+                    if since and str(row.get("created", "") or "")[:10] and str(row.get("created", ""))[:10] < since:
                         continue
                     if self._safe_int(row.get("filled_qty", 0), 0) > 0:
                         return True

@@ -31,6 +31,9 @@ class UsPendingTests(unittest.TestCase):
 
     def setup_order(self, side='BUY'):
         engine, _ = _engine_with_state({}, [])
+        self.logged = []
+        engine.struct.db = lambda _name: Mock(rows=lambda **_q: [], insert=self.logged.append)
+        engine._append_runtime_log = lambda *_a, **_k: None
         broker = Mock()
         broker.request_options.side_effect = lambda **kw: nullcontext()
         engine._broker = lambda: broker
