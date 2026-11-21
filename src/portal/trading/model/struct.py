@@ -2591,7 +2591,9 @@ class Struct:
                     "schedule_window": schedule_window,
                     "schedule_key": schedule_key,
                     "status": status or "completed",
-                    "message": "예약 재검증 — 기존 예약 전체 취소 후 FireGate 기준 재예약",
+                    "message": (str((raw_rebuild or {}).get("message", "") or "예약 재검증 — FireGate 기준 차단으로 취소·재예약하지 않음")
+                                if (raw_rebuild or {}).get("status") == "firegate_blocked"
+                                else "예약 재검증 — 기존 예약 전체 취소 후 FireGate 기준 재예약"),
                     "verification": post_rebuild_verification,
                     "external_cycle_sync": external_result,
                     "firegate_sync": firegate_result,
