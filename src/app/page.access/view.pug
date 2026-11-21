@@ -71,6 +71,14 @@ div(class="min-h-screen flex items-center justify-center px-4 py-10 auth-bg")
                             placeholder="비밀번호 입력",
                             class="auth-input")
 
+                    //- Keep me signed in
+                    label(class="flex items-center gap-2 cursor-pointer select-none text-[13px] text-slate-300")
+                        input(type="checkbox",
+                            [(ngModel)]="loginData.remember",
+                            class="size-4 rounded border-slate-600 bg-slate-800 accent-indigo-500 cursor-pointer")
+                        span 로그인 유지
+                        span(class="text-[11px] text-slate-500") (브라우저를 닫아도 31일간 유지 · 공용 PC에서는 끄세요)
+
                     //- Login Button
                     button((click)="login()",
                         [disabled]="loading",
