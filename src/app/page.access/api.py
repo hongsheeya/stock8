@@ -23,6 +23,9 @@ def _mask_email(email):
         local_masked = local[:2] + "*" * max(len(local) - 2, 1)
     return f"{local_masked}@{domain}"
 
+def _truthy(value):
+    return str(value or "").strip().lower() in ("1", "true", "on", "yes")
+
 def _validate_email(email):
     return re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or "") is not None
 
@@ -41,6 +44,9 @@ def login():
         wiz.response.status(401, message="이메일 또는 비밀번호가 올바르지 않습니다.")
 
     session.set(id=user['id'], email=user['email'], name=user['name'], role=user['role'])
+    # 로그인 유지: 체크하면 브라우저를 닫아도 세션 쿠키가 Flask 기본 수명(31일)
+    # 동안 남고, 요청마다 만료일이 연장된다. 체크하지 않으면 브라우저를 닫을 때 끝난다.
+    wiz.server.package.flask.session.permanent = _truthy(wiz.request.query("remember", ""))
     wiz.response.status(200, user=user)
 
 def signup():

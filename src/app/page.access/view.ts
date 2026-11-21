@@ -11,8 +11,11 @@ export class Component implements OnInit {
 
     public loginData: any = {
         email: '',
-        password: ''
+        password: '',
+        remember: false
     };
+
+    private static readonly REMEMBER_KEY = 'stock8.rememberLogin';
 
     public signupData: any = {
         name: '',
@@ -37,6 +40,9 @@ export class Component implements OnInit {
 
     public async ngOnInit() {
         await this.service.init(this);
+        try {
+            this.loginData.remember = localStorage.getItem(Component.REMEMBER_KEY) === '1';
+        } catch (e) { }
         let check = await this.service.auth.check();
         if (check) return this.openMainAccount();
         await this.service.render();
@@ -78,7 +84,10 @@ export class Component implements OnInit {
         this.loading = true;
         await this.service.render();
 
-        let { code, data } = await wiz.call("login", this.loginData);
+        try {
+            localStorage.setItem(Component.REMEMBER_KEY, this.loginData.remember ? '1' : '0');
+        } catch (e) { }
+        let { code, data } = await wiz.call("login", { ...this.loginData, remember: this.loginData.remember ? 'true' : 'false' });
 
         if (code == 200) {
             await this.openMainAccount();
