@@ -568,7 +568,12 @@ class Verifier:
             result["local_configured"] = True
             if order_no:
                 try:
-                    result["local"] = _int(self.local(order_no))
+                    if _accepts_scope(self.local):
+                        local_qty = self.local(order_no, symbol=record.get("symbol", ""),
+                                               side=record.get("side", ""), since=str(record.get("at", ""))[:10])
+                    else:
+                        local_qty = self.local(order_no)  # a reader without the scope arguments
+                    result["local"] = _int(local_qty)
                 except Exception as exc:
                     result["local_error"] = str(exc)[:160] or "조회 실패"
         return result
@@ -658,12 +663,49 @@ class KisReader:
         return totals
 
 
+def _accepts_scope(reader):
+    try:
+        import inspect
+        params = inspect.signature(reader).parameters
+    except (TypeError, ValueError):
+        return False
+    return "symbol" in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
+
+
 def local_filled_reader(trade_log, cycle_trade):
     """order_no -> filled qty recorded locally (daytrade trade_log or
-    infinite-buy cycle_trade, whichever holds the order)."""
-    def read(order_no):
+    infinite-buy cycle_trade, whichever holds the order).
+
+    KIS numbers orders per day, so with the order's symbol, side and date a
+    row of another symbol, side or an earlier day is not counted: summing it
+    made the local quantity too large (FAIL, buys held)."""
+    def _side(value):
+        text = str(value or "").upper()
+        return "BUY" if text.startswith("BUY") else ("SELL" if text.startswith("SELL") else text)
+
+    def _matches(row, symbol, side, since, date_field):
+        row_symbol = norm_symbol(row.get("symbol"))
+        if symbol and row_symbol and row_symbol != symbol:
+            return False
+        row_side = _side(row.get("action"))
+        if side and row_side in ("BUY", "SELL") and row_side != side:
+            return False
+        row_day = str(row.get(date_field, "") or "")[:10]
+        return not (since and row_day and row_day < since)
+
+    def read(order_no, symbol="", side="", since=""):
         variants = {str(order_no), norm_order_no(order_no)}
         variants.discard("")
+        symbol = norm_symbol(symbol)
+        side = _side(side)
+        since = str(since or "")[:10]
+        # cycle_trade.trade_date is the US session date, a day behind KST.
+        cycle_since = ""
+        if since:
+            try:
+                cycle_since = (datetime.date.fromisoformat(since) - datetime.timedelta(days=1)).isoformat()
+            except ValueError:
+                cycle_since = ""
         log_qty = 0
         cycle_qty = 0
         seen = set()
@@ -676,11 +718,15 @@ def local_filled_reader(trade_log, cycle_trade):
                 event = str(row.get("event_type", "") or "").upper()
                 if action in ("PENDING", "ERROR", "") or event.endswith(("_PENDING", "_ERROR")):
                     continue
+                if not _matches(row, symbol, side, since, "created"):
+                    continue
                 log_qty += _int(row.get("filled_qty"))
             for row in (cycle_trade.rows(broker_order_no=number) if cycle_trade is not None else []) or []:
                 if row.get("id") in seen:
                     continue
                 seen.add(row.get("id"))
+                if not _matches(row, symbol, side, cycle_since, "trade_date"):
+                    continue
                 cycle_qty += _int(row.get("filled_qty"))
         return max(log_qty, cycle_qty)
     return read

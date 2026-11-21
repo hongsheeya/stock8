@@ -1371,8 +1371,16 @@ class Engine:
             self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
             return {"symbol": symbol, "status": "skipped", "message": msg}
         today = datetime.datetime.strptime(session, "%Y-%m-%d")
-        history = kis_api.get_overseas_order_history(start_date=(today - datetime.timedelta(days=1)).strftime("%Y%m%d"),
-                                                     end_date=(today + datetime.timedelta(days=1)).strftime("%Y%m%d"), symbol=symbol)
+        # "No sell this session" may only come from a complete read: a partial
+        # (non-strict) history could hide an existing sell and send a second one.
+        try:
+            history = kis_api.get_overseas_order_history(start_date=(today - datetime.timedelta(days=1)).strftime("%Y%m%d"),
+                                                         end_date=(today + datetime.timedelta(days=1)).strftime("%Y%m%d"),
+                                                         symbol=symbol, strict=True)
+        except Exception as exc:
+            msg = f"{symbol} 이번 세션 매도 내역을 끝까지 확인하지 못해 MOC 보류: {str(exc)[:120]}"
+            self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
+            return {"symbol": symbol, "status": "skipped", "message": msg}
         rows = history.get("orders", []) if isinstance(history, dict) else (history or [])
         for row in rows:
             if str(row.get("symbol", "")).upper() != symbol or str(row.get("side", row.get("action", ""))).upper() != "SELL":
@@ -3398,16 +3406,19 @@ class Engine:
             while current_day <= today:
                 day_text = current_day.strftime("%Y%m%d")
                 try:
+                    # Strict: a partial history must fail the pass, never look
+                    # like "no more fills" to the three-pass comparison.
                     symbol_orders = kis_api.get_overseas_order_history(
                         start_date=day_text,
                         end_date=day_text,
                         symbol=target_symbol,
                         exchanges=exchanges,
+                        strict=True,
                     ) or []
                 except Exception as e:
+                    # One incomplete day already fails this pass; stop querying.
                     errors.append(f"{target_symbol}/{day_text}: {e}")
-                    current_day += datetime.timedelta(days=1)
-                    continue
+                    return orders, errors
                 for order in symbol_orders:
                     key = self._external_order_history_key(order)
                     if key in seen_history_keys:

@@ -122,7 +122,10 @@ class _Kis:
     def get_balance(self, exchange=None):
         return {"holdings": [{"symbol": "SOXL", "qty": self.held}]}
 
-    def get_overseas_order_history(self, start_date=None, end_date=None, symbol=""):
+    def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None, strict=False):
+        self.history_strict = getattr(self, "history_strict", []) + [strict]
+        if getattr(self, "history_error", None):
+            raise self.history_error
         return {"orders": self.history}
 
     def sell_order(self, symbol, qty, price=0, order_type="MARKET", exchange="NASD"):
@@ -166,6 +169,31 @@ class ReverseMocTests(unittest.TestCase):
         kis = _Kis(self.at(10, 0))
         self.engine(kis, state="ACTIVE")[0].run_firegate_reverse_moc()
         self.assertEqual(kis.sells, [])
+
+    def test_existing_sell_check_reads_the_whole_history(self):
+        """A partial (non-strict) history could hide this session's sell."""
+        kis = _Kis(self.at(10, 0))
+        self.engine(kis)[0].run_firegate_reverse_moc()
+        self.assertEqual(kis.history_strict, [True])
+
+    def test_incomplete_history_holds_the_moc(self):
+        kis = _Kis(self.at(10, 0))
+        kis.history_error = RuntimeError("주문/체결 연속조회 미완료")
+        engine, struct = self.engine(kis)
+        engine.run_firegate_reverse_moc()
+        self.assertEqual(kis.sells, [])
+        # No session marker: the next pass checks again instead of giving up.
+        self.assertNotIn("firegate_reverse_moc:SOXL", struct.configs)
+
+    def test_external_sync_passes_fail_on_an_incomplete_history(self):
+        kis = _Kis(self.at(10, 0))
+        kis.history_error = RuntimeError("주문/체결 연속조회 미완료")
+        engine, _struct = self.engine(kis)
+        day = datetime.datetime(2026, 10, 29)
+        orders, errors = engine._collect_external_order_history_once(kis, ["SOXL"], day, day, ["NASD"])
+        self.assertEqual(orders, [])
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(kis.history_strict, [True])
 
     def test_unsynced_or_existing_sell_blocks_the_moc(self):
         kis = _Kis(self.at(10, 0), held=80)

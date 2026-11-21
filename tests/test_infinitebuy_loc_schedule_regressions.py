@@ -138,12 +138,13 @@ class _KisApiStub:
 		})
 		return copy.deepcopy(self.reservation_orders)
 
-	def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None):
+	def get_overseas_order_history(self, start_date=None, end_date=None, symbol="", exchanges=None, strict=False):
 		self.order_history_calls.append({
 			"start_date": start_date,
 			"end_date": end_date,
 			"symbol": symbol,
 			"exchanges": list(exchanges or []),
+			"strict": strict,
 		})
 		if symbol:
 			return [copy.deepcopy(row) for row in self.order_history if str(row.get("symbol", "")).upper() == str(symbol).upper()]
@@ -1848,7 +1849,7 @@ class InfiniteBuyLocScheduleRegressionTests(unittest.TestCase):
 		)
 		call_count = {"value": 0}
 
-		def unstable_history(start_date=None, end_date=None, symbol="", exchanges=None):
+		def unstable_history(start_date=None, end_date=None, symbol="", exchanges=None, strict=False):
 			call_count["value"] += 1
 			if call_count["value"] <= 2:
 				return [copy.deepcopy(order)]

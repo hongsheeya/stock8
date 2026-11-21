@@ -2613,9 +2613,21 @@ class DomesticDaytradeEngine:
         if state.get("pending_sell_order_no"):
             return "open"  # an app sell is being confirmed; never mix the two
         moc_qty = self._safe_int(state.get("moc_qty", 0), 0)
+        placed_at = str(state.get("moc_placed_at", "") or "")
+        # Shares bought after the MOC was placed are not part of it: counting
+        # from moc_qty alone would book the position as 0 and drop them.
+        later_buys = {}
+        for item in list(state.get("orders", []) or []):
+            item = item or {}
+            if placed_at and str(item.get("timestamp", "") or "") > placed_at                     and self._normalize_trade_action(item.get("action", "")) == "BUY":
+                # One entry per order: a repeated record must not count twice.
+                key = self._normalized_order_no(item.get("order_no")) or id(item)
+                later_buys[key] = max(later_buys.get(key, 0), self._safe_int(item.get("filled_qty", 0), 0))
+        later_bought = sum(later_buys.values())
         probe = dict(state)
-        probe.update(pending_sell_order_no=order_no, pending_sell_placed_at=state.get("moc_placed_at", ""),
-                     pending_sell_qty=moc_qty, pending_sell_type="SELL_MOC", pending_sell_position_before=moc_qty,
+        probe.update(pending_sell_order_no=order_no, pending_sell_placed_at=placed_at,
+                     pending_sell_qty=moc_qty, pending_sell_type="SELL_MOC",
+                     pending_sell_position_before=moc_qty + later_bought,
                      pending_sell_entry_avg=self._safe_float(state.get("moc_entry_avg", 0), 0)
                      or self._safe_float(state.get("avg_price", 0), 0))
         status = self._sync_us_pending_order(probe, symbol, "SELL")
