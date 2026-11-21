@@ -837,13 +837,16 @@ class KisApi:
             return {"success": False, "message": str(e)}
 
     def validate_paper_readiness(self):
-        previous = getattr(_REQUEST_OPTIONS, 'deadline', None)
-        _REQUEST_OPTIONS.deadline = time.monotonic() + 35
-        try:
-            with self.request_options(timeout=5, retries=0):
-                return self._validate_paper_readiness()
-        finally:
-            _REQUEST_OPTIONS.deadline = previous
+        """5 s per HTTP request, 35 s for the whole chain.
+
+        The chain makes ~9 calls and the PAPER gateway allows one per 1.1 s.
+        request_options(timeout=5) also caps the deadline at now+5 s, so the
+        35 s budget is set after entering it; otherwise the fifth call (the
+        AMEX balance) always timed out and PAPER could never become READY.
+        request_options restores the caller's deadline on exit."""
+        with self.request_options(timeout=5, retries=0):
+            _REQUEST_OPTIONS.deadline = time.monotonic() + 35
+            return self._validate_paper_readiness()
 
     def _validate_paper_readiness(self):
         """Run the mandatory read-only validation chain before PAPER orders."""

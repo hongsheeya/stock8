@@ -25,6 +25,8 @@ Stock8의 계정 분리, 브로커 연결, 무한매수, 관리자용 국내·�
 
 LIVE가 기본이며 PAPER는 별도 신청합니다. 일반 사용자의 단타 접근은 화면뿐 아니라 API에서도 제한합니다. 무한매수·KS 단타·US 단타 활성화는 서로 독립적입니다.
 
+새 PAPER DB는 단타 기능 접근·한도·예산 기본값은 채우지만, 자동매매 스위치(무한매수 자동, LOC 예약, 다음 사이클 자동 시작, KS/US 단타 자동·청산 감시)는 모두 `false`로 시작합니다(`PAPER_AUTOMATION_DEFAULT_OFF_KEYS`). 첫 가입자(관리자)가 이 전역 값을 물려받으므로, 모의 키를 저장해도 사용자가 직접 켜기 전에는 주문하지 않습니다. 이미 초기화된 DB(`paper_full_access_initialized_v2`)의 사용자 설정은 바꾸지 않습니다.
+
 `trading_config`는 단일 전역 설정이 아닙니다. 사용자·투자 모드·계좌 컨텍스트에 맞는 설정, 캐시, DB를 사용해야 합니다. 손익 저장 키도 컨텍스트로 분리합니다. 계정 전환 때 다른 계좌의 토큰·잔고·추천·체결을 재사용하면 안 됩니다.
 
 주요 DB 모델은 `trading_cycle`, `cycle_trade`, `trade_log`, `account_snapshot`, `daily_trade_summary`, `etf_watchlist`, `simulation_run`, `simulation_trade`입니다. 새 실행 데이터와 비밀 정보는 Git에 추가하지 않습니다.
