@@ -1,7 +1,10 @@
+import contextlib
 import copy
 import datetime
 import json
 import math
+import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1036,6 +1039,12 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
         if not symbol:
             continue
         try:
+            symbol_lock = firegate_symbol_lock(symbol)
+            symbol_lock.__enter__()
+        except Exception as e:
+            errors.append(f"{symbol}: {str(e)}")
+            continue
+        try:
             seed = _safe_float(cycle.get("total_investment"), 0)
             division_count = max(_safe_int(cycle.get("division_count"), 20), 1)
             target_profit = _safe_float(cycle.get("target_profit"), default_target_profit(symbol))
@@ -1065,6 +1074,7 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 if str(tx.get("source", "")) == INFINITYSTOCK_SOURCE
             }
             synced_trade_ids.update(str(value) for value in portfolio.get("reconciledSourceTradeIds", []) or [])
+            synced_order_nos = booked_order_numbers(portfolio, existing_transactions)
             try:
                 trades = trade_db.rows(cycle_id=cycle.get("id"), orderby="created", order="ASC", dump=1000) or []
             except Exception:
@@ -1073,6 +1083,9 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
             for trade in trades:
                 trade_id = str(trade.get("id", ""))
                 if trade_id in synced_trade_ids:
+                    skipped_trades += 1
+                    continue
+                if str(trade.get("broker_order_no", "") or "").strip() in synced_order_nos:
                     skipped_trades += 1
                     continue
                 if _is_synthetic_trade_row(trade):
@@ -1107,6 +1120,8 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 bridge.update_portfolio(portfolio.get("id"), snapshot)
         except Exception as e:
             errors.append(f"{symbol}: {str(e)}")
+        finally:
+            symbol_lock.__exit__(None, None, None)
     return {
         "source_portfolios": len(source_rows),
         "pushed_portfolios": pushed_portfolios,
@@ -1296,6 +1311,11 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
         "orderType": str((trade or {}).get("order_type", "")),
         "strategyType": str((trade or {}).get("strategy_type", "")),
     }
+    broker_order_no = str((trade or {}).get("broker_order_no", "") or "").strip()
+    if broker_order_no:
+        # One broker order is one fill in FireGate, whichever local row (or
+        # the auto reconcile) books it first.
+        tx["brokerOrderNo"] = broker_order_no
     if tx["type"] == "buy" and str(tx.get("strategyType", "")).upper() == "CRASH_BUY":
         tx["tDelta"] = 0
     elif tx["type"] == "buy" and portfolio:
@@ -1303,6 +1323,22 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
     if portfolio:
         tx.update(firegate_operator(portfolio, tx))
     return tx
+
+
+def booked_order_numbers(portfolio, transactions):
+    """Broker order numbers FireGate already accounts for: a transaction's
+    brokerOrderNo, the orders an auto-reconcile adjustment absorbed
+    (absorbedOrderNos) and the portfolio's reconciledBrokerOrderNos. A later
+    local row for any of them must not be written again."""
+    booked = {str(value).strip() for value in (portfolio or {}).get("reconciledBrokerOrderNos", []) or [] if str(value).strip()}
+    for tx in transactions or []:
+        if str((tx or {}).get("source", "")) != INFINITYSTOCK_SOURCE:
+            continue
+        order_no = str((tx or {}).get("brokerOrderNo", "") or "").strip()
+        if order_no:
+            booked.add(order_no)
+        booked.update(str(value).strip() for value in (tx or {}).get("absorbedOrderNos", []) or [] if str(value).strip())
+    return booked
 
 
 def firegate_operator(portfolio, tx):
@@ -1400,16 +1436,22 @@ def apply_v4_transaction(portfolio, tx, recent_average=None):
         holding_qty += size
         total_buy += buy_amount
     else:
+        # An auto-reconcile adjustment (adjustment_transaction) only removes
+        # shares: it is not the reverse-mode sell, the end of a cycle or a
+        # sell price.
+        adjustment = bool(tx.get("adjustment"))
         if reverse_mode or exhausted:
             t_value *= _safe_float(t_delta, _reverse_factor(division_count)) if t_delta is not None else _reverse_factor(division_count)
-            if reverse_star_price <= 0 and recent_average:
-                reverse_star_price = _round2(recent_average)
-            state = "ACTIVE"
+            if not adjustment:
+                if reverse_star_price <= 0 and recent_average:
+                    reverse_star_price = _round2(recent_average)
+                state = "ACTIVE"
         else:
             t_value *= _safe_float(t_delta, 0.75) if t_delta is not None else 0.75
-        updated["isRunning"] = holding_qty > size
-        updated["endDate"] = tx.get("date", "")
-        updated["sellPrice"] = price
+        if not adjustment:
+            updated["isRunning"] = holding_qty > size
+            updated["endDate"] = tx.get("date", "")
+            updated["sellPrice"] = price
         total_sell += gross - commission
         holding_qty = max(0, holding_qty - size)
         if holding_qty == 0:
@@ -1697,11 +1739,17 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
             str((trade or {}).get("id", "") or "").strip()
             or str((trade or {}).get("broker_order_no", "") or "").strip()
         )
+        order_no = str((trade or {}).get("broker_order_no", "") or "").strip()
         if source_trade_id:
             if source_trade_id in {str(value) for value in portfolio.get("reconciledSourceTradeIds", []) or []}:
                 return {"synced": False, "reason": "reconciled", "portfolio_id": portfolio.get("id")}
-            for tx in bridge.list_transactions(portfolio.get("id")):
-                if str(tx.get("source", "")) == INFINITYSTOCK_SOURCE and str(tx.get("sourceTradeId", "")) == source_trade_id:
+            existing = bridge.list_transactions(portfolio.get("id"))
+            if order_no and order_no in booked_order_numbers(portfolio, existing):
+                return {"synced": False, "reason": "duplicate", "portfolio_id": portfolio.get("id")}
+            for tx in existing:
+                if str(tx.get("source", "")) != INFINITYSTOCK_SOURCE:
+                    continue
+                if str(tx.get("sourceTradeId", "")) == source_trade_id:
                     return {"synced": False, "reason": "duplicate", "portfolio_id": portfolio.get("id")}
         tx = transaction_from_cycle_trade(trade, portfolio.get("id"), portfolio=portfolio)
         if not tx:
@@ -1716,8 +1764,522 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
             "ticker": updated.get("ticker", symbol),
         }
 
-    result = _bridge_call_from_config(struct, _sync)
+    def _sync_locked(bridge, cfg):
+        with firegate_symbol_lock(symbol):
+            return _sync(bridge, cfg)
+
+    result = _bridge_call_from_config(struct, _sync_locked)
     return result or {"synced": False, "reason": "not_configured"}
+
+
+# =============================================================================
+# Automatic FireGate reconcile (11-23): book the fills FireGate is missing and
+# relink the portfolio to the current local cycle, broker holdings as the truth.
+# Planning is pure and produces the exact transaction documents and the
+# portfolio state expected after each one; nothing is written unless that
+# replay ends at the broker quantity. Writes use stable document ids and a
+# local job record, so an interrupted run is finished, not repeated.
+# =============================================================================
+
+RECONCILE_PRICE_TOLERANCE = 0.005
+RECONCILE_DAY_TOLERANCE = 1
+RECONCILE_ADJUST_MEMO = "브로커 잔고 기준 자동 조정(원인 미확인 차이)"
+RECONCILE_ADJUST_MAX_SHARE = 0.5
+RECONCILE_ADJUST_PRICE_BAND = (0.3, 3.0)
+_SYMBOL_LOCKS = sys.__dict__.setdefault("_stock8_firegate_symbol_locks", {})
+_SYMBOL_LOCKS_GUARD = sys.__dict__.setdefault("_stock8_firegate_symbol_locks_guard", threading.Lock())
+
+
+@contextlib.contextmanager
+def firegate_symbol_lock(symbol, timeout=60):
+    """One FireGate writer per symbol in this process: the trade push, the
+    bulk push and the auto reconcile."""
+    key = _normalize_symbol(symbol) or "*"
+    with _SYMBOL_LOCKS_GUARD:
+        lock = _SYMBOL_LOCKS.setdefault(key, threading.RLock())
+    if not lock.acquire(timeout=timeout):
+        raise FireGateBridgeError(f"{key}: 다른 FireGate 쓰기가 진행 중입니다.")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _reconcile_date(value):
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y. %m. %d", "%Y-%m-%d", "%Y%m%d", "%Y.%m.%d", "%Y/%m/%d"):
+        try:
+            return datetime.datetime.strptime(text[:12].strip(), fmt).date()
+        except Exception:
+            continue
+    try:
+        return datetime.datetime.strptime(text[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _valid_firegate_tx(tx):
+    tx_type = str((tx or {}).get("type", "") or "").lower()
+    return tx_type in ("buy", "sell") and _safe_int((tx or {}).get("size"), 0) > 0 \
+        and _safe_float((tx or {}).get("price"), 0) > 0
+
+
+def _same_fill(tx, kind, day, size, price):
+    """Content match: a fill booked under another id (an old DB, a manual
+    entry) is the same fill when type, size and price agree and the dates are
+    at most a day apart (KST/ET date of a US fill)."""
+    if str(tx.get("type", "")).lower() != kind:
+        return False
+    if _safe_int(tx.get("size"), 0) != size:
+        return False
+    if abs(_safe_float(tx.get("price"), 0) - price) > RECONCILE_PRICE_TOLERANCE:
+        return False
+    tx_day = _reconcile_date(tx.get("date"))
+    if tx_day is None or day is None:
+        return False
+    return abs((tx_day - day).days) <= RECONCILE_DAY_TOLERANCE
+
+
+def reconcile_state(portfolio):
+    """The part of a portfolio a reconcile write changes, for comparisons."""
+    portfolio = portfolio or {}
+    return {
+        "holdingQty": _safe_int(portfolio.get("holdingQty"), 0),
+        "totalBuy": _round2(_safe_float(portfolio.get("totalBuy"), 0)),
+        "totalSell": _round2(_safe_float(portfolio.get("totalSell"), 0)),
+        "tValue": _round2(_safe_float(portfolio.get("tValue"), 0)),
+        "avgPrice": _round2(_safe_float(portfolio.get("avgPrice"), 0)),
+        "reverseState": reverse_state_of(portfolio),
+        "isRunning": bool(portfolio.get("isRunning", False)),
+    }
+
+
+def reverse_branch(portfolio, price=0.0):
+    """Which reverse-mode guide a portfolio gets (firegate_reverse_plan):
+    normal, reverse_first_day (MOC), reverse_active (LOC lines) or
+    reverse_re_exhausted (MOC again: a quarter of the seed left buys less
+    than one share at `price`)."""
+    portfolio = portfolio or {}
+    seed = _safe_float(portfolio.get("seed"), 0)
+    remaining = seed - (_safe_float(portfolio.get("totalBuy"), 0) - _safe_float(portfolio.get("totalSell"), 0))
+    exhausted = is_exhausted_v4(portfolio.get("tValue"), portfolio.get("divisionDate"), remaining, portfolio.get("holdingQty"))
+    if not (bool(portfolio.get("reverseMode", False)) or exhausted):
+        return "normal"
+    if reverse_state_of(portfolio) != "ACTIVE":
+        return "reverse_first_day"
+    price = _safe_float(price, 0)
+    if price > 0 and math.floor(remaining / 4 / price) < 1:
+        return "reverse_re_exhausted"
+    return "reverse_active"
+
+
+def adjustment_branch_change(before, after, price=0.0):
+    """Whether an adjustment moves the portfolio to another reverse guide or
+    flips the sign of the seed left (the policy for that case is pending;
+    see firegate_auto_reconcile_adjust_branch_change)."""
+    def seed_left(portfolio):
+        portfolio = portfolio or {}
+        return _safe_float(portfolio.get("seed"), 0) - (
+            _safe_float(portfolio.get("totalBuy"), 0) - _safe_float(portfolio.get("totalSell"), 0))
+    before_branch, after_branch = reverse_branch(before, price), reverse_branch(after, price)
+    before_seed, after_seed = seed_left(before), seed_left(after)
+    changed = before_branch != after_branch or (before_seed >= 0) != (after_seed >= 0)
+    return {"changed": changed, "before_branch": before_branch, "after_branch": after_branch,
+            "before_seed": round(before_seed, 2), "after_seed": round(after_seed, 2)}
+
+
+def reconcile_targets(portfolios, symbol=""):
+    """{symbol: [running InfinityStock portfolios]}; more than one is ambiguous."""
+    symbol = _normalize_symbol(symbol)
+    targets = {}
+    for item in portfolios or []:
+        if item.get("stock8Archived") or _portfolio_source(item) != INFINITYSTOCK_SOURCE:
+            continue
+        if not _firegate_running(item):
+            continue
+        ticker = _portfolio_symbol(item)
+        if not ticker or (symbol and ticker != symbol):
+            continue
+        targets.setdefault(ticker, []).append(item)
+    return targets
+
+
+def adjustment_transaction(symbol, kind, qty, price, day, portfolio_id, absorbed_order_nos=()):
+    """One FireGate entry that closes a holding difference no fill explains.
+    It does not move T (tDelta 0 for a buy, x1 for a sell): it is not a round
+    of the strategy. A sell adjustment does not touch the reverse state,
+    endDate or isRunning either (see apply_v4_transaction)."""
+    symbol = _normalize_symbol(symbol)
+    trade_id = f"ADJUST-{symbol}-{day.strftime('%Y%m%d')}-{int(qty)}"
+    tx = {
+        "type": kind,
+        "ticker": symbol,
+        "date": format_firegate_date(day),
+        "price": _round2(price),
+        "size": int(qty),
+        "portfolioId": _safe_int(portfolio_id, portfolio_id),
+        "commission": 0.0,
+        "source": INFINITYSTOCK_SOURCE,
+        "sourceTradeId": trade_id,
+        "orderType": "ADJUST",
+        "strategyType": "ADJUST",
+        "adjustment": True,
+        "memo": RECONCILE_ADJUST_MEMO,
+    }
+    if absorbed_order_nos:
+        # broker orders this entry stands for (not booked one by one)
+        tx["absorbedOrderNos"] = sorted({str(value) for value in absorbed_order_nos if str(value)})
+    if kind == "buy":
+        tx.update({"tDelta": 0, "tOperator": "+"})
+    else:
+        tx.update({"tDelta": 1.0, "tOperator": "x"})
+    return tx
+
+
+def _local_fill_entries(local_rows, symbol, start_day):
+    entries = []
+    all_order_nos = set()
+    seen_orders = set()
+    for row in local_rows or []:
+        row = dict(row or {})
+        if _normalize_symbol(row.get("symbol")) != symbol or _is_synthetic_trade_row(row):
+            continue
+        order_no = str(row.get("broker_order_no", "") or "").strip()
+        if order_no:
+            all_order_nos.add(order_no)
+        if str(row.get("status", "") or "").upper() != "FILLED":
+            continue
+        action = str(row.get("action", "") or "").upper()
+        qty = _safe_int(row.get("filled_qty"), 0)
+        price = _safe_float(row.get("filled_price"), 0)
+        day = _reconcile_date(row.get("trade_date"))
+        if action not in ("BUY", "SELL") or qty <= 0 or price <= 0 or day is None:
+            continue
+        if order_no:
+            if order_no in seen_orders:
+                continue  # the same broker order booked twice locally
+            seen_orders.add(order_no)
+        entries.append({"row": row, "id": str(row.get("id", "") or "").strip(), "order_no": order_no,
+                        "kind": action.lower(), "qty": qty, "price": price, "day": day,
+                        "created": str(row.get("created", "") or ""),
+                        "in_scope": not (start_day and day < start_day), "match": None})
+    entries.sort(key=lambda item: (item["day"], item["created"]))
+    return entries, all_order_nos
+
+
+def _broker_fill_entries(broker_fills, symbol):
+    grouped = {}
+    for fill in broker_fills or []:
+        fill = dict(fill or {})
+        if _normalize_symbol(fill.get("symbol")) != symbol:
+            continue
+        action = str(fill.get("action", fill.get("side", "")) or "").upper()
+        qty = _safe_int(fill.get("filled_qty"), 0)
+        price = _safe_float(fill.get("filled_price"), 0)
+        if action not in ("BUY", "SELL") or qty <= 0 or price <= 0:
+            continue
+        order_no = str(fill.get("order_no", "") or "").strip()
+        key = order_no or f"{action}:{fill.get('order_date')}:{qty}:{price}"
+        if key not in grouped or qty > _safe_int(grouped[key].get("filled_qty"), 0):
+            grouped[key] = fill
+    entries = []
+    for fill in grouped.values():
+        action = str(fill.get("action", fill.get("side", "")) or "").upper()
+        entries.append({"fill": fill, "order_no": str(fill.get("order_no", "") or "").strip(), "kind": action.lower(),
+                        "qty": _safe_int(fill.get("filled_qty"), 0), "price": _safe_float(fill.get("filled_price"), 0),
+                        "day": _reconcile_date(fill.get("trade_date") or fill.get("order_date")),
+                        "time": str(fill.get("order_time", "") or ""), "match": None})
+    entries.sort(key=lambda item: (item["day"] or datetime.date.min, item["time"], item["order_no"]))
+    return entries
+
+
+def plan_signature(plan):
+    return [(tx.get("sourceTradeId"), tx.get("type"), _safe_int(tx.get("size"), 0), _round2(_safe_float(tx.get("price"), 0)))
+            for tx in (plan or {}).get("txs") or []]
+
+
+def reconcile_plan(portfolio, transactions, local_rows, broker_fills, broker_qty, cycle_id,
+                   broker_avg=0.0, current_price=0.0, today=None, commission=None, max_transactions=30):
+    """Transactions that make FireGate hold what the broker holds.
+
+    Matching runs in two passes over every local and broker fill: ids and
+    order numbers first, then the same fill under another id for what is
+    left, so an id match is never taken by an earlier content match. Then:
+    - local fills FireGate lacks are booked; one older than FireGate's last
+      transaction by more than a day stops the plan (FireGate probably has it
+      in a form we cannot match);
+    - broker fills nobody has are booked only when they are all buys; a sell
+      or a buy/sell mix among them is left to the adjustment;
+    - a difference left after that is one adjustment entry (buy at the price
+      that makes FireGate's cost equal the broker's, or sell at FireGate's
+      average so no gain or loss is invented), within safety limits.
+    The replay must never reach 0 shares or stop the portfolio and must end
+    at broker_qty; anything else returns a status other than "ok"."""
+    portfolio = dict(portfolio or {})
+    symbol = _portfolio_symbol(portfolio)
+    portfolio_id = portfolio.get("id")
+    today = today or datetime.date.today()
+    broker_qty = int(broker_qty)
+    start_day = _reconcile_date(portfolio.get("startDate"))
+    pool = [dict(tx) for tx in (transactions or []) if _valid_firegate_tx(tx)]
+    used = [False] * len(pool)
+    # an adjustment is dated by the reconcile, not by any fill
+    tx_days = [day for day in (_reconcile_date(tx.get("date")) for tx in pool
+                               if not (tx.get("adjustment") or str(tx.get("sourceTradeId", "")).startswith("ADJUST-")))
+               if day]
+    last_day = max(tx_days) if tx_days else None
+    by_trade_id = {}
+    by_order_no = {}
+    for index, tx in enumerate(pool):
+        trade_id = str(tx.get("sourceTradeId", "") or "").strip()
+        order_no = str(tx.get("brokerOrderNo", "") or "").strip()
+        if trade_id:
+            by_trade_id.setdefault(trade_id, index)
+        if order_no:
+            by_order_no.setdefault(order_no, index)
+    reconciled_ids = {str(value) for value in portfolio.get("reconciledSourceTradeIds", []) or []}
+
+    def claim(index):
+        if index is None or used[index]:
+            return False
+        used[index] = True
+        return True
+
+    def claim_content(kind, day, size, price):
+        for index, tx in enumerate(pool):
+            if used[index] or tx.get("adjustment") or str(tx.get("sourceTradeId", "")).startswith("ADJUST-"):
+                continue  # an adjustment is no particular fill
+            if _same_fill(tx, kind, day, size, price):
+                used[index] = True
+                return True
+        return False
+
+    booked_orders = booked_order_numbers(portfolio, pool)
+    local, local_order_nos = _local_fill_entries(local_rows, symbol, start_day)
+    broker = _broker_fill_entries(broker_fills, symbol)
+    broker_order_nos = {item["order_no"] for item in broker if item["order_no"]}
+
+    # pass 1: ids and order numbers, everywhere
+    for item in local:
+        if item["id"] in reconciled_ids or (item["order_no"] and item["order_no"] in reconciled_ids):
+            item["match"] = "reconciled"
+        elif item["order_no"] and item["order_no"] in booked_orders and by_order_no.get(item["order_no"]) is None:
+            item["match"] = "reconciled"  # absorbed by an earlier adjustment
+        elif claim(by_trade_id.get(item["id"])) or (item["order_no"] and (
+                claim(by_order_no.get(item["order_no"])) or claim(by_trade_id.get(item["order_no"])))):
+            item["match"] = "id"
+    for item in broker:
+        order_no = item["order_no"]
+        if order_no and (order_no in local_order_nos or order_no in reconciled_ids):
+            item["match"] = "local"
+        elif order_no and order_no in booked_orders and by_order_no.get(order_no) is None:
+            item["match"] = "reconciled"
+        elif order_no and (claim(by_order_no.get(order_no)) or claim(by_trade_id.get(order_no))
+                           or claim(by_trade_id.get(f"KIS-{order_no}"))):
+            item["match"] = "id"
+    # pass 2: the same fill under another id, only for what is left
+    content_ids = []
+    for item in local:
+        if item["match"] is None and item["in_scope"] and claim_content(item["kind"], item["day"], item["qty"], item["price"]):
+            item["match"] = "content"
+            content_ids.append(item["id"])
+    twins = [item for item in local if item["order_no"] not in broker_order_nos]
+    for item in broker:
+        if item["match"] is not None:
+            continue
+        # a reservation-origin fill can carry the reservation number while
+        # the local row has the order number: the same fill, not a new one
+        twin = next((entry for entry in twins if not entry.get("_twin")
+                     and _same_fill({"type": entry["kind"], "size": entry["qty"], "price": entry["price"],
+                                     "date": entry["day"].isoformat()}, item["kind"], item["day"], item["qty"], item["price"])),
+                    None)
+        if twin is not None:
+            twin["_twin"] = True
+            item["match"] = "local"
+        elif claim_content(item["kind"], item["day"], item["qty"], item["price"]):
+            item["match"] = "content"
+
+    missing_local = [item for item in local if item["match"] is None and item["in_scope"]]
+    missing_broker = [item for item in broker if item["match"] is None]
+    result = {
+        "symbol": symbol,
+        "portfolio_id": portfolio_id,
+        "cycle_id": cycle_id,
+        "broker_qty": broker_qty,
+        "firegate_qty_before": _safe_int(portfolio.get("holdingQty"), 0),
+        "last_firegate_day": last_day.isoformat() if last_day else "",
+        "local_count": len(missing_local),
+        "broker_count": 0,
+        "content_ids": [item_id for item_id in content_ids if item_id],
+        "adjustment": None,
+        "txs": [],
+        "snapshots": [],
+        "holding_after": None,
+    }
+    if any(not item["id"] for item in missing_local):
+        return {**result, "status": "unidentified_fill"}
+    if last_day and any(item["day"] < last_day - datetime.timedelta(days=RECONCILE_DAY_TOLERANCE) for item in missing_local):
+        return {**result, "status": "stale_fill"}
+    use_broker = bool(missing_broker) and all(item["kind"] == "buy" and item["order_no"] for item in missing_broker)
+    result["broker_fills_left_to_adjustment"] = 0 if use_broker else len(missing_broker)
+    # orders the adjustment (or a net-zero mix) stands for: recorded so a later
+    # local row for one of them is never written to FireGate again
+    absorbed = [] if use_broker else sorted({item["order_no"] for item in missing_broker if item["order_no"]})
+    result["absorbed_order_nos"] = absorbed
+
+    rows = [dict(item["row"], _day=item["day"], _created=item["created"]) for item in missing_local]
+    if use_broker:
+        for item in missing_broker:
+            amount = round(item["qty"] * item["price"], 2)
+            rows.append({
+                "id": f"KIS-{item['order_no']}", "symbol": symbol, "cycle_id": cycle_id, "action": "BUY",
+                "trade_date": item["day"].strftime("%Y-%m-%d") if item["day"] else "", "order_type": "EXTERNAL",
+                "strategy_type": "NORMAL", "filled_price": item["price"], "filled_qty": item["qty"],
+                "filled_amount": amount,
+                "commission": round(float(commission("BUY", amount)) if callable(commission) else 0.0, 2),
+                "status": "FILLED", "broker_order_no": item["order_no"],
+                "_day": item["day"], "_created": f"{item['fill'].get('order_date', '')} {item['time']}",
+            })
+        result["broker_count"] = len(missing_broker)
+    rows.sort(key=lambda row: (row.get("_day") or datetime.date.min, str(row.get("_created", ""))))
+
+    simulated = copy.deepcopy(portfolio)
+    txs, snapshots = [], []
+
+    def push(tx):
+        nonlocal simulated
+        if tx["type"] == "sell" and _safe_int(tx.get("size"), 0) > _safe_int(simulated.get("holdingQty"), 0):
+            return "oversell"
+        simulated = apply_v4_transaction(simulated, tx)
+        if _safe_int(simulated.get("holdingQty"), 0) <= 0:
+            return "zero_crossing"
+        if not simulated.get("isRunning", True):
+            return "stopped"
+        txs.append(tx)
+        snapshots.append(reconcile_state(simulated))
+        return ""
+
+    for row in rows:
+        trade = {key: value for key, value in row.items() if not str(key).startswith("_")}
+        tx = transaction_from_cycle_trade(trade, portfolio_id, portfolio=simulated)
+        if not tx:
+            return {**result, "status": "invalid_trade"}
+        problem = push(tx)
+        if problem:
+            return {**result, "status": problem, "holding_after": _safe_int(simulated.get("holdingQty"), 0)}
+
+    replayed_qty = _safe_int(simulated.get("holdingQty"), 0)
+    result["replayed_qty"] = replayed_qty
+    diff = broker_qty - replayed_qty
+    if diff:
+        if broker_avg <= 0 or current_price <= 0:
+            return {**result, "status": "adjust_no_price", "holding_after": replayed_qty}
+        if abs(diff) > broker_qty * RECONCILE_ADJUST_MAX_SHARE:
+            return {**result, "status": "adjust_too_large", "holding_after": replayed_qty}
+        avg = _safe_float(simulated.get("avgPrice"), 0)
+        if diff > 0:
+            price = _round2((broker_qty * broker_avg - avg * replayed_qty) / diff)
+        else:
+            price = _round2(avg)
+        low, high = RECONCILE_ADJUST_PRICE_BAND
+        result["adjustment"] = {"type": "buy" if diff > 0 else "sell", "qty": abs(diff), "price": price}
+        if price <= 0 or not (low * current_price <= price <= high * current_price):
+            return {**result, "status": "adjust_price_out_of_range", "holding_after": replayed_qty}
+        before_adjustment = copy.deepcopy(simulated)
+        problem = push(adjustment_transaction(symbol, "buy" if diff > 0 else "sell", abs(diff), price, today,
+                                              portfolio_id, absorbed_order_nos=absorbed))
+        if not problem:
+            result["branch"] = adjustment_branch_change(before_adjustment, simulated, current_price)
+        if problem:
+            return {**result, "status": problem, "holding_after": _safe_int(simulated.get("holdingQty"), 0)}
+    holding_after = _safe_int(simulated.get("holdingQty"), 0)
+    result.update({"txs": txs, "snapshots": snapshots, "holding_after": holding_after, "simulated": simulated})
+    if len(txs) > max_transactions:
+        return {**result, "status": "too_many"}
+    if holding_after != broker_qty:
+        return {**result, "status": "mismatch"}
+    return {**result, "status": "ok"}
+
+
+def _recent_average_for(bridge, portfolio, tx):
+    """add_transaction_and_update_portfolio's reverse-star input, for a
+    re-applied update: the 5-day average when a reverse sell sets the star."""
+    if (tx or {}).get("type") != "sell" or not (tx or {}).get("reverseMode") \
+            or _safe_float((portfolio or {}).get("reverseModeStarPrice"), 0) > 0:
+        return None
+    try:
+        recent = bridge.recent_prices((portfolio or {}).get("ticker", (tx or {}).get("ticker", "")), 5)
+        return round(sum(recent) / len(recent), 2) if recent else None
+    except Exception:
+        return None
+
+
+def reconcile_job_done(bridge, job):
+    """A job record left behind by a run that did finish: every planned
+    transaction is in FireGate and the portfolio is linked to the cycle."""
+    portfolio = bridge.get_portfolio(job["portfolio_id"]) or {}
+    if str(portfolio.get("sourceCycleId", "") or "") != str(job.get("cycle_id", "")):
+        return False
+    live = bridge.list_transactions(job["portfolio_id"]) or []
+    live_ids = {str(tx.get("id", "") or "") for tx in live} | {str(tx.get("sourceTradeId", "") or "") for tx in live}
+    return all(str(tx.get("sourceTradeId", "")) in live_ids for tx in job.get("txs") or [])
+
+
+def execute_reconcile(bridge, job):
+    """Write a recorded plan, finishing an interrupted one, then relink.
+
+    The FireGate side must look like the plan's base state plus its first j
+    transactions, with the first k transactions present: j == k continues
+    with transaction k+1; j == k-1 (the last create landed, its portfolio
+    update did not) re-applies that update, then continues. Anything else is
+    "stuck": no further automatic write."""
+    portfolio_id = job["portfolio_id"]
+    txs = [dict(tx) for tx in job.get("txs") or []]
+    states = [job["base"]] + list(job.get("snapshots") or [])
+    portfolio = bridge.get_portfolio(portfolio_id)
+    if not portfolio:
+        return {"status": "stuck", "reason": "portfolio_missing"}
+    live = bridge.list_transactions(portfolio_id) or []
+    live_ids = {str(tx.get("id", "") or "") for tx in live} | {str(tx.get("sourceTradeId", "") or "") for tx in live}
+    present = [str(tx.get("sourceTradeId", "")) in live_ids for tx in txs]
+    k = sum(1 for flag in present if flag)
+    if k == len(txs) and str(portfolio.get("sourceCycleId", "") or "") == str(job["cycle_id"]):
+        # Finished earlier (relinked) and only the local job record was left;
+        # later fills may have moved the portfolio since, which is fine.
+        return {"status": "relinked", "written": 0, "resumed_from": k, "after": portfolio, "already_done": True}
+    if present != [True] * k + [False] * (len(txs) - k):
+        return {"status": "stuck", "reason": "written_out_of_order", "present": k}
+    now = reconcile_state(portfolio)
+    if now == states[k]:
+        start = k
+    elif k >= 1 and now == states[k - 1]:
+        updated = apply_v4_transaction(portfolio, txs[k - 1], recent_average=_recent_average_for(bridge, portfolio, txs[k - 1]))
+        changed = bridge.update_portfolio(portfolio_id, updated)
+        portfolio = {**updated, **(changed or {})}
+        start = k
+    else:
+        return {"status": "stuck", "reason": "state_unmatched", "present": k}
+    current = dict(portfolio)
+    for tx in txs[start:]:
+        _saved, current = bridge.add_transaction_and_update_portfolio(current, dict(tx))
+    after = bridge.get_portfolio(portfolio_id) or current
+    if reconcile_state(after) != states[-1] or _safe_int(after.get("holdingQty"), -1) != int(job["broker_qty"]):
+        return {"status": "stuck", "reason": "result_unmatched", "after": after}
+    changes = {"sourceCycleId": str(job["cycle_id"])}
+    if job.get("reconciled_ids"):
+        known = [str(value) for value in after.get("reconciledSourceTradeIds", []) or []]
+        changes["reconciledSourceTradeIds"] = known + [value for value in job["reconciled_ids"] if value not in known]
+    if job.get("absorbed_order_nos"):
+        known = [str(value) for value in after.get("reconciledBrokerOrderNos", []) or []]
+        changes["reconciledBrokerOrderNos"] = known + [value for value in job["absorbed_order_nos"] if value not in known]
+    bridge.update_portfolio(portfolio_id, changes)
+    return {"status": "relinked", "written": len(txs) - start, "resumed_from": start, "after": after}
 
 
 class _FireGateBridgeModel:
@@ -1745,10 +2307,24 @@ class _FireGateBridgeModel:
     apply_v4_transaction = staticmethod(apply_v4_transaction)
     is_exhausted_v4 = staticmethod(is_exhausted_v4)
     reverse_state_of = staticmethod(reverse_state_of)
+    reverse_branch = staticmethod(reverse_branch)
+    adjustment_branch_change = staticmethod(adjustment_branch_change)
+    booked_order_numbers = staticmethod(booked_order_numbers)
+    reconcile_job_done = staticmethod(reconcile_job_done)
     firegate_operator = staticmethod(firegate_operator)
     transaction_from_cycle_trade = staticmethod(transaction_from_cycle_trade)
     transaction_document_id = staticmethod(transaction_document_id)
     sync_cycle_trade = staticmethod(sync_cycle_trade)
+    bridge_call = staticmethod(_bridge_call_from_config)
+    reconcile_plan = staticmethod(reconcile_plan)
+    reconcile_targets = staticmethod(reconcile_targets)
+    reconcile_state = staticmethod(reconcile_state)
+    plan_signature = staticmethod(plan_signature)
+    execute_reconcile = staticmethod(execute_reconcile)
+    firegate_symbol_lock = staticmethod(firegate_symbol_lock)
+    authoritative_state = staticmethod(_authoritative_cycle_state_from_portfolio)
+    portfolio_link_mismatch = staticmethod(portfolio_link_mismatch)
+    portfolio_source_cycle_id = staticmethod(portfolio_source_cycle_id)
 
 
 Model = _FireGateBridgeModel()

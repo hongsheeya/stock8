@@ -1117,6 +1117,12 @@ class Struct:
                                 # Read broker fills independently of reservation blocks.
                                 # Bounded lookback avoids replaying months on each poll.
                                 result = trading.engine.sync_external_cycle_trades(lookback_days=2, recent_only=True)
+                                try:
+                                    # LIVE only, FireGate bookkeeping (no order); needs
+                                    # this pass's verified fill sync.
+                                    state['firegate_reconcile'] = trading.engine.run_firegate_auto_reconcile(sync_result=result)
+                                except Exception as exc:
+                                    state['firegate_reconcile'] = {'status': 'error', 'message': str(exc)[:200]}
                                 trading.engine.sync_firegate_strategy_metadata()
                                 state['message'] = str(result.get('message', '') or '')
                                 state['result_status'] = result.get('status', '')
@@ -3534,6 +3540,15 @@ class Struct:
         scope = hashlib.sha256(('kis:' + account).encode()).hexdigest()[:24]
         mode = 'paper' if PAPER_MODE else 'live'
         return wiz.project.fs().abspath(f"data/{mode}/trade_verification/{scope}.json")
+
+    def _firegate_reconcile_notify(self, text):
+        """Discord message for the FireGate auto reconcile (LIVE only)."""
+        owner = str(self._current_user_id() or '')
+        if not owner or PAPER_MODE:
+            return
+        webhook = self.coin_alert_settings(owner).get('webhook', '')
+        if webhook:
+            self.model("notifier").shared().discord(webhook, f"[stock8 FireGate] {text}")
 
     def _trade_verification_notify(self, text):
         owner = str(self._current_user_id() or '')

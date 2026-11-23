@@ -3779,6 +3779,472 @@ class Engine:
             return None
         return datetime.datetime.strptime(value, "%Y-%m-%d").date()
 
+    # =========================================================================
+    # FireGate 자동 대조 (11-23): 브로커 보유를 기준으로 FireGate에 빠진 체결을
+    # 넣고(설명 안 되는 차이는 조정 1건), 수량이 정확히 맞을 때만 포트폴리오를
+    # 현재 사이클에 다시 연결한다. 주문은 내지 않는다.
+    # =========================================================================
+
+    FIREGATE_RECONCILE_INTERVAL_SEC = 1800
+    FIREGATE_RECONCILE_ACTIVE_STATUSES = (STATUS_ACTIVE, STATUS_HOLDING, STATUS_PAUSED, STATUS_PENDING_EXTENSION)
+    # KST, after the US close (05:00 summer / 06:00 winter) and before the
+    # domestic NXT pre-market: a relink leaves 15+ hours before the next MOC
+    # window and stays clear of domestic KIS traffic.
+    FIREGATE_RECONCILE_WINDOW_KST = ((6, 15), (8, 0))
+
+    def _firegate_bridge_model(self):
+        return wiz.model("portal/trading/struct/firegate_bridge")
+
+    def _firegate_reconcile_window_open(self, now_kst):
+        (h1, m1), (h2, m2) = self.FIREGATE_RECONCILE_WINDOW_KST
+        minute = now_kst.hour * 60 + now_kst.minute
+        return h1 * 60 + m1 <= minute < h2 * 60 + m2
+
+    def _firegate_reconcile_config(self, key, default=None):
+        try:
+            state = json.loads(self._get_config_value(key, "") or "{}")
+        except (TypeError, ValueError):
+            state = {}
+        return state if isinstance(state, dict) else (default or {})
+
+    def _save_firegate_reconcile_config(self, key, value, required=False):
+        try:
+            self._set_config_value(key, json.dumps(value, ensure_ascii=False) if value else "",
+                                   description="FireGate auto reconcile")
+            return True
+        except Exception:
+            if required:
+                raise
+            return False
+
+    def _firegate_reconcile_report(self, symbol, cycle_id, state, code, message, ok=False):
+        """One event row a day per message (_log_event folds repeats) and one
+        Discord message a day per outcome."""
+        self._log_event(symbol, cycle_id, "FIREGATE_AUTO_RECONCILED" if ok else "FIREGATE_AUTO_RECONCILE_FAILED",
+                        message=message)
+        stamp = f"{self._now().strftime('%Y-%m-%d')}:{code}"
+        if state.get("notified") != stamp:
+            notify = getattr(self.struct, "_firegate_reconcile_notify", None)
+            if callable(notify):
+                try:
+                    notify(message)
+                except Exception:
+                    pass
+            state["notified"] = stamp
+        state.update({"status": code, "message": message})
+        self._save_firegate_reconcile_config(f"firegate_auto_reconcile:{symbol}", state)
+        return {"symbol": symbol, "status": code, "message": message}
+
+    def _reservation_writes_in_flight(self):
+        if str(self._get_config_value("kis_reservation_pending", "") or "").strip():
+            return True
+        raw = str(self._get_config_value("kis_reservation_unseen_receipts", "") or "").strip()
+        if not raw:
+            return False
+        try:
+            return bool(json.loads(raw))
+        except (TypeError, ValueError):
+            return True  # unreadable: assume something is in flight
+
+    def _firegate_reconcile_deadline(self, now_kst):
+        (h2, m2) = self.FIREGATE_RECONCILE_WINDOW_KST[1]
+        return now_kst.replace(hour=h2, minute=m2, second=0, microsecond=0)
+
+    def _past_reconcile_deadline(self, deadline):
+        now = self._now()
+        if getattr(now, "tzinfo", None) is not None and deadline.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        return now >= deadline
+
+    @contextlib.contextmanager
+    def _counted_kis_requests(self, kis_api, cap, interval, deadline):
+        """Count and space the KIS HTTP requests of one reconcile run (each
+        history call fans out per exchange, page and reservation list): a cap,
+        a gap between requests and the window end. Restored afterwards."""
+        counter = {"requests": 0}
+        original = getattr(kis_api, "_request", None)
+        had_own = "_request" in getattr(kis_api, "__dict__", {})
+
+        def counted(*args, **kwargs):
+            if counter["requests"] >= cap:
+                raise RuntimeError(f"자동 대조 KIS 요청 상한 {cap}회 도달")
+            if self._past_reconcile_deadline(deadline):
+                raise RuntimeError("자동 대조 시간창(08:00) 종료")
+            if counter["requests"] and interval > 0:
+                time.sleep(interval)
+            counter["requests"] += 1
+            return original(*args, **kwargs)
+        if callable(original):
+            kis_api._request = counted
+        try:
+            yield counter
+        finally:
+            if callable(original):
+                if had_own:
+                    kis_api._request = original
+                else:
+                    try:
+                        del kis_api._request
+                    except AttributeError:
+                        pass
+
+    def run_firegate_auto_reconcile(self, sync_result=None, now=None):
+        """LIVE only. Make a running InfinityStock FireGate portfolio match the
+        broker and link it to the local cycle, without anyone in FireGate.
+
+        Runs (reads included) only in the 06:15-08:00 KST window, at most once
+        per 30 minutes, after this pass's verified broker fill sync, with the
+        switch firegate_auto_reconcile_enabled (default on) and the bridge's
+        auto sync on, no reservation write in flight. Writes only for exactly
+        one running portfolio and one open local cycle, a strict broker
+        history without open orders, and a plan whose replay ends at the
+        broker quantity. Sends no order."""
+        if self._paper_trading_mode():
+            return {"status": "skipped", "reason": "paper"}
+        if not self._config_bool("firegate_auto_reconcile_enabled", True):
+            return {"status": "off"}
+        now_kst = now or self._now()
+        if not self._firegate_reconcile_window_open(now_kst):
+            return {"status": "skipped", "reason": "outside_window"}
+        history = (sync_result or {}).get("history_verification") or {}
+        if sync_result is None or history.get("verified") is not True \
+                or int((sync_result or {}).get("error_count", 0) or 0) > 0:
+            return {"status": "skipped", "reason": "fill_sync_unverified"}
+        if not self._firegate_bridge_configured():
+            return {"status": "skipped", "reason": "bridge_not_configured"}
+        fg = self._firegate_bridge_model()
+        cfg = fg.load_bridge_config(self.struct) or {}
+        if not cfg.get("enabled") or not cfg.get("auto_sync_enabled", True):
+            return {"status": "off", "reason": "bridge_auto_sync_off"}
+        if self._reservation_writes_in_flight():
+            return {"status": "skipped", "reason": "reservation_in_flight"}
+        et = self._us_eastern_now(now_kst)
+        minute = et.hour * 60 + et.minute
+        if et.weekday() < 5 and 9 * 60 + 25 <= minute < 16 * 60 + 15:
+            return {"status": "skipped", "reason": "us_session"}
+        run_state = self._firegate_reconcile_config("firegate_auto_reconcile:last_run")
+        if time.time() - float(run_state.get("at", 0) or 0) < self.FIREGATE_RECONCILE_INTERVAL_SEC:
+            return {"status": "skipped", "reason": "throttled"}
+        self._save_firegate_reconcile_config("firegate_auto_reconcile:last_run", {"at": time.time()})
+        kis_api = self._load_kis_api()
+        if not kis_api:
+            return {"status": "skipped", "reason": "broker_api_missing"}
+        try:
+            portfolios = fg.bridge_call(self.struct, lambda bridge, _cfg: bridge.list_portfolios() or [])
+        except Exception as exc:
+            return {"status": "skipped", "reason": "firegate_read_failed", "message": self._short_error(exc)}
+        if portfolios is None:
+            return {"status": "skipped", "reason": "bridge_not_configured"}
+        targets = fg.reconcile_targets(portfolios)
+        if not targets:
+            return {"status": "skipped", "reason": "no_running_portfolio"}
+        try:
+            balance = kis_api.get_balance()
+        except Exception as exc:
+            return {"status": "skipped", "reason": "balance_failed", "message": self._short_error(exc)}
+        if not isinstance(balance, dict) or not isinstance(balance.get("holdings"), list):
+            return {"status": "skipped", "reason": "balance_failed"}
+        holdings = {}
+        for row in balance["holdings"]:
+            symbol = str((row or {}).get("symbol", "") or "").upper().strip()
+            if symbol:
+                holdings.setdefault(symbol, []).append(row or {})
+        results = []
+        for symbol in sorted(targets):
+            try:
+                results.append(self._firegate_reconcile_symbol(fg, kis_api, symbol, targets[symbol],
+                                                               holdings.get(symbol, []), now_kst))
+            except Exception as exc:
+                results.append({"symbol": symbol, "status": "error", "message": self._short_error(exc)})
+        return {"status": "done", "results": results}
+
+    @staticmethod
+    def _broker_position(rows):
+        qty = sum(int(float((row or {}).get("qty", 0) or 0)) for row in rows or [])
+        cost = sum(int(float((row or {}).get("qty", 0) or 0)) * float((row or {}).get("avg_price", 0) or 0)
+                   for row in rows or [])
+        prices = [float((row or {}).get("current_price", 0) or 0) for row in rows or []]
+        avg = cost / qty if qty > 0 and cost > 0 else 0.0
+        return qty, avg, max(prices) if prices else 0.0
+
+    def _firegate_reconcile_symbol(self, fg, kis_api, symbol, portfolios, holding_rows, now_kst):
+        state_key = f"firegate_auto_reconcile:{symbol}"
+        job_key = f"firegate_auto_reconcile_job:{symbol}"
+        state = self._firegate_reconcile_config(state_key)
+        broker_qty, broker_avg, current_price = self._broker_position(holding_rows)
+        cycles = []
+        for status in self.FIREGATE_RECONCILE_ACTIVE_STATUSES:
+            cycles.extend(self._cycle_db().rows(symbol=symbol, status=status, dump=50) or [])
+        cycle_id = cycles[0].get("id", "") if len(cycles) == 1 else ""
+        if len(portfolios) != 1:
+            ids = ", ".join(str(item.get("id", "")) for item in portfolios)
+            return self._firegate_reconcile_report(
+                symbol, cycle_id, state, "ambiguous_portfolio",
+                f"{symbol} FireGate 자동 대조 보류: 진행 중 포트폴리오 {len(portfolios)}개 ({ids})")
+        if len(cycles) != 1:
+            return self._firegate_reconcile_report(
+                symbol, cycle_id, state, "ambiguous_cycle",
+                f"{symbol} FireGate 자동 대조 보류: 진행 중 로컬 사이클 {len(cycles)}개")
+        portfolio = portfolios[0]
+        cycle = cycles[0]
+        job = self._firegate_reconcile_config(job_key)
+        if job:
+            if job.get("stuck"):
+                return {"symbol": symbol, "status": "stuck", "message": state.get("message", "")}
+            if fg.bridge_call(self.struct, lambda bridge, _cfg: fg.reconcile_job_done(bridge, job)):
+                # finished earlier, only the record was left: no false alarm
+                # even if fills since then moved the holding
+                self._save_firegate_reconcile_config(job_key, {})
+                return {"symbol": symbol, "status": "reconciled", "message": "이전 실행에서 완료된 작업 기록 정리"}
+            if job.get("cycle_id") != cycle["id"] or int(job.get("broker_qty", -1)) != broker_qty:
+                return self._firegate_reconcile_stuck(symbol, cycle["id"], state, job, job_key,
+                                                      "작업 기록 이후 사이클 또는 브로커 보유가 바뀜")
+            if self._past_reconcile_deadline(self._firegate_reconcile_deadline(now_kst)):
+                return {"symbol": symbol, "status": "skipped", "reason": "window_closed"}
+            return self._firegate_reconcile_execute(fg, symbol, cycle, state, job, job_key)
+
+        firegate_qty = int(float(portfolio.get("holdingQty", 0) or 0))
+        mismatch = fg.portfolio_link_mismatch(fg.portfolio_source_cycle_id(portfolio), cycle)
+        if not mismatch and firegate_qty == broker_qty:
+            return {"symbol": symbol, "status": "in_sync"}
+
+        portfolio_id = portfolio.get("id")
+        transactions = fg.bridge_call(self.struct, lambda bridge, _cfg: bridge.list_transactions(portfolio_id) or []) or []
+        today = now_kst.date()
+        days = [day for day in (self._reconcile_day(tx.get("date")) for tx in transactions) if day]
+        first = (max(days) if days else self._reconcile_day(portfolio.get("startDate"))) or today
+        start = min(first - datetime.timedelta(days=1), today - datetime.timedelta(days=2))
+        max_days = max(7, int(float(self._get_config_value("firegate_auto_reconcile_history_days", "60") or 60)))
+        period = f"{start.isoformat()}~{today.isoformat()}"
+        if (today - start).days > max_days:
+            return self._firegate_reconcile_report(
+                symbol, cycle["id"], state, "history_window",
+                f"{symbol} FireGate 자동 대조 실패: 브로커 {broker_qty}주, FireGate {firegate_qty}주, "
+                f"미확인 체결 기간 {period} ({(today - start).days}일, 조회 한도 {max_days}일)")
+        local_rows = self._trade_db().rows(symbol=symbol, dump=5000) or []
+        # A failed plan is re-read from the broker only when something
+        # changed or after a long wait: the day-by-day history shares the KIS
+        # request budget with live trading.
+        inputs = (f"{broker_qty}:{firegate_qty}:{len(transactions)}:{len(local_rows)}:"
+                  f"{fg.portfolio_source_cycle_id(portfolio)}:{cycle['id']}:{start.isoformat()}")
+        retry_sec = max(self.FIREGATE_RECONCILE_INTERVAL_SEC,
+                        int(float(self._get_config_value("firegate_auto_reconcile_failed_retry_sec", "21600") or 21600)))
+        if state.get("failed_inputs") == inputs and time.time() - float(state.get("failed_at", 0) or 0) < retry_sec:
+            return {"symbol": symbol, "status": "unchanged", "message": state.get("message", "")}
+        deadline = self._firegate_reconcile_deadline(now_kst)
+        with self._counted_kis_requests(
+                kis_api,
+                max(1, int(float(self._get_config_value("firegate_auto_reconcile_kis_call_cap", "400") or 400))),
+                max(0.0, float(self._get_config_value("firegate_auto_reconcile_kis_interval_sec", "0.2") or 0)),
+                deadline):
+            history = self._verified_external_order_history(kis_api, [symbol], start, today, ["NASD", "NYSE", "AMEX"], passes=2)
+        if not history.get("verified"):
+            return self._firegate_reconcile_report(
+                symbol, cycle["id"], state, "history_unverified",
+                f"{symbol} FireGate 자동 대조 보류: 브로커 체결 내역 {period} 조회 미완료 ({history.get('reason', '')})")
+        fills = []
+        recent = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        for order in history.get("orders", []) or []:
+            if str(order.get("symbol", "") or "").upper() != symbol:
+                continue
+            if str(order.get("status", "") or "").upper() in ("PENDING", "PARTIAL") \
+                    and str(order.get("order_date", "") or "").replace("-", "")[:8] >= recent:
+                return {"symbol": symbol, "status": "skipped", "reason": "orders_open"}
+            fills.append({**order, "trade_date": self._display_trade_date(order.get("order_date", ""))})
+        rates = self._get_commission_rates()
+
+        def commission(action, amount):
+            return self._calc_buy_commission(amount, rates) if action == ACTION_BUY else self._calc_sell_commission(amount, rates)
+        cap = max(1, int(float(self._get_config_value("firegate_auto_reconcile_max_transactions", "30") or 30)))
+
+        def plan_for(current, current_txs):
+            return fg.reconcile_plan(current, current_txs, local_rows, fills, broker_qty, cycle["id"],
+                                     broker_avg=broker_avg, current_price=current_price, today=today,
+                                     commission=commission, max_transactions=cap)
+        plan = plan_for(portfolio, transactions)
+        if plan.get("status") == "ok" and (plan.get("branch") or {}).get("changed") \
+                and self._adjust_branch_change_policy() == "block":
+            plan = {**plan, "status": "adjust_branch_change"}
+        if plan.get("status") != "ok":
+            state.update({"failed_inputs": inputs, "failed_at": time.time()})
+            return self._firegate_reconcile_report(
+                symbol, cycle["id"], state, f"plan_{plan.get('status')}",
+                f"{symbol} FireGate 자동 대조 실패: 브로커 {broker_qty}주 @ {broker_avg:.2f}, "
+                f"{self._firegate_plan_detail(plan, firegate_qty, cap)}, 확인한 체결 기간 {period}")
+        # Writes start only inside the window; once started they are finished
+        # (stopping half way would leave the partial state the job record has
+        # to repair), which takes seconds.
+        if self._past_reconcile_deadline(deadline):
+            return {"symbol": symbol, "status": "skipped", "reason": "window_closed"}
+        with fg.firegate_symbol_lock(symbol, timeout=30):
+            return self._firegate_reconcile_write(fg, symbol, cycle, state, job_key, portfolio, plan, plan_for,
+                                                  broker_qty, current_price, now_kst)
+
+    def _adjust_branch_change_policy(self):
+        """firegate_auto_reconcile_adjust_branch_change: what to do when an
+        adjustment moves the reverse guide or the sign of the seed left.
+        "block" refuses the plan; anything else proceeds. The default is to
+        proceed: the user chose to match the broker even when the adjustment
+        takes FireGate past its seed (11-23)."""
+        return str(self._get_config_value("firegate_auto_reconcile_adjust_branch_change", "") or "").strip().lower()
+
+    def _firegate_reconcile_write(self, fg, symbol, cycle, state, job_key, portfolio, plan, plan_for,
+                                  broker_qty, current_price, now_kst):
+        portfolio_id = portfolio.get("id")
+        # Plan again on a fresh read right before writing; any change in
+        # between (a push, a manual edit) stops the run.
+        fresh_portfolio, fresh_txs = fg.bridge_call(self.struct, lambda bridge, _cfg: (
+            bridge.get_portfolio(portfolio_id), bridge.list_transactions(portfolio_id) or []))
+        replan = plan_for({**portfolio, **(fresh_portfolio or {})}, fresh_txs)
+        if replan.get("status") != "ok" or fg.plan_signature(replan) != fg.plan_signature(plan):
+            return self._firegate_reconcile_report(
+                symbol, cycle["id"], state, "plan_changed",
+                f"{symbol} FireGate 자동 대조 보류: 쓰기 직전 FireGate 상태가 바뀌어 계획이 달라짐")
+        before = {**portfolio, **(fresh_portfolio or {})}
+        job = {
+            "portfolio_id": portfolio_id,
+            "cycle_id": cycle["id"],
+            "broker_qty": broker_qty,
+            "base": fg.reconcile_state(before),
+            "base_updated_at": str(before.get("updatedAt", "") or ""),
+            "txs": replan["txs"],
+            "snapshots": replan["snapshots"],
+            "reconciled_ids": replan.get("content_ids") or [],
+            "absorbed_order_nos": replan.get("absorbed_order_nos") or [],
+            "summary": {
+                "branch": replan.get("branch"),
+                "local": replan.get("local_count", 0),
+                "broker": replan.get("broker_count", 0),
+                "adjustment": replan.get("adjustment"),
+                "before": self._firegate_portfolio_summary(before),
+                "after": self._firegate_portfolio_summary(replan.get("simulated") or {}),
+                "next": self._firegate_next_session(cycle, replan.get("simulated") or {}, current_price),
+            },
+            "created_at": now_kst.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        # The job record exists before the first write, or nothing is written.
+        self._save_firegate_reconcile_config(job_key, job, required=True)
+        return self._firegate_reconcile_execute(fg, symbol, cycle, state, job, job_key, locked=True)
+
+    def _firegate_reconcile_execute(self, fg, symbol, cycle, state, job, job_key, locked=False):
+        try:
+            if locked:
+                outcome = fg.bridge_call(self.struct, lambda bridge, _cfg: fg.execute_reconcile(bridge, job)) or {}
+            else:
+                with fg.firegate_symbol_lock(symbol, timeout=30):
+                    outcome = fg.bridge_call(self.struct, lambda bridge, _cfg: fg.execute_reconcile(bridge, job)) or {}
+        except Exception as exc:
+            # The job stays; the next run finishes from what was written.
+            return self._firegate_reconcile_report(
+                symbol, cycle["id"], state, "write_failed",
+                f"{symbol} FireGate 자동 대조 중단: FireGate 쓰기 실패 ({self._short_error(exc)}), "
+                "다음 실행에서 기록된 작업을 이어서 확인")
+        if outcome.get("status") != "relinked":
+            return self._firegate_reconcile_stuck(symbol, cycle["id"], state, job, job_key,
+                                                  outcome.get("reason", "unknown"))
+        try:
+            self._save_firegate_reconcile_config(job_key, {}, required=True)
+        except Exception:
+            pass  # execute_reconcile reports a finished leftover as done (already_done)
+        state.pop("failed_inputs", None)
+        try:
+            fg.sync_firegate_authoritative(self.struct, symbol_filter=symbol)
+        except Exception:
+            pass  # the next pull applies it
+        summary = job.get("summary") or {}
+        if outcome.get("already_done"):
+            return {"symbol": symbol, "status": "reconciled", "message": "이전 실행에서 완료된 작업 기록 정리"}
+        adjustment = summary.get("adjustment")
+        adjust_text = (f", 조정 {'매수' if adjustment['type'] == 'buy' else '매도'} {adjustment['qty']}주 @ {adjustment['price']:.2f}"
+                       if adjustment else "")
+        return self._firegate_reconcile_report(
+            symbol, cycle["id"], state, "reconciled",
+            f"{symbol} FireGate 자동 대조 완료: 체결 {summary.get('local', 0) + summary.get('broker', 0)}건 반영"
+            f"(로컬 {summary.get('local', 0)}건, 브로커 내역 {summary.get('broker', 0)}건){adjust_text}, "
+            f"보유 {job['broker_qty']}주 일치, 사이클 연결 {cycle['id']}. "
+            f"전 {summary.get('before', '')} → 후 {summary.get('after', '')}. 다음 세션 예상: {summary.get('next', '')}"
+            + self._firegate_branch_text(summary.get("branch")),
+            ok=True)
+
+    @staticmethod
+    def _firegate_branch_text(branch):
+        if not (branch or {}).get("changed"):
+            return ""
+        return (f" (조정으로 리버스 분기 {branch['before_branch']}→{branch['after_branch']}, "
+                f"잔여 시드 ${branch['before_seed']:,.2f}→${branch['after_seed']:,.2f})")
+
+    def _firegate_reconcile_stuck(self, symbol, cycle_id, state, job, job_key, reason):
+        job["stuck"] = True
+        job["stuck_reason"] = str(reason)
+        self._save_firegate_reconcile_config(job_key, job)
+        return self._firegate_reconcile_report(
+            symbol, cycle_id, state, "partial_stuck",
+            f"{symbol} FireGate 자동 대조 부분 반영, 확인 필요: {reason}. 자동 재시도 중단")
+
+    @staticmethod
+    def _firegate_plan_detail(plan, firegate_qty, cap):
+        status = plan.get("status")
+        after = plan.get("replayed_qty", plan.get("holding_after"))
+        adjustment = plan.get("adjustment") or {}
+        return {
+            "mismatch": f"FireGate {after}주(누락 체결 반영 시)",
+            "too_many": f"반영할 항목 {len(plan.get('txs') or [])}건이 한도 {cap}건 초과",
+            "oversell": f"FireGate {after}주에서 보유보다 큰 매도",
+            "zero_crossing": "재연 중 FireGate 보유 0주 통과",
+            "stopped": "재연 중 FireGate 포트폴리오 종료",
+            "stale_fill": f"FireGate 마지막 거래일({plan.get('last_firegate_day')})보다 이른 미반영 로컬 체결",
+            "unidentified_fill": "ID 없는 로컬 체결",
+            "invalid_trade": "변환할 수 없는 체결",
+            "adjust_no_price": f"FireGate {after}주, 조정 기준가(브로커 평단·현재가) 없음",
+            "adjust_too_large": f"FireGate {after}주, 조정 {abs(plan.get('broker_qty', 0) - (after or 0))}주가 보유의 50% 초과",
+            "adjust_price_out_of_range": (f"FireGate {after}주, 조정 {adjustment.get('qty')}주 @ {adjustment.get('price')}가 "
+                                          "현재가의 0.3~3배 밖"),
+            "adjust_branch_change": (f"조정 {adjustment.get('qty')}주 @ {adjustment.get('price')}가 리버스 분기·잔여 시드 부호를 바꿈"
+                                     f"{Engine._firegate_branch_text(plan.get('branch'))}, 설정상 보류"),
+        }.get(status, f"FireGate {firegate_qty}주 ({status})")
+
+    def _firegate_portfolio_summary(self, portfolio):
+        portfolio = portfolio or {}
+        seed = float(portfolio.get("seed", 0) or 0)
+        remaining = seed - (float(portfolio.get("totalBuy", 0) or 0) - float(portfolio.get("totalSell", 0) or 0))
+        reverse = portfolio.get("reverseState") or ("ENTERED" if portfolio.get("reverseMode") else "NORMAL")
+        return (f"{int(float(portfolio.get('holdingQty', 0) or 0))}주 @ {float(portfolio.get('avgPrice', 0) or 0):.2f}, "
+                f"T {float(portfolio.get('tValue', 0) or 0):.2f}, 리버스 {reverse}, 잔여 시드 ${remaining:,.2f}")
+
+    def _firegate_next_session(self, cycle, portfolio, current_price):
+        """What the reservation path will place next, from the replayed
+        portfolio (the reverse star is the 5-day average, read later; the
+        current price stands in here)."""
+        try:
+            fg = self._firegate_bridge_model()
+            state = fg.authoritative_state(portfolio) or {}
+            merged = {**(cycle or {}), **state}
+            if not merged.get("_firegate_five_day_avg") and current_price > 0:
+                merged["_firegate_five_day_avg"] = current_price
+            plan = self.firegate_reverse_plan(merged)
+            if plan is None:
+                return f"일반 v4 LOC 계획 (T {float(state.get('t_value', 0) or 0):.2f})"
+            if int(plan.get("moc_qty") or 0) > 0:
+                return f"{plan.get('state_name')}: MOC 매도 {plan['moc_qty']}주"
+            sells = ", ".join(f"LOC 매도 {line['order_qty']}주 @ {line['price']:.2f}" for line in plan.get("sells") or [])
+            buys = ", ".join(f"LOC 매수 {line['order_qty']}주 @ {line['loc_price']:.2f}" for line in plan.get("buys") or [])
+            return f"{plan.get('state_name')}: " + " / ".join(item for item in (sells, buys) if item)
+        except Exception as exc:
+            return f"계산 실패 ({self._short_error(exc)})"
+
+    @staticmethod
+    def _reconcile_day(value):
+        text = str(value or "").strip()
+        for fmt in ("%Y. %m. %d", "%Y-%m-%d", "%Y%m%d", "%Y.%m.%d"):
+            try:
+                return datetime.datetime.strptime(text[:12].strip(), fmt).date()
+            except Exception:
+                continue
+        try:
+            return datetime.datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
     def sync_firegate_strategy_metadata(self):
         """Restore strategy T separately from broker quantity/cost accounting."""
         if not self._firegate_reservation_authority_required() and not self._get_config_value('fire_gate_bridge', ''):
