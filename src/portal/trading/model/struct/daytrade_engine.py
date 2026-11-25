@@ -4642,7 +4642,9 @@ class DomesticDaytradeEngine:
                 evidence_issues.append(ownership_issue)
             if current_price <= 0 or qty <= 0:
                 evidence_issues.append("유효한 현재가 또는 주문수량이 없습니다.")
-            if price_source in ("", "error_fallback", "state", "state_cache"):
+            if price_source == "kis_quote_stale":
+                evidence_issues.append("KIS 시세 갱신 실패(묵은 시세)로 신규 매수에 사용할 수 없는 가격 출처입니다: kis_quote_stale")
+            elif price_source in ("", "error_fallback", "state", "state_cache"):
                 evidence_issues.append(f"신규 매수에 사용할 수 없는 가격 출처입니다: {price_source or '없음'}")
             if list(signal.get("preflight_issues", []) or []):
                 evidence_issues.extend(str(item) for item in signal.get("preflight_issues", []) if str(item).strip())
@@ -5407,7 +5409,10 @@ class DomesticDaytradeEngine:
                     except Exception:
                         live_bar = {}
                     live_bar = live_bar or {}
-                if strategy_id in ("volume_breakout", "paper_regime_trend", "paper_momentum_ride") and str(live_bar.get("price_source", "") or "").startswith("kis_"):
+                # A stale-quote bar keeps the label it had before the refresh
+                # failed, so this exit path behaves exactly as it always did.
+                live_source = live_bar.get("quote_stale_prev_source", "") if live_bar.get("quote_stale") else live_bar.get("price_source", "")
+                if strategy_id in ("volume_breakout", "paper_regime_trend", "paper_momentum_ride") and str(live_source or "").startswith("kis_"):
                     # The balance price can be two minutes old; a 0.8% stop
                     # needs the quote the breakout exit already fetched.
                     current_price = self._safe_float(live_bar.get("close", 0), 0) or current_price
@@ -7682,6 +7687,8 @@ class DomesticDaytradeEngine:
         max_session_reuse_sec = 180.0
 
         def _apply_kis_quote(base_bar):
+            """Returns (bar, refreshed). On a failed quote the bar comes back
+            unchanged and refreshed is False; callers decide what that means."""
             bar = dict(base_bar or {})
             try:
                 if self._is_us_market(market):
@@ -7692,10 +7699,10 @@ class DomesticDaytradeEngine:
                     quote = self._broker().get_domestic_current_price(symbol)
                     source_label = "kis_domestic_quote"
             except Exception:
-                return bar
+                return bar, False
             price = self._safe_float(quote.get("price", 0), 0)
             if price <= 0:
-                return bar
+                return bar, False
             quote_open = self._safe_float(quote.get("open", 0), 0)
             quote_high = self._safe_float(quote.get("high", 0), 0)
             quote_low = self._safe_float(quote.get("low", 0), 0)
@@ -7710,7 +7717,7 @@ class DomesticDaytradeEngine:
             quote_prev_close = self._safe_float(quote.get("prev_close", 0), 0)
             if quote_prev_close > 0:
                 bar["quote_prev_close"] = quote_prev_close
-            return bar
+            return bar, True
 
         def _fallback_snapshot_from_state(reason=""):
             fallback_state = self._state_for(symbol, market=market, seed=0, name="", strategy_id="vrev")
@@ -7798,20 +7805,51 @@ class DomesticDaytradeEngine:
             }
             return session, bar
 
+        def _stale_bar(base_bar):
+            # The quote refresh failed: this price is up to
+            # max_session_reuse_sec old. Say so instead of passing it off as a
+            # live KIS quote. New buys refuse this source; exits keep their old
+            # behaviour (quote_stale_prev_source carries the label they saw).
+            bar = dict(base_bar or {})
+            bar["quote_stale_prev_source"] = str(bar.get("price_source", "") or "")
+            bar["price_source"] = "kis_quote_stale"
+            bar["quote_stale"] = True
+            return bar
+
         if cached:
             age = (now - cached["ts"]).total_seconds()
-            if age < _SNAP_TTL:
+            fail_ts = cached.get("quote_fail_ts")
+            if age < _SNAP_TTL and not fail_ts:
                 return cached["session"], dict(cached["bar"])  # 캐시 히트 → KIS API 스킵
             dataset_age = (now - cached.get("dataset_ts", cached["ts"])).total_seconds()
             if dataset_age < max_session_reuse_sec:
+                # The quote budget is shared with order and exit lookups: after
+                # a failure wait _SNAP_TTL before asking KIS again, and keep
+                # the stale label meanwhile (never a plain cache hit).
+                if fail_ts and (now - fail_ts).total_seconds() < _SNAP_TTL:
+                    return cached["session"], _stale_bar(cached.get("bar", {}))
                 try:
-                    bar = _apply_kis_quote(cached.get("bar", {}))
+                    bar, refreshed = _apply_kis_quote(cached.get("bar", {}))
+                except Exception:
+                    bar, refreshed = dict(cached.get("bar", {}) or {}), False
+                if refreshed:
+                    bar.pop("quote_stale", None)
+                    bar.pop("quote_stale_prev_source", None)
                     snapshot_cache[cache_key] = {"session": cached["session"], "bar": bar, "ts": now,
                                                  "dataset_ts": cached.get("dataset_ts", cached["ts"])}
                     setattr(_sys, _SNAP_KEY, snapshot_cache)
                     return cached["session"], bar
+                # Record only the failure time; the original bar, ts and
+                # dataset_ts stay as they were.
+                failed_entry = dict(cached)
+                failed_entry["quote_fail_ts"] = now
+                snapshot_cache[cache_key] = failed_entry
+                setattr(_sys, _SNAP_KEY, snapshot_cache)
+                try:
+                    self._append_runtime_log("warning", f"{symbol} KIS 현재가 갱신 실패 — 묵은 시세(최대 {int(max_session_reuse_sec)}초)라 신규 매수를 차단합니다.", symbol=symbol, dedup_sec=600)
                 except Exception:
-                    return cached["session"], dict(cached["bar"])
+                    pass
+                return cached["session"], _stale_bar(cached.get("bar", {}))
         try:
             strategy = self.strategy
             prepare = getattr(strategy, "prepare_live_dataset", None) or strategy._prepare_dataset
@@ -7833,8 +7871,9 @@ class DomesticDaytradeEngine:
             # Backtests judge closed bars; the quote below supplies the price.
             closed = bars[:-1] if len(bars) > 1 and str(bars[-1].get("timestamp", ""))[:16] == now.strftime("%Y-%m-%d %H:%M") else bars
             bar = dict(closed[-1])
+            # _apply_kis_quote catches quote-call failures itself; only a malformed (non-dict) quote reaches this except. Kept as before.
             try:
-                bar = _apply_kis_quote(bar)
+                bar, _refreshed = _apply_kis_quote(bar)
             except Exception:
                 bar["price_source"] = "yfinance_intraday"
         except Exception as e:
@@ -7883,11 +7922,17 @@ class DomesticDaytradeEngine:
         if connection.get("connected") is False:
             issues.append("KIS API 연결이 준비되지 않았습니다.")
         price_source = signal.get("price_source", "")
-        if is_buy and connection.get("is_real") and price_source not in ("kis_domestic_quote", "kis_overseas_quote") and not self._is_us_market(market):
+        quote_stale = price_source == "kis_quote_stale"
+        if is_buy and quote_stale:
+            # PAPER and LIVE alike: a quote refresh failed, so this price is old.
+            issues.append("KIS 시세 갱신 실패(묵은 시세)로 신규 주문을 차단합니다.")
+        elif is_buy and connection.get("is_real") and price_source not in ("kis_domestic_quote", "kis_overseas_quote"):
             issues.append("실전 모드에서는 KIS 실시간 시세가 아니면 신규 주문을 차단합니다.")
         elif price_source not in ("kis_domestic_quote", "kis_overseas_quote"):
             if is_sell:
                 warnings.append("청산 신호는 지연 시세에서 계산되었지만 주문은 시장가로 즉시 전송합니다.")
+            elif quote_stale:
+                warnings.append("KIS 시세 갱신 실패(묵은 시세) 기반입니다.")
             else:
                 warnings.append("지연 시세 기반입니다.")
         if bool(bar.get("intraday_unavailable", False)):
