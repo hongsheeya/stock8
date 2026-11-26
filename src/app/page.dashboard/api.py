@@ -184,6 +184,26 @@ def _dashboard_cache_scope():
     return f"user:{user_id}" if user_id else "anon"
 
 
+def _paper_account_issue(trading):
+    """PAPER only: {"since", "reason"} while KIS says the mock account is not
+    registered (kis_api records "모의투자 신청내역을 확인하세요"), else {}.
+
+    11-17~11-26 every account call failed that way while the token worked and
+    the header chip said 연결됨. This is shown beside the connection state; it
+    does not change api_connected, so balance reads, their own failure banner
+    and the profit totals behave exactly as before."""
+    if not _PAPER_MODE:
+        return {}
+    try:
+        since = str(trading.get_config("kis_paper_account_unavailable_at", "") or "").strip()
+        if not since:
+            return {}
+        reason = str(trading.get_config("kis_paper_account_unavailable_reason", "") or "").strip()
+        return {"since": since[:16], "reason": reason or "모의투자 신청내역을 확인하세요."}
+    except Exception:
+        return {}
+
+
 def _connection_message(value, fallback="KIS 계좌 연결 상태를 확인해주세요."):
     message = str(value or "").strip()
     if not message or "season.core.exception.response" in message.lower():
@@ -2283,6 +2303,7 @@ def _build_overview_payload(force_refresh=False):
         "is_mock": _PAPER_MODE,
         "paper_ready": bool(api_connected or setup_state.get("configured", False)) if _PAPER_MODE else (connection_result.get("persistent") is True or api_connected),
         "connection_message": _connection_message(connection_result.get("message", ""), "KIS READY" if api_connected else "KIS 계좌 연결 상태를 확인해주세요."),
+        "paper_account_unavailable": _paper_account_issue(trading),
         "readiness_verified_at": str(connection_result.get("verified_at", "") or ""),
         "automation_state": automation_state,
         "holdings_source": holdings_source,

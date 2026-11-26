@@ -389,9 +389,9 @@ div(class="dx-head")
     div(class="dx-title")
         h1 {{t('dash.title')}}
         span(class="dx-chip", [class.is-paper]="isMock") {{isMock ? '모의투자' : '실계좌'}}
-        span(class="dx-chip dx-conn", [class.is-ok]="apiConnected")
+        span(class="dx-chip dx-conn", [class.is-ok]="apiConnected && !paperAccountIssue")
             i
-            | {{apiConnected ? '연결됨' : '연결 확인 필요'}}
+            | {{paperAccountIssue ? '모의계좌 사용 불가' : (apiConnected ? '연결됨' : '연결 확인 필요')}}
     div(class="dx-tools")
         button((click)="toggleAutoRefresh()", class="dx-tool", [class.is-on]="autoRefresh", title="자동 갱신")
             | 자동 갱신
@@ -450,6 +450,9 @@ div(*ngIf="!legacyMode", class="dx-alerts")
     div(*ngIf="privacyLocked || setupRequired", class="dx-alert is-info")
         strong 시작하려면 증권사 API를 연결하세요
         span 오른쪽 아래 '시작 가이드'를 따라 하면 돼요. 연결 전에는 자산·수익·보유 종목을 표시하지 않아요.
+    div(*ngIf="isMock && paperAccountIssue", class="dx-alert is-danger")
+        strong KIS 모의투자 계좌를 쓸 수 없습니다
+        span {{paperAccountIssue.since}}부터 KIS 응답: {{paperAccountIssue.reason}} 한국투자증권에서 모의투자 신청과 Open API 계좌 연동을 확인한 뒤, 설정에서 연결 테스트를 다시 하세요.
     div(*ngIf="!balanceSyncOk && balanceSyncMessage && !setupRequired && !privacyLocked", class="dx-alert is-warn")
         strong 잔고 조회 실패
         span {{balanceSyncMessage}}

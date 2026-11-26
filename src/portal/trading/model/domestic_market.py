@@ -9,6 +9,23 @@ import math
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
+# KRX (and NXT) closures incl. substitute holidays and the year-end close;
+# same table as dividend.KR_HOLIDAYS. Weekends are handled separately.
+KRX_HOLIDAYS = frozenset({
+    "2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-03-02", "2026-05-01", "2026-05-05",
+    "2026-05-25", "2026-06-03", "2026-08-17", "2026-09-24", "2026-09-25", "2026-10-05", "2026-10-09",
+    "2026-12-25", "2026-12-31",
+    "2027-01-01", "2027-02-08", "2027-02-09", "2027-03-01", "2027-05-05", "2027-05-13", "2027-08-16",
+    "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-04", "2027-10-11", "2027-12-27", "2027-12-31",
+})
+
+
+def is_krx_holiday(day):
+    """day: date or datetime (KST)."""
+    if isinstance(day, datetime.datetime):
+        day = day.date()
+    return day.isoformat() in KRX_HOLIDAYS
+
 
 def session(now, exchange='KRX'):
     if now.tzinfo is None:
@@ -16,7 +33,7 @@ def session(now, exchange='KRX'):
     now = now.astimezone(KST)
     if exchange not in ('KRX', 'NXT'):
         raise ValueError('Explicit KRX or NXT required; implicit SOR is disabled')
-    if now.weekday() >= 5:
+    if now.weekday() >= 5 or is_krx_holiday(now):
         return 'CLOSED'
     t = now.hour * 3600 + now.minute * 60 + now.second
     if exchange == 'NXT':
@@ -82,6 +99,9 @@ class MarketRules:
     session = staticmethod(session)
     route = staticmethod(route)
     cancel_route = staticmethod(cancel_route)
+    # wiz.model() hands callers this instance, not the module.
+    is_krx_holiday = staticmethod(is_krx_holiday)
+    KRX_HOLIDAYS = KRX_HOLIDAYS
 
 
 Model = MarketRules()

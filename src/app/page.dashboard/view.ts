@@ -54,6 +54,8 @@ export class Component implements OnInit {
     public apiConnected: boolean = false;
     public paperReady: boolean = false;
     public connectionMessage: string = '';
+    // PAPER only: KIS said the mock account is not registered ({since, reason}).
+    public paperAccountIssue: any = null;
     public readinessVerifiedAt: string = '';
     public automationState: any = { code: 'off', label: '자동매매 OFF', message: '', enabled: false, active_cycles: 0, active_targets: 0 };
     public autoTradeChanging: boolean = false;
@@ -544,6 +546,7 @@ export class Component implements OnInit {
                 this.isMock = data.is_mock || false;
                 this.paperReady = data.paper_ready === true || (this.isMock && this.apiConnected);
                 this.connectionMessage = data.connection_message || '';
+                this.paperAccountIssue = (data.paper_account_unavailable && data.paper_account_unavailable.since) ? data.paper_account_unavailable : null;
                 this.readinessVerifiedAt = data.readiness_verified_at || '';
                 this.automationState = data.automation_state || this.automationState;
                 this.infiniteBuyCycles = this.normalizeInfiniteBuyCycles(data.infinite_buy_cycles || data.cycles || []);

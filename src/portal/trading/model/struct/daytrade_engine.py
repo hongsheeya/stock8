@@ -1768,10 +1768,27 @@ class DomesticDaytradeEngine:
         else:
             et_offset = -4 if self._is_us_dst() else -5
             now_et = self._now() + datetime.timedelta(hours=et_offset - 9)
-        if now_et.weekday() >= 5:
+        if now_et.weekday() >= 5 or self._us_holiday_label(now_et):
             return False
         hhmm = now_et.hour * 100 + now_et.minute
         return 930 <= hhmm < 1600
+
+    def _us_holiday_label(self, now_et):
+        """NYSE closure name for this ET date, else "". 11-26 (Thanksgiving)
+        PAPER sent RIVN buys every few minutes and KIS answered "모의투자
+        영업일이 아닙니다": these checks only knew weekends. The table is
+        kis_api.US_MARKET_HOLIDAYS (also used by infinite buy)."""
+        try:
+            holidays = getattr(self.struct.kis_api, "US_MARKET_HOLIDAYS", None) or {}
+            return str(holidays.get(now_et.date().isoformat(), "") or "")
+        except Exception:
+            return ""
+
+    def _ks_holiday(self, now_kst):
+        try:
+            return bool(wiz.model("portal/trading/domestic_market").is_krx_holiday(now_kst))
+        except Exception:
+            return False
 
     def _us_premarket_open(self):
         """미국 프리마켓 시간 (ET 04:00~09:30)"""
@@ -1782,7 +1799,7 @@ class DomesticDaytradeEngine:
         else:
             et_offset = -4 if self._is_us_dst() else -5
             now_et = self._now() + datetime.timedelta(hours=et_offset - 9)
-        if now_et.weekday() >= 5:
+        if now_et.weekday() >= 5 or self._us_holiday_label(now_et):
             return False
         hhmm = now_et.hour * 100 + now_et.minute
         return 400 <= hhmm < 930
@@ -4435,7 +4452,8 @@ class DomesticDaytradeEngine:
     # 252670 BUY was re-sent every 5-6 min for three days although KIS
     # answered "매매불가 종목". The broker exception carries msg1, not msg_cd,
     # so only the message text is matched (digits could hit CANO/qty/price).
-    _ACCOUNT_REJECT_MARKERS = ("주문이 불가한 계좌",)
+    # 11-17~ the same mock account answered "모의투자 신청내역을 확인하세요".
+    _ACCOUNT_REJECT_MARKERS = ("주문이 불가한 계좌", "모의투자 신청내역")
     _SYMBOL_REJECT_MARKERS = ("매매불가 종목",)
     # Classified for logs/tests only; the regular failure cooldown handles it.
     _RATE_LIMIT_MARKERS = ("EGW00201", "초당 거래건수")
@@ -6984,7 +7002,7 @@ class DomesticDaytradeEngine:
         if self._is_us_market(market):
             return self._us_market_open()
         now = self._now()
-        if now.weekday() >= 5:
+        if now.weekday() >= 5 or self._ks_holiday(now):
             return False
         hhmm = now.hour * 100 + now.minute
         return 900 <= hhmm < 1520

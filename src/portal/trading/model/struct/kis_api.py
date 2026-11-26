@@ -40,6 +40,15 @@ if TRADING_MODE not in ("PAPER", "LIVE"):
 PAPER_MODE = TRADING_MODE == "PAPER"
 LIVE_UNLOCKED = os.environ.get("STOCK8_LIVE_TRADING_UNLOCK", "") == "I_UNDERSTAND_LIVE_TRADING"
 
+# 11-17~11-26 PAPER: every account inquiry answered "모의투자 신청내역을
+# 확인하세요" while keys and tokens kept working, so the dashboard went on
+# showing 연결됨. Only the mock (VTS) server sends it. "모의투자 주문이 불가한
+# 계좌입니다" (11-16, orders only; reads still worked) is left to the engine's
+# account halt.
+_PAPER_ACCOUNT_UNAVAILABLE_MARKERS = ("모의투자 신청내역",)
+PAPER_ACCOUNT_UNAVAILABLE_AT_KEY = "kis_paper_account_unavailable_at"
+PAPER_ACCOUNT_UNAVAILABLE_REASON_KEY = "kis_paper_account_unavailable_reason"
+
 TOKEN_ISSUE_PATH = "/oauth2/tokenP"
 _REQUEST_OPTIONS = threading.local()
 # WIZ executes model source into fresh classes for different requests. Class
@@ -708,6 +717,7 @@ class KisApi:
                 # 토큰 만료 에러 시 갱신 후 재시도
                 rt_cd = data.get("rt_cd", "")
                 msg1 = data.get("msg1", "")
+                self._note_paper_account_state(method, data)
                 token_message = f"{data.get('msg_cd', '')} {msg1}".lower()
                 if rt_cd != "0" and any(marker in token_message for marker in ("token", "egw00123", "만료", "expired")):
                     # Authentication recovery is separate from transport
@@ -836,6 +846,42 @@ class KisApi:
         except Exception as e:
             return {"success": False, "message": str(e)}
 
+    def _note_paper_account_state(self, method, data):
+        """PAPER only: remember when a read answers that the mock account is
+        not registered. It is cleared by a passing connection test
+        (validate_paper_readiness) or new settings, not by the next successful
+        call: one exchange can fail while another answers, and the record
+        would flip on every pass.
+
+        Bookkeeping only, for reads only (no I/O on the order path). It never
+        raises and never changes the response or whether anything is sent."""
+        if not PAPER_MODE or str(method or "").upper() != "GET" or not isinstance(data, dict):
+            return
+        try:
+            rt_cd = str(data.get("rt_cd", "") or "")
+            if not rt_cd or rt_cd == "0":
+                return
+            msg1 = " ".join(str(data.get("msg1", "") or "").split())
+            if not any(marker in msg1 for marker in _PAPER_ACCOUNT_UNAVAILABLE_MARKERS):
+                return
+            if str(self._get_config(PAPER_ACCOUNT_UNAVAILABLE_AT_KEY, "") or ""):
+                return
+            self._set_config(PAPER_ACCOUNT_UNAVAILABLE_AT_KEY, _TIME.now().strftime("%Y-%m-%d %H:%M:%S"),
+                             "KIS PAPER mock account unusable since")
+            self._set_config(PAPER_ACCOUNT_UNAVAILABLE_REASON_KEY, msg1[:200],
+                             "KIS PAPER mock account unusable reason")
+            self._log("warning", f"KIS 모의투자 계좌 사용 불가: {msg1[:160]}")
+        except Exception:
+            pass
+
+    def _clear_paper_account_unavailable(self):
+        try:
+            if str(self._get_config(PAPER_ACCOUNT_UNAVAILABLE_AT_KEY, "") or ""):
+                self._set_config(PAPER_ACCOUNT_UNAVAILABLE_AT_KEY, "", "KIS PAPER mock account unusable since")
+                self._set_config(PAPER_ACCOUNT_UNAVAILABLE_REASON_KEY, "", "KIS PAPER mock account unusable reason")
+        except Exception:
+            pass
+
     def validate_paper_readiness(self):
         """5 s per HTTP request, 35 s for the whole chain.
 
@@ -881,6 +927,7 @@ class KisApi:
 
             self._set_config("kis_paper_readiness_scope", self._readiness_scope(), "Validated PAPER credential scope", True)
             self._set_config("kis_paper_readiness_verified_at", _TIME.now().isoformat(), "PAPER read-only validation time")
+            self._clear_paper_account_unavailable()
             return {"success": True, "message": "KIS PAPER READY", "diagnostics": diagnostics}
         except Exception as e:
             diagnostics.append({"step": "blocked", "success": False, "message": str(e)})
@@ -901,6 +948,9 @@ class KisApi:
         self._set_config(f"{prefix}_account_no", account_no, "KIS environment-specific account", True)
         if PAPER_MODE:
             self._set_config("kis_paper_readiness_scope", "", "PAPER readiness invalidated", True)
+            # New credentials may point at a new mock account; the next
+            # account call decides again.
+            self._clear_paper_account_unavailable()
         # 토큰 초기화 (새 키로 재발급)
         self._token = None
         self._token_expires = None

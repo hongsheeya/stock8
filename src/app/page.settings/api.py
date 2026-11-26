@@ -258,6 +258,9 @@ def _persist_api_settings(payload):
         _set_config(f"{kis_prefix}_token_expires", "0", "KIS environment-specific token expiry")
         if _PAPER_MODE:
             _set_config("kis_paper_readiness_scope", "", "PAPER readiness invalidated", True)
+            # New keys or account: the next account call decides again.
+            _set_config("kis_paper_account_unavailable_at", "", "KIS PAPER mock account unusable since")
+            _set_config("kis_paper_account_unavailable_reason", "", "KIS PAPER mock account unusable reason")
     _set_config("toss_access_token", "", "토스증권 접근 토큰", True)
     _set_config("toss_token_expires", "0", "토스증권 토큰 만료시각")
     try:
