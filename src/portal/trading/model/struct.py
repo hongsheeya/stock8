@@ -64,6 +64,8 @@ USER_SCOPED_CONFIG_KEYS = {
     "kis_paper_token_expires",
     "kis_paper_readiness_scope",
     "kis_paper_readiness_verified_at",
+    "kis_paper_account_unavailable_at",
+    "kis_paper_account_unavailable_reason",
     "kis_live_app_key",
     "kis_live_app_secret",
     "kis_live_account_no",
