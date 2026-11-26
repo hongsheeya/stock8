@@ -297,10 +297,17 @@ class DaytradeEngineRegressionTests(unittest.TestCase):
         for key in ("_trading_kis_balance_cache_v2", "_trading_kis_balance_cache_ts"):
             if hasattr(sys, key):
                 delattr(sys, key)
+        # _engine_with_state stubs this method; test the real one.
+        del engine._fetch_kis_balance_raw
 
         raw = engine._fetch_kis_balance_raw()
+        for key in ("_trading_kis_balance_cache_v2", "_trading_kis_balance_cache_ts"):
+            if hasattr(sys, key):
+                delattr(sys, key)
 
         self.assertEqual(raw["holdings"], [])
+        # Empty because unknown, not because the account holds nothing.
+        self.assertIs(raw["holdings_ok"], False)
 
     def test_paper_mode_exposes_daytrade_without_legacy_feature_flag(self):
         engine, _state = _engine_with_state({}, [], configs={})
