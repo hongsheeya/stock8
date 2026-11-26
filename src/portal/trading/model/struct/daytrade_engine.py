@@ -2788,8 +2788,13 @@ class DomesticDaytradeEngine:
         if market_filter != "US":
             try:
                 raw = self._fetch_kis_balance_raw()
-                domestic_holdings = raw.get("holdings", []) or []
-                fetched_markets.update(["KS", "KQ"])
+                # _fetch_kis_balance_raw swallows a failed balance call and
+                # returns holdings=[]. Treating that as the broker's answer
+                # zeroed every KS position below (dropped from the exit watch,
+                # BUY1 re-opened). Only a real answer may clean up local state.
+                if raw.get("holdings_ok", True) is not False:
+                    domestic_holdings = raw.get("holdings", []) or []
+                    fetched_markets.update(["KS", "KQ"])
             except Exception:
                 domestic_holdings = []
 
@@ -3433,8 +3438,13 @@ class DomesticDaytradeEngine:
 
         cached = getattr(_sys, _CACHE_KEY, None)
         cached_ts = getattr(_sys, _CACHE_TS_KEY, 0.0)
-        if cached and (now - cached_ts) < _CACHE_TTL:
-            return cached
+        # A failed holdings read is retried after 15 s instead of standing in
+        # for the account for two minutes; entries from before holdings_ok
+        # existed are refetched.
+        if cached and "holdings_ok" in cached:
+            ttl = _CACHE_TTL if cached.get("holdings_ok") else 15.0
+            if (now - cached_ts) < ttl:
+                return cached
 
         krw_balance = 0.0
         deposit_krw = 0.0
@@ -3455,6 +3465,9 @@ class DomesticDaytradeEngine:
         direct_total_asset_krw = 0.0
         summary_total_asset_krw = 0.0
         domestic_holdings = []
+        # True only when the domestic balance call itself answered. An empty
+        # list after a failed call means "unknown", never "holds nothing".
+        holdings_ok = False
         source = "manual"
         total_asset_source = "fallback"
         # 1순위: 주문가능금액 조회 (TTTC8908R) → 실제 매수 가능액(당일매도 재사용 포함)
@@ -3478,6 +3491,7 @@ class DomesticDaytradeEngine:
                 deposit_krw = _krw
                 krw_balance = _krw
             domestic_holdings = domestic_bal.get("holdings", []) or []
+            holdings_ok = isinstance(domestic_bal.get("holdings", []), list)
             holdings_eval_krw = round(sum(
                 self._safe_float(item.get("current_price", 0), 0) * self._safe_int(item.get("qty", 0), 0)
                 for item in domestic_holdings
@@ -3577,6 +3591,7 @@ class DomesticDaytradeEngine:
             "deposit_krw": deposit_krw,
             "withdrawable_krw": withdrawable_krw,
             "holdings": domestic_holdings,
+            "holdings_ok": holdings_ok,
             "usd_krw": usd_krw,
             "same_day_sell_krw": same_day_sell_krw,
             "same_day_buy_krw": same_day_buy_krw,
