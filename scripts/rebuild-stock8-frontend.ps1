@@ -34,6 +34,11 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $buildStarted = Get-Date
 
+# The stock WIZ builder assumes POSIX paths; on Windows it silently produces an
+# empty main.js and skips Tailwind. Re-apply the Stock8 fix to the runtime.
+& $pythonPath (Join-Path $PSScriptRoot "patch-wiz-runtime-windows.py") $RuntimeRoot
+if ($LASTEXITCODE -ne 0) { throw "Could not patch the WIZ runtime builder for Windows." }
+
 Push-Location $RuntimeRoot
 $previousBuildOnly = $env:STOCK8_BUILD_ONLY
 try {
@@ -56,6 +61,16 @@ if (-not (Test-Path -LiteralPath $buildSourceRoot)) {
 $distInfo = Get-Item -LiteralPath $distMain
 if ($distInfo.LastWriteTime -lt $buildStarted.AddSeconds(-2) -or $distInfo.Length -lt 100000) {
     throw "WIZ returned without producing a fresh frontend bundle."
+}
+# Without a fresh tailwind.min.css, main.css ships with no Tailwind classes and
+# every page renders with a broken layout while the build still "succeeds".
+$tailwindCss = Join-Path $projectRoot "build\tailwind.min.css"
+if (-not (Test-Path -LiteralPath $tailwindCss)) {
+    throw "WIZ build did not create $tailwindCss"
+}
+$tailwindInfo = Get-Item -LiteralPath $tailwindCss
+if ($tailwindInfo.LastWriteTime -lt $buildStarted.AddSeconds(-2) -or $tailwindInfo.Length -lt 10000) {
+    throw "WIZ build did not regenerate $tailwindCss"
 }
 
 New-Item -ItemType Directory -Path $bundleRoot -Force | Out-Null
