@@ -111,10 +111,18 @@ class Env:
         self.logs = {"LIVE": [], "PAPER": []}
         self.cycles = {"LIVE": [], "PAPER": []}
         self.skip_db = set()
-        # A quiet runtime log covering the whole day for every day-trade lane.
+        # A quiet runtime log covering the whole day for every day-trade lane,
+        # and a PAPER worker that ticked a minute before NOW.
         for mode in ("LIVE", "PAPER"):
             for name in ("runtime_logs_ks.json", "runtime_logs_us.json"):
                 self.runtime(mode, name, [rt("2026-11-26 23:00:00", "어제"), rt("2026-11-27 08:00:00", "자동청산 감시 대상이 없습니다.")])
+        self.worker("2026-11-27 15:39:00")
+
+    def worker(self, last_run_at, result=None):
+        self.file("paper/daytrade/worker_status.json", {"last_run_at": last_run_at, "result": result if result is not None else {
+            "auto_cycle": {"message": "국내 주식 시장이 열려있지 않습니다."}, "exit_watch": {"message": "국장 종료"},
+            "us_auto_cycle": {"message": "미국 주식 시장이 열려있지 않습니다."},
+            "loc_automation": {"status": "waiting", "message": "모의 LOC 대체 대기"}}})
 
     def dt_root(self, mode):
         if mode == "LIVE":
@@ -614,6 +622,279 @@ class InputTests(unittest.TestCase):
         self.assertTrue(report.USER_SCOPED_KEYS <= scoped, report.USER_SCOPED_KEYS - scoped)
 
 
+class FileReadTests(unittest.TestCase):
+    """Review 1: an engine's os.replace must not meet an open report handle."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp(prefix="stock8-report-read-")
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.path = os.path.join(self.folder, "state.json")
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump({"sleeves": {"A": 1}}, handle)
+
+    def _replace(self):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump({"sleeves": {"B": 2}}, handle)
+        os.replace(tmp, self.path)  # an engine's atomic save
+
+    def test_handle_is_closed_before_parsing(self):
+        original = report._decode_json
+        replaced = []
+
+        def decode_while_engine_saves(raw):
+            self._replace()   # WinError 5 if the reader still held the file
+            replaced.append(True)
+            return original(raw)
+
+        report._decode_json = decode_while_engine_saves
+        try:
+            data, status = report.read_json_file(self.path)
+        finally:
+            report._decode_json = original
+        self.assertEqual((status, data), ("ok", {"sleeves": {"A": 1}}))
+        self.assertEqual(replaced, [True])
+        with open(self.path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"sleeves": {"B": 2}})
+
+    def test_missing_and_broken_files(self):
+        self.assertEqual(report.read_json_file(os.path.join(self.folder, "none.json")), (None, "missing"))
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{broken")
+        self.assertEqual(report.read_json_file(self.path), (None, "error"))
+        self.assertEqual(report.read_json_file(self.folder)[1], "error")
+
+    @unittest.skipUnless(os.name == "nt", "Windows share modes")
+    def test_windows_open_is_shared_for_read_write_delete(self):
+        fd = report.open_shared(self.path)
+        self.assertIsNotNone(fd)
+        try:
+            with open(self.path, "a", encoding="utf-8"):
+                pass  # another writer is not locked out
+            self.assertEqual(os.read(fd, 100), b'{"sleeves": {"A": 1}}')
+        finally:
+            os.close(fd)
+        with self.assertRaises(FileNotFoundError):
+            report.open_shared(os.path.join(self.folder, "none.json"))
+
+    def test_ledger_read_takes_the_verifier_lock_of_this_process(self):
+        verifier = _load("t_daily_report_verifier", ROOT / "src/portal/trading/model/trade_verifier.py")
+        self.assertIs(report._ledger_lock(self.path), verifier._path_lock(self.path))
+
+
+class WorkerLivenessTests(unittest.TestCase):
+    """Review 2: a stopped or failing worker is never shown as 대기."""
+    AT_1400 = datetime.datetime(2026, 11, 27, 14, 0)
+
+    def fresh_runtime(self, env, mode, stamp="2026-11-27 13:58:00"):
+        for name in ("runtime_logs_ks.json", "runtime_logs_us.json"):
+            env.runtime(mode, name, [rt("2026-11-26 23:00:00", "어제"), rt(stamp, "국내 단타 자동순환 시작")])
+
+    def test_paper_worker_stopped_in_session_is_unknown(self):
+        env = Env(self)
+        env.worker("2026-11-27 09:10:00")
+        self.fresh_runtime(env, "PAPER")
+        item = lane(env.build(now=self.AT_1400), "daytrade_ks:PAPER")
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("PAPER 워커 응답 없음", item["reason"])
+        self.assertIn("09:10", item["reason"])
+        # Outside the session a stale heartbeat is only a note.
+        late = lane(env.build(), "daytrade_ks:PAPER")
+        self.assertEqual(late["status"], report.WAITING)
+        self.assertTrue(any("PAPER 워커 마지막 기록" in n for n in late["notes"]))
+
+    def test_runtime_log_cut_in_session_is_unknown(self):
+        env = Env(self)
+        env.worker("2026-11-27 14:59:00")
+        self.fresh_runtime(env, "PAPER", "2026-11-27 09:05:00")
+        item = lane(env.build(now=datetime.datetime(2026, 11, 27, 15, 0)), "daytrade_ks:PAPER")
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("런타임 로그가 09:05 이후 끊겼습니다", item["reason"])
+
+    def test_no_log_before_the_open_is_not_unknown(self):
+        env = Env(self)
+        env.worker("2026-11-27 08:29:00")
+        env.runtime("PAPER", "runtime_logs_ks.json", [rt("2026-11-26 15:30:00", "어제 마감")])
+        item = lane(env.build(now=datetime.datetime(2026, 11, 27, 8, 30)), "daytrade_ks:PAPER")
+        self.assertEqual((item["status"], item["reason"]), (report.WAITING, "장 시작 전"))
+
+    def test_paper_loc_error_and_loop_error_are_blocked(self):
+        env = Env(self)
+        env.worker("2026-11-27 13:59:00", {"loc_automation": {"status": "error", "message": "LOC 예약 실패 (rt_cd=1, qty=3)"}})
+        item = lane(env.build(now=self.AT_1400), "infinite_buy:PAPER")
+        self.assertEqual(item["status"], report.BLOCKED)
+        self.assertEqual(item["reason"], "PAPER 워커 LOC 예약 오류: LOC 예약 실패")
+        env.worker("2026-11-27 13:59:00", {"executed": False, "message": "database is locked"})
+        self.fresh_runtime(env, "PAPER")
+        self.assertIn("PAPER 워커 오류: database is locked", lane(env.build(now=self.AT_1400), "daytrade_ks:PAPER")["reason"])
+
+    def test_live_jobs_on_the_live_server(self):
+        env = Env(self)
+        env.cycles["LIVE"] = [{"symbol": "SOXL", "status": "ACTIVE", "qty": 165}]
+        self.fresh_runtime(env, "LIVE")
+
+        def build(rows, error=""):
+            return env.build(now=self.AT_1400, server_mode="LIVE", process={"live_workers": {"rows": rows, "error": error}})
+
+        def job(name, status, error="", at="2026-11-27T13:59:30"):
+            return {"policy_key": LIVE_POLICY, "job": name, "status": status, "message": "", "error": error, "last_check": at}
+
+        ok = [job("entry_ks", "waiting"), job("exit_ks", "waiting"), job("loc", "waiting"), job("sync", "waiting")]
+        result = build(ok)
+        self.assertEqual(lane(result, "infinite_buy:LIVE")["status"], report.WAITING)
+        self.assertEqual(lane(result, "daytrade_ks:LIVE")["status"], report.WAITING)
+        failed = build(ok[:2] + [job("loc", "error", "FireGate 조회 실패"), job("sync", "waiting")])
+        self.assertEqual(lane(failed, "infinite_buy:LIVE")["status"], report.BLOCKED)
+        self.assertIn("LIVE 워커 LOC 예약 오류: FireGate 조회 실패", lane(failed, "infinite_buy:LIVE")["reason"])
+        stale = build([job("entry_ks", "checking", at="2026-11-27T10:00:00"), job("exit_ks", "checking", at="2026-11-27T10:00:00")])
+        self.assertIn("LIVE 워커 응답 없음", lane(stale, "daytrade_ks:LIVE")["reason"])
+        changed = build([job("entry_ks", "account_changed")])
+        self.assertIn("계좌가 바뀌어", lane(changed, "daytrade_ks:LIVE")["reason"])
+        missing = build([])
+        self.assertEqual(lane(missing, "daytrade_ks:LIVE")["status"], report.UNKNOWN)
+        self.assertIn("실행하고 있지 않습니다", lane(missing, "daytrade_ks:LIVE")["reason"])
+        other = build([{**job("loc", "error", "남의 오류"), "policy_key": "order_policy_v1:" + "0" * 40}] + ok)
+        self.assertEqual(lane(other, "infinite_buy:LIVE")["status"], report.WAITING)
+        self.assertNotIn("남의 오류", json.dumps(other, ensure_ascii=False))
+
+    def test_live_infinite_buy_seen_from_paper_uses_run_records(self):
+        env = Env(self)
+        env.cycles["LIVE"] = [{"symbol": "SOXL", "status": "ACTIVE", "qty": 165}]
+        env.logs["LIVE"] = [log("IB_LOC_AUTOMATION_RUN", "2026-11-27 10:00:10", "LOC 자동 예약 점검 결과: {}", "SYSTEM",
+                                raw=json.dumps({"repeat": 40, "last_at": "2026-11-27 11:00:00"}))]
+        item = lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("LOC 자동 예약 실행 기록이 11:00 이후 없습니다", item["reason"])
+        env.logs["LIVE"][0]["raw_response"] = json.dumps({"repeat": 40, "last_at": "2026-11-27 13:58:00"})
+        self.assertEqual(lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")["status"], report.WAITING)
+        env.logs["LIVE"] = []
+        self.assertIn("오늘 LOC 자동 예약 실행 기록이 없습니다", lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")["reason"])
+
+    def test_paper_infinite_buy_without_worker_state_is_unknown_in_window(self):
+        env = Env(self)
+        env.cycles["PAPER"] = [{"symbol": "TQQQ", "status": "ACTIVE", "qty": 3}]
+        env.config["PAPER"]["paper_worker_owner_user_id"] = "other"
+        item = lane(env.build(now=self.AT_1400), "infinite_buy:PAPER")
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("워커 상태 확인 불가", item["reason"])
+
+
+class LogVolumeAndTrimTests(unittest.TestCase):
+    def test_overflow_is_unknown_and_noise_is_not_read(self):
+        env = Env(self)
+        env.logs["PAPER"] = [log("IB_LOC_AUTOMATION_RUN", f"2026-11-27 10:0{i}:00", "run") for i in range(8)]
+        env.logs["PAPER"] += [log("DT_KS_BUY", f"2026-11-27 10:1{i}:00", "A BUY 실행", "A", "BUY", 1, 100.0, str(i)) for i in range(3)]
+        previous = report.MAX_DAY_ROWS
+        report.MAX_DAY_ROWS = 3
+        try:
+            self.assertEqual(lane(env.build(), "daytrade_ks:PAPER")["buys"], 3)
+            env.logs["PAPER"].append(log("DT_KS_SELL_FULL", "2026-11-27 11:00:00", "A SELL", "A", "SELL", 1, 101.0, "9"))
+            item = lane(env.build(), "daytrade_ks:PAPER")
+        finally:
+            report.MAX_DAY_ROWS = previous
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("기록 과다", item["reason"])
+        self.assertEqual(item["buys"], None)
+
+    def test_past_day_trimmed_line_counts_as_repeated(self):
+        env = Env(self)
+        message = "매수 주문 실패 [RIVN]: 모의투자 영업일이 아닙니다. (rt_cd=1, exchange=NASD, qty=52)"
+        env.logs["PAPER"] = [log("DT_US_BUY_ERROR", "2026-11-26 00:11:34", message, "RIVN", "ERROR"),
+                             log("DT_US_BUY_ERROR", "2026-11-26 05:37:50", message, "RIVN", "ERROR")]
+        item = lane(env.build(day=datetime.date(2026, 11, 26)), "daytrade_us:PAPER")
+        self.assertEqual(item["status"], report.BLOCKED)
+        self.assertIn("최소 2회 (00:11~05:37)", item["reason"])
+        self.assertTrue(any("로그 정리" in n for n in item["notes"]))
+        # Today the same two rows are just two errors.
+        env.logs["PAPER"] = [log("DT_US_BUY_ERROR", "2026-11-27 00:11:34", message, "RIVN", "ERROR"),
+                             log("DT_US_BUY_ERROR", "2026-11-27 05:37:50", message, "RIVN", "ERROR")]
+        self.assertNotEqual(lane(env.build(), "daytrade_us:PAPER")["status"], report.BLOCKED)
+
+    def test_rotated_runtime_log_counts_are_minimums(self):
+        env = Env(self)
+        block = "단타 신규 진입 차단 (KS): 학습·검증을 통과한 후보가 없습니다."
+        env.runtime("LIVE", "runtime_logs_ks.json", [rt(f"2026-11-27 10:1{i}:00", block, "warning") for i in range(3)])
+        item = lane(env.build(), "daytrade_ks:LIVE")
+        self.assertEqual(item["status"], report.BLOCKED)
+        self.assertIn("최소 3회 (10:10~10:12)", item["reason"])
+        self.assertTrue(any("10:10 이후만" in n for n in item["notes"]))
+
+    def test_past_infinite_buy_mentions_trimmed_firegate_rows(self):
+        env = Env(self)
+        item = lane(env.build(day=datetime.date(2026, 11, 20)), "infinite_buy:LIVE")
+        self.assertTrue(any("MISMATCH" in n for n in item["notes"]))
+
+
+class OwnershipAndDamageTests(unittest.TestCase):
+    def test_account_policy_of_another_user_is_unknown_and_hidden(self):
+        env = Env(self)
+        env.config["LIVE"][LIVE_POLICY] = json.dumps({"infinite_buy": True, "daytrade_ks": True, "symbols": {},
+                                                      "owner_user_id": "other"})
+        env.runtime("LIVE", "runtime_logs_ks.json", [rt("2026-11-27 09:00:00", "단타 신규 진입 차단 (KS): 남의 정보", "warning")])
+        env.file(f"live/trade_verification/{LIVE_SCOPE}.json", {"records": [{"symbol": "SECRET", "status": "FAIL"}]})
+        result = env.build(server_mode="LIVE", process={"live_workers": {"rows": [
+            {"policy_key": LIVE_POLICY, "job": "loc", "status": "error", "error": "남의 워커", "last_check": ""}], "error": ""}})
+        for key in ("daytrade_ks:LIVE", "infinite_buy:LIVE"):
+            self.assertEqual(lane(result, key)["status"], report.UNKNOWN, key)
+            self.assertIn("다른 사용자 소유", lane(result, key)["reason"])
+            self.assertEqual(lane(result, key)["worker"], [])
+        self.assertEqual(result["safety"]["LIVE"]["verification"]["status"], "foreign")
+        text = json.dumps(result, ensure_ascii=False)
+        for leaked in ("남의 정보", "남의 워커", "SECRET"):
+            self.assertNotIn(leaked, text)
+
+    def test_damaged_coin_and_trend_hold_policies_are_unknown(self):
+        env = Env(self)
+        env.config["LIVE"]["coin_policy_v1"] = "{broken"
+        env.config["PAPER"]["us_trend_hold_policy_v1"] = "[1, 2]"
+        result = env.build()
+        self.assertEqual(lane(result, "coin:LIVE")["status"], report.UNKNOWN)
+        self.assertIn("손상", lane(result, "coin:LIVE")["reason"])
+        self.assertEqual(lane(result, "us_trend_hold:PAPER")["status"], report.UNKNOWN)
+        self.assertNotIn("us_trend_hold:PAPER", [l["key"] for l in env.build(is_admin=False)["lanes"]])
+
+    def test_coin_hard_lock_is_unknown_on_the_paper_server(self):
+        env = Env(self)
+        self.assertTrue(any("코인 봉인" in n for n in lane(env.build(server_mode="PAPER"), "coin:LIVE")["notes"]))
+        self.assertFalse(any("코인 봉인" in n for n in lane(env.build(server_mode="LIVE"), "coin:LIVE")["notes"]))
+
+    def test_old_ledger_scope_must_be_a_hash(self):
+        env = Env(self)
+        env.config["PAPER"]["order_policy_v1:../../outside_ledger"] = json.dumps({"symbols": {}, "owner_user_id": UID})
+        env.file("outside_ledger.json", {"records": [{"symbol": "X", "status": "FAIL"}]})
+        self.assertEqual(env.build()["safety"]["PAPER"]["old_ledgers"], [])
+
+    def test_db_errors_carry_no_paths(self):
+        env = Env(self)
+        env.write()
+        from unittest import mock
+        with mock.patch.object(report.sqlite3, "connect", side_effect=OSError(13, "denied", env.paths["LIVE"])):
+            item = lane(report.build_report(UID, DAY, now=NOW, is_admin=True, server_mode="PAPER", db_paths=env.paths,
+                                            data_dir=env.data), "daytrade_ks:LIVE")
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertNotIn(env.root, item["reason"])
+        self.assertIn("(PermissionError)", item["reason"])  # OSError(13, ...) is a PermissionError
+
+
+class MessageCleaningTests(unittest.TestCase):
+    def test_raw_account_quotes_and_long_numbers_are_hidden(self):
+        text = report.clean_message("잔고 조회 실패 (원본: '12345678-01', CANO: '12345678', ACNT_PRDT_CD: '01'). 주문번호 0030947397")
+        self.assertNotIn("12345678", text)
+        self.assertNotIn("0030947397", text)
+        self.assertEqual(report.clean_message("계좌 오류 (원본: '1234567801"), "계좌 오류")
+        self.assertIn("****", report.clean_message("포트폴리오(1780022179464)"))
+
+    def test_hold_and_unavailable_reasons_are_cleaned(self):
+        env = Env(self)
+        env.config["PAPER"][f"user:{UID}:kis_paper_account_unavailable_at"] = "2026-11-17T09:00:00"
+        env.config["PAPER"][f"user:{UID}:kis_paper_account_unavailable_reason"] = "신청내역 없음 (원본: '50000000-01'"
+        env.file(f"paper/trade_verification/{PAPER_SCOPE}.json", {"records": [
+            {"symbol": "A", "status": "FAIL", "reason": "KIS 접수번호 0030947397 없음"}]})
+        text = json.dumps(env.build()["safety"]["PAPER"], ensure_ascii=False)
+        self.assertNotIn("50000000", text)
+        self.assertNotIn("0030947397", text)
+
+
 class Status(Exception):
     def __init__(self, code, data):
         super().__init__(code)
@@ -625,20 +906,27 @@ def _status(code=200, **data):
 
 
 class ApiTests(unittest.TestCase):
-    def load_api(self, env, admin_ids=(UID,), query=None):
+    def load_api(self, env, admin_ids=(UID,), query=None, user_lookup=None, session_uid=UID):
         sys.__dict__.pop("_stock8_daily_report_v1", None)
         self.addCleanup(sys.__dict__.pop, "_stock8_daily_report_v1", None)
         env.write()
         q = dict(query or {})
+
+        def get_user(id=None):
+            if user_lookup is not None:
+                return user_lookup(id)
+            return {"id": id, "role": "admin" if id in admin_ids else "user", "email": "someone@example.com"}
+
+        # No `trading` attribute: building the trading Struct here would fail the test.
         models = {
             "portal/trading/kst": NS(now=lambda: NOW),
             "portal/trading/daily_report": report.Model,
             "portal/trading/struct/kis_api": NS(**KIS),
             "portal/trading/domestic_market": NS(KRX_HOLIDAYS=domestic.KRX_HOLIDAYS),
             "portal/trading/secret_box": NS(decrypt=lambda value: value),
-            "struct": NS(trading=NS(_current_user_is_admin=lambda uid: uid in admin_ids)),
+            "struct": NS(user=NS(get=get_user)),
         }
-        wiz = NS(model=lambda name: models[name], session=NS(get=lambda key: UID if key == "id" else None),
+        wiz = NS(model=lambda name: models[name], session=NS(get=lambda key: session_uid if key == "id" else None),
                  server=NS(path=NS(root=env.root)), project=NS(fs=lambda: NS(abspath=lambda rel: os.path.join(env.root, "project", "main", rel))),
                  request=NS(query=lambda key, default=None: q.get(key, default)), response=NS(status=_status))
         api = {"wiz": wiz, "__name__": "report_api"}
@@ -687,6 +975,43 @@ class ApiTests(unittest.TestCase):
         res = self.call(self.load_api(env, query={"date": "2026-10-01"}))
         self.assertEqual(res.code, 400)
         self.assertIn("최근 14일", res.data["message"])
+
+    def test_not_logged_in_is_401(self):
+        env = Env(self)
+        self.assertEqual(self.call(self.load_api(env, session_uid=None)).code, 401)
+
+    def test_operator_email_counts_as_admin(self):
+        env = Env(self)
+        api = self.load_api(env, user_lookup=lambda id: {"id": id, "role": "user", "email": "GigukByun@gmail.com"})
+        self.assertIn("coin:LIVE", [l["key"] for l in self.call(api).data["lanes"]])
+
+    def test_admin_lookup_failure_is_503_and_not_cached(self):
+        env = Env(self)
+        state = {"fail": True}
+
+        def lookup(id):
+            if state["fail"]:
+                raise RuntimeError("user table locked")
+            return {"id": id, "role": "admin", "email": ""}
+
+        api = self.load_api(env, user_lookup=lookup)
+        res = self.call(api)
+        self.assertEqual(res.code, 503)
+        self.assertNotIn("user table locked", res.data["message"])
+        self.assertEqual(sys.__dict__["_stock8_daily_report_v1"]["cache"], {})
+        state["fail"] = False
+        self.assertIn("coin:LIVE", [l["key"] for l in self.call(api).data["lanes"]])
+
+    def test_build_failure_message_has_no_paths(self):
+        env = Env(self)
+        api = self.load_api(env)
+
+        def broken(*_args):
+            raise OSError(13, "denied", os.path.join(env.root, "secret", "trading.db"))
+        api["_build"] = broken
+        res = self.call(api)
+        self.assertEqual(res.code, 500)
+        self.assertNotIn(env.root, res.data["message"])
 
 
 class PageWiringTests(unittest.TestCase):

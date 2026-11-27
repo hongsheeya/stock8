@@ -32,12 +32,15 @@ def _uid():
 
 
 def _is_admin(uid):
-    # The page.coin controller rule (role admin or the operator account);
-    # struct._current_user_is_admin is the same check on the same user table.
-    try:
-        return bool(wiz.model("struct").trading._current_user_is_admin(uid))
-    except Exception:
-        return False
+    """The page.coin controller rule (role admin or the operator account),
+    read from the user row the same way that controller does. The project
+    struct's user lookup is a plain read; the trading Struct (whose
+    constructor migrates, seals and may start workers) is never built here.
+    A failed lookup raises: the caller answers 503 and caches nothing."""
+    user = wiz.model("struct").user.get(id=uid)
+    role = str((user or {}).get("role", "") or "").lower()
+    email = str((user or {}).get("email", "") or "").strip().lower()
+    return role == "admin" or email == "gigukbyun@gmail.com"
 
 
 def _truthy_env(name):
@@ -57,7 +60,8 @@ def _connection_cache(uid):
 
 
 def _live_workers():
-    """LIVE per-account worker states (this process only), without threads."""
+    """LIVE per-account worker states (this process only), without threads.
+    The report keeps only the rows of the user's own account policy."""
     if _TRADING_MODE != "LIVE":
         return None
     registry = getattr(_sys, "_stock8_live_policy_workers", None) or {}
@@ -67,7 +71,7 @@ def _live_workers():
             rows.append({"policy_key": policy_key, "job": job, "status": item.get("status", ""),
                          "message": item.get("message", ""), "error": item.get("error", ""),
                          "last_check": item.get("last_check", "")})
-    return rows
+    return {"rows": rows, "error": str(registry.get("error", "") or "")}
 
 
 def _build(uid, day, is_admin):
@@ -143,11 +147,16 @@ def report():
     except ValueError as exc:
         wiz.response.status(400, message=str(exc), dates=model.date_options(today))
     force = str(wiz.request.query("force", "") or "").lower() == "true"
-    is_admin = _is_admin(uid)
+    try:
+        is_admin = _is_admin(uid)
+    except Exception as exc:
+        # Unknown is not "not an admin": nothing is built or cached.
+        wiz.response.status(503, message=f"관리자 여부를 확인하지 못했습니다 ({type(exc).__name__}). 잠시 후 다시 시도하세요.")
     key = f"{uid}:{day.isoformat()}:{int(is_admin)}"
     try:
         payload, age = _report_once(key, lambda: _build(uid, day, is_admin), force=force)
     except Exception as exc:
-        wiz.response.status(500, message=f"일일 보고를 만들지 못했습니다: {type(exc).__name__}: {str(exc)[:160]}")
+        # The type only: exception text may carry server paths.
+        wiz.response.status(500, message=f"일일 보고를 만들지 못했습니다 ({type(exc).__name__}).")
     payload["cache_age_sec"] = age
     wiz.response.status(200, **payload)

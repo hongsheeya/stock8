@@ -11,19 +11,26 @@ Read-only by construction:
   own mode as well as the other one (same files the trading ORM uses). The
   ORM is not used: its get_config() may write a user-scoped copy of a legacy
   key for an admin, and trade_verifier.Ledger.load() renames a corrupt file.
-- Runtime JSON files are only opened for reading.
+- Runtime JSON files are read in one call and closed before parsing
+  (read_json_file). On Windows any open handle, even one shared for
+  delete, makes an engine's atomic save (os.replace) fail with WinError 5,
+  so the handle is held only for the read itself.
 - No KIS, Upbit or FireGate call, no config write, no order path.
 
 A read failure or a missing file is reported as "확인 불가", never as zero
 or as normal. Pure Python (no wiz) so it is unit-tested with temp files.
 """
+import contextlib
 import datetime
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import sqlite3
+import sys
+import threading
 
 try:
     from zoneinfo import ZoneInfo
@@ -49,8 +56,14 @@ ENTRY_BLOCK_MIN = 3
 ENTRY_BLOCK_PREFIX = "단타 신규 진입 차단"
 ACCOUNT_HALT_MARKER = "계좌 주문을 거부"
 RUNTIME_LOG_FILES = {"daytrade_ks": "runtime_logs_ks.json", "daytrade_us": "runtime_logs_us.json"}
-PAPER_WORKER_STALE_SEC = 15 * 60
+# A worker or runtime log silent this long inside its active window is
+# reported as 확인 불가 (the PAPER loop ticks every ~15 s, LIVE jobs every
+# 15-30 s, the engines log a cycle about every 5 min).
+WORKER_STALE_SEC = 15 * 60
 MAX_LIST = 200
+# One user's trade_log rows of one day (noise excluded). More than this and
+# the mode is 확인 불가 instead of a silently cut list.
+MAX_DAY_ROWS = 5000
 
 # Keys the engines read with struct.get_config(): stored as user:<uid>:<key>,
 # and an admin falls back to the legacy global key. A test checks this is a
@@ -90,9 +103,39 @@ IB_ORDER_EVENTS = {
 IB_FILL_LABELS = {"IB_BUY_FILLED": "매수 체결", "IB_SELL_FILLED": "매도 체결", "IB_PARTIAL_SELL_FILLED": "분할매도 체결"}
 COIN_FILL_EVENTS = {"COIN_BUY": "BUY", "COIN_SELL": "SELL", "COIN_EXTERNAL_SELL": "SELL",
                     "COIN_SHADOW_BUY": "BUY", "COIN_SHADOW_SELL": "SELL"}
+COIN_STATE_EVENTS = ("COIN_HALT", "COIN_RESUME", "COIN_ORDER_CANCELLED")
+USTH_EVENTS = ("USTH_FILL", "USTH_ORDER")
+# trade_log events the report reads: day-trade rows, named fill/order/block
+# events and *_ERROR rows. Run/skip noise (IB_LOC_AUTOMATION_RUN ...) is not
+# read row by row (it only feeds the aggregated liveness query).
+_NAMED_EVENTS = tuple(IB_FILL_EVENTS) + tuple(IB_ORDER_EVENTS) + tuple(IB_HARD_BLOCK_EVENTS) \
+    + tuple(COIN_FILL_EVENTS) + COIN_STATE_EVENTS + USTH_EVENTS
+_LOG_EVENT_SQL = ("(substr(event_type, 1, 3) = 'DT_' OR event_type IN (%s) "
+                  "OR (substr(event_type, -6) = '_ERROR' AND substr(event_type, 1, 3) IN ('IB_', 'COI', 'UST')))"
+                  % ",".join("?" for _ in _NAMED_EVENTS))
+# Long message/raw_response are cut in SQL; only the JSON fields used are read.
+_LOG_COLUMNS = ("id, symbol, event_type, action, order_no, order_price, order_qty, filled_price, filled_qty, created, "
+                "substr(message, 1, 600) AS message, "
+                "CASE WHEN json_valid(raw_response) THEN json_extract(raw_response, '$.repeat') END AS repeat, "
+                "CASE WHEN json_valid(raw_response) THEN json_extract(raw_response, '$.last_at') END AS last_at, "
+                "CASE WHEN json_valid(raw_response) THEN json_extract(raw_response, '$.runtime.realized') END AS rt_realized")
+# Job names: PAPER worker_status.json result key, LIVE policy-worker job.
+LANE_JOBS = {
+    "daytrade_ks": (("auto_cycle", "entry_ks", "진입"), ("exit_watch", "exit_ks", "청산 감시")),
+    "daytrade_us": (("us_auto_cycle", "entry_us", "진입"), ("us_exit_watch", "exit_us", "청산 감시")),
+    "infinite_buy": (("loc_automation", "loc", "LOC 예약"), ("external_cycle_sync", "sync", "체결 동기화"),
+                     ("firegate_sync", "", "FireGate 동기화")),
+}
+PAPER_RESULT_KEYS = frozenset({"auto_cycle", "exit_watch", "us_auto_cycle", "us_exit_watch", "loc_automation",
+                               "firegate_sync", "external_cycle_sync", "maintenance"})
 ACTIVE_CYCLE_STATUSES = ("ACTIVE", "HOLDING", "PENDING_EXTENSION")
 US_EXCHANGES = ("US", "NAS", "NASD", "NYS", "NYSE", "AMS", "AMEX")
 WEEKDAYS = "월화수목금토일"
+# Past days: struct._trim_trade_logs keeps only the first and last row of a
+# repeated error/noise line, and deletes *MISMATCH* rows after 14 days
+# (3 days when the log is large).
+TRIM_NOTE = ("지난 날짜는 로그 정리로 같은 오류의 처음·마지막 기록만 남아 횟수가 실제보다 적을 수 있고, "
+             "FireGate 연결 불일치(MISMATCH) 기록은 14일(기록이 많으면 3일)이 지나면 지워집니다")
 
 
 class Unavailable(Exception):
@@ -127,6 +170,15 @@ def _json(value):
     return data if isinstance(data, dict) else {}
 
 
+def _json_object(raw):
+    """(dict, ok) of a stored JSON object; ok is False when it is damaged."""
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}, False
+    return (data, True) if isinstance(data, dict) else ({}, False)
+
+
 def _parse_ts(value):
     text = str(value or "").strip().replace("T", " ")
     if not text:
@@ -154,6 +206,10 @@ def _hhmmss(value):
     return ts.strftime("%H:%M:%S") if ts else ""
 
 
+def _stamp(ts, now):
+    return ts.strftime("%H:%M") if ts.date() == now.date() else ts.strftime("%m-%d %H:%M")
+
+
 def _mmdd(day):
     return f"{day.month}/{day.day}"
 
@@ -164,16 +220,21 @@ def _day_label(day):
 
 _PARAM_GROUP = re.compile(r"\s*\((?=[^)]*(?:rt_cd|CANO|ACNT_PRDT_CD|tr_id|ord_dvsn|is_real|exchange=|qty=|price=))[^)]*\)")
 _PARAM_TAIL = re.compile(r"\s*\((?:rt_cd|CANO|ACNT_PRDT_CD|tr_id|exchange=)[^)]*$")
+# kis_api account errors quote the raw account: "(원본: '...', CANO: ...)".
+_RAW_ACCOUNT = re.compile(r"\s*\(원본:.*?(?:\)|$)")
 
 
 def clean_message(text):
     """The message users see and errors are grouped by: request parameters
-    (rt_cd, qty=, price=...) and countdowns removed, like the history page."""
+    (rt_cd, qty=, price=...), raw-account quotes and countdowns removed, and
+    long digit runs (account, order and portfolio numbers) masked."""
     text = str(text or "").strip()
+    text = _RAW_ACCOUNT.sub("", text)
     text = _PARAM_GROUP.sub("", text)
     text = _PARAM_TAIL.sub("", text)
     text = re.sub(r"\s*\|\s*symbol=.*$", "", text)
     text = re.sub(r"\(\d+초\)", "(…초)", text)
+    text = re.sub(r"\d{8,}", "****", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
     return text[:240]
 
@@ -216,14 +277,102 @@ def mode_db_path(server_root, mode):
     return os.path.realpath(os.path.join(str(server_root), rel))
 
 
-def read_json_file(path):
-    """(data, state): state is ok | missing | error. Never creates or moves a file."""
-    if not path or not os.path.exists(path):
-        return None, "missing"
+# --------------------------------------------------------------- file reading
+_WIN = {}
+
+
+def _win_api():
+    if "api" not in _WIN:
+        try:
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # private copy: argtypes stay local
+            create = kernel32.CreateFileW
+            create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                               wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            create.restype = wintypes.HANDLE
+            close = kernel32.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            close.restype = wintypes.BOOL
+            _WIN["api"] = (ctypes, msvcrt, create, close)
+        except Exception:
+            _WIN["api"] = None
+    return _WIN["api"]
+
+
+def open_shared(path):
+    """Windows: a read-only fd opened with FILE_SHARE_READ|WRITE|DELETE, so
+    the report never blocks another process from writing or deleting the
+    file. None when the Win32 call is unavailable (other OS)."""
+    if os.name != "nt":
+        return None
+    api = _win_api()
+    if api is None:
+        return None
+    ctypes, msvcrt, create, close = api
+    handle = create(str(path), 0x80000000, 0x1 | 0x2 | 0x4, None, 3, 0x80, None)  # GENERIC_READ, OPEN_EXISTING
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        code = ctypes.get_last_error()
+        if code in (2, 3):
+            raise FileNotFoundError(errno.ENOENT, "file not found")
+        raise OSError(errno.EACCES, f"CreateFileW failed ({code})")
     try:
-        with open(path, encoding="utf-8") as handle:
-            return json.load(handle), "ok"
-    except (OSError, ValueError):
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except Exception:
+        close(handle)
+        raise
+
+
+def _read_bytes(path):
+    """All bytes in one call; the handle is closed before anything is parsed."""
+    try:
+        fd = open_shared(path)
+    except FileNotFoundError:
+        raise
+    except OSError:
+        fd = None  # fall back to a plain read below
+    if fd is not None:
+        with os.fdopen(fd, "rb") as handle:
+            return handle.read()
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def _decode_json(raw):
+    return json.loads(raw.decode("utf-8-sig"))
+
+
+def _ledger_lock(path):
+    """The trade_verifier lock of this ledger when the verifier lives in this
+    process, so a save there never meets this read (other processes can only
+    be helped by the short read)."""
+    locks = sys.__dict__.get("_stock8_trade_verifier_locks")
+    guard = sys.__dict__.get("_stock8_trade_verifier_guard")
+    if not isinstance(locks, dict) or guard is None:
+        return None
+    with guard:
+        return locks.setdefault(os.path.abspath(path), threading.RLock())
+
+
+def read_json_file(path, lock=None):
+    """(data, state): state is ok | missing | error. Never creates, moves or
+    locks a file; a missing file is not 'empty'."""
+    if not path:
+        return None, "missing"
+    held = lock.acquire(timeout=2) if lock is not None else False
+    try:
+        raw = _read_bytes(path)
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "error"
+    finally:
+        if held:
+            lock.release()
+    try:
+        return _decode_json(raw), "ok"
+    except ValueError:
         return None, "error"
 
 
@@ -274,6 +423,10 @@ def _kst_to_et(now):
             pass
     guess = now - datetime.timedelta(hours=14)
     return now - datetime.timedelta(hours=13 if _us_dst(guess.date()) else 14)
+
+
+def _at(day, hour, minute=0):
+    return datetime.datetime(day.year, day.month, day.day, hour, minute)
 
 
 class Calendar:
@@ -350,6 +503,44 @@ class Calendar:
             us.append({**self.us_day(nxt), "next": True})
         return {"krx": krx, "us": us}
 
+    def _us_session(self, et_day):
+        """KST (start, end) of one ET day's premarket-to-close, or None."""
+        if self.us_closed_reason(et_day):
+            return None
+        return _et_to_kst(et_day, "04:00"), _et_to_kst(et_day, self.us_close(et_day))
+
+    def active_window(self, lane_name, now):
+        """KST (start, end) of the lane's window that contains `now`, or None:
+        KRX 09:00-15:30, US premarket to close, LOC reservations 10:00 to
+        23:20 (22:20 in US summer time) on a US trading day."""
+        day = now.date()
+        window = None
+        if lane_name == "daytrade_ks":
+            if not self.krx_closed_reason(day):
+                window = (_at(day, 9), _at(day, 15, 30))
+        elif lane_name in ("daytrade_us", "us_trend_hold"):
+            for et_day in (day - datetime.timedelta(days=1), day):
+                session = self._us_session(et_day)
+                if session and session[0] <= now < session[1]:
+                    window = session
+        elif lane_name == "infinite_buy":
+            if not self.us_closed_reason(day):
+                window = (_at(day, 10), _at(day, 22, 20) if _us_dst(day) else _at(day, 23, 20))
+        if window and window[0] <= now < window[1]:
+            return window
+        return None
+
+    def log_expected_since(self, lane_name, now):
+        """From when a day-trade runtime log should have entries today."""
+        day = now.date()
+        if lane_name == "daytrade_ks":
+            return None if self.krx_closed_reason(day) else _at(day, 9)
+        prev = self._us_session(day - datetime.timedelta(days=1))
+        if prev and prev[1] > _at(day, 0):
+            return _at(day, 0)
+        today = self._us_session(day)
+        return today[0] if today else None
+
     def ks_waiting_reason(self, day, now, is_today):
         closed = self.krx_closed_reason(day)
         if closed:
@@ -391,6 +582,13 @@ class Calendar:
 
 
 # ------------------------------------------------------------------ DB access
+def _db_error(exc):
+    """A message without server paths: sqlite's own text, else the type only."""
+    if isinstance(exc, sqlite3.Error):
+        return f"{type(exc).__name__}: {str(exc)[:80]}"
+    return type(exc).__name__
+
+
 class ModeDb:
     """One mode's trading.db, read-only, scoped to one user.
 
@@ -414,24 +612,24 @@ class ModeDb:
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA query_only = ON")
             self.conn.execute("SELECT 1 FROM trading_config LIMIT 1").fetchall()
-        except sqlite3.Error as exc:
+        except Exception as exc:
             self.close()
-            raise Unavailable(f"DB를 읽지 못했습니다 ({type(exc).__name__}: {str(exc)[:80]})")
+            raise Unavailable(f"DB를 읽지 못했습니다 ({_db_error(exc)})")
         return self
 
     def close(self):
         if self.conn is not None:
             try:
                 self.conn.close()
-            except sqlite3.Error:
+            except Exception:
                 pass
         self.conn = None
 
     def query(self, sql, params=()):
         try:
             return [dict(row) for row in self.conn.execute(sql, tuple(params)).fetchall()]
-        except sqlite3.Error as exc:
-            raise Unavailable(f"DB 조회 실패 ({type(exc).__name__}: {str(exc)[:80]})")
+        except Exception as exc:
+            raise Unavailable(f"DB 조회 실패 ({_db_error(exc)})")
 
     def _raw(self, key):
         rows = self.query("SELECT value FROM trading_config WHERE key = ? LIMIT 1", (key,))
@@ -468,7 +666,8 @@ class ModeDb:
     def scoped_users(self):
         return [self.uid, ""] if self.is_admin else [self.uid]
 
-    def scoped_rows(self, table, where, params=(), columns="*", order="created"):
+    def scoped_rows(self, table, where, params=(), columns="*", order="created", limit=None):
+        limit = MAX_DAY_ROWS if limit is None else limit
         users = self.scoped_users()
         marks = ",".join("?" for _ in users)
         sql = f'SELECT {columns} FROM "{table}" WHERE user_id IN ({marks})'
@@ -476,7 +675,10 @@ class ModeDb:
             sql += f" AND ({where})"
         if order:
             sql += f" ORDER BY {order}"
-        return self.query(sql + " LIMIT 5000", list(users) + list(params))
+        rows = self.query(sql + f" LIMIT {int(limit) + 1}", list(users) + list(params))
+        if len(rows) > limit:
+            raise Unavailable(f"하루 기록이 {limit}건을 넘어 모두 읽지 못했습니다 (기록 과다)")
+        return rows
 
 
 # --------------------------------------------------------------- mode facts
@@ -511,9 +713,10 @@ def _us_exit_switch(db):
 def collect_mode(mode, db_path, data_dir, uid, is_admin, day, decrypt=None, hard_locked=False):
     """Everything the report needs from one mode, read once."""
     facts = {"mode": mode, "ok": False, "error": "", "account": {}, "switches": {}, "policy": None,
-             "policy_error": "", "logs": [], "cycles": [], "runtime": {}, "state": None, "state_status": "",
-             "verification": None, "old_ledgers": [], "worker": None, "coin": None, "usth": None,
-             "paper_unavailable": None, "connection": {}, "ib_block_days": [], "hard_locked": bool(hard_locked)}
+             "policy_error": "", "foreign": False, "logs": [], "cycles": [], "runtime": {}, "state": None,
+             "state_status": "", "verification": None, "old_ledgers": [], "worker": None, "coin": None,
+             "usth": None, "paper_unavailable": None, "connection": {}, "ib_block_days": [], "ib_last_seen": None,
+             "hard_locked": bool(hard_locked), "dt_root": ""}
     db = ModeDb(db_path, uid, is_admin, decrypt)
     try:
         db.open()
@@ -566,21 +769,28 @@ def _collect_db(facts, db, mode, data_dir, uid, is_admin, day):
     if account["policy_key"]:
         raw = db._raw(account["policy_key"])
         if raw is not None:
-            try:
-                policy = json.loads(raw)
-                if not isinstance(policy, dict) or not isinstance(policy.get("symbols"), dict):
-                    raise ValueError("bad policy")
-                facts["policy"] = {lane: policy.get(lane) is True for lane in ("infinite_buy", "daytrade_ks", "daytrade_us")}
-            except (TypeError, ValueError):
+            policy, ok = _json_object(raw)
+            owner = str(policy.get("owner_user_id", "") or "") if ok else ""
+            if ok and owner and owner != uid:
+                # The broker account's policy belongs to another user: its
+                # lanes, files, worker state and ledger are not this user's.
+                facts["foreign"] = True
+            elif not ok or not isinstance(policy.get("symbols"), dict):
                 facts["policy_error"] = "주문 권한 데이터 오류: 엔진이 이 계좌의 주문을 차단합니다."
+            else:
+                facts["policy"] = {lane: policy.get(lane) is True for lane in ("infinite_buy", "daytrade_ks", "daytrade_us")}
         else:
             facts["policy"] = {"infinite_buy": False, "daytrade_ks": False, "daytrade_us": False, "missing": True}
 
     start, end = _day_bounds(day)
-    facts["logs"] = db.scoped_rows(
-        "trade_log", "created >= ? AND created < ?", (start, end),
-        columns="id, symbol, event_type, action, order_no, order_price, order_qty, filled_price, filled_qty, "
-                "message, raw_response, created")
+    facts["logs"] = db.scoped_rows("trade_log", f"created >= ? AND created < ? AND {_LOG_EVENT_SQL}",
+                                   [start, end] + list(_NAMED_EVENTS), columns=_LOG_COLUMNS)
+    seen = db.scoped_rows(
+        "trade_log", "created >= ? AND created < ? AND substr(event_type, 1, 3) = 'IB_'", (start, end),
+        columns="max(created) AS created, max(CASE WHEN json_valid(raw_response) "
+                "THEN json_extract(raw_response, '$.last_at') END) AS last_at", order="")
+    stamps = [ts for ts in (_parse_ts((seen[0] if seen else {}).get(k)) for k in ("created", "last_at")) if ts]
+    facts["ib_last_seen"] = max(stamps) if stamps else None
     facts["cycles"] = db.scoped_rows(
         "trading_cycle", "status IN ('ACTIVE', 'HOLDING', 'PENDING_EXTENSION')", (),
         columns="symbol, status, cycle_number, current_round, division_count, total_qty, avg_price, updated",
@@ -605,41 +815,41 @@ def _collect_db(facts, db, mode, data_dir, uid, is_admin, day):
     if not live:
         since_text = str(db.cfg("kis_paper_account_unavailable_at", "") or "").strip()
         facts["paper_unavailable"] = ({"since": since_text,
-                                       "reason": str(db.cfg("kis_paper_account_unavailable_reason", "") or "")[:200]}
+                                       "reason": clean_message(db.cfg("kis_paper_account_unavailable_reason", ""))[:200]}
                                       if since_text else {})
 
     data_root = os.path.join(str(data_dir), mode.lower())
-    # Day-trade files: LIVE per account, PAPER one shared folder that only
-    # admins may read (daytrade_engine._daytrade_state_visible).
-    dt_root = ""
-    if is_admin and not facts["hard_locked"]:
-        if live and account["scope"]:
-            dt_root = os.path.join(data_root, "daytrade", account["scope"])
-        elif not live:
-            dt_root = os.path.join(data_root, "daytrade")
-    facts["dt_root"] = dt_root
-    if dt_root:
-        for lane, name in RUNTIME_LOG_FILES.items():
-            data, status = read_json_file(os.path.join(dt_root, name))
-            if status == "ok" and not isinstance(data, list):
-                data, status = None, "error"
-            facts["runtime"][lane] = {"entries": data or [], "status": status}
-        state, status = read_json_file(os.path.join(dt_root, "live_state.json"))
-        if status == "ok" and not isinstance(state, dict):
-            state, status = None, "error"
-        facts["state"], facts["state_status"] = state, status
+    if not facts["foreign"]:
+        # Day-trade files: LIVE per account, PAPER one shared folder that only
+        # admins may read (daytrade_engine._daytrade_state_visible).
+        dt_root = ""
+        if is_admin and not facts["hard_locked"]:
+            if live and account["scope"]:
+                dt_root = os.path.join(data_root, "daytrade", account["scope"])
+            elif not live:
+                dt_root = os.path.join(data_root, "daytrade")
+        facts["dt_root"] = dt_root
+        if dt_root:
+            for lane, name in RUNTIME_LOG_FILES.items():
+                data, status = read_json_file(os.path.join(dt_root, name))
+                if status == "ok" and not isinstance(data, list):
+                    data, status = None, "error"
+                facts["runtime"][lane] = {"entries": data or [], "status": status}
+            state, status = read_json_file(os.path.join(dt_root, "live_state.json"))
+            if status == "ok" and not isinstance(state, dict):
+                state, status = None, "error"
+            facts["state"], facts["state_status"] = state, status
 
-    if account["verification_scope"]:
-        facts["verification"] = _read_verification(
-            os.path.join(data_root, "trade_verification", account["verification_scope"] + ".json"))
+        if account["verification_scope"]:
+            facts["verification"] = _read_verification(
+                os.path.join(data_root, "trade_verification", account["verification_scope"] + ".json"))
     # Ledgers of this user's earlier accounts (order policies they own).
     for row in db.query("SELECT key, value FROM trading_config WHERE key LIKE 'order_policy_v1:%'"):
-        try:
-            owner = str((json.loads(row["value"]) or {}).get("owner_user_id", "") or "")
-        except (TypeError, ValueError, AttributeError):
-            continue
+        policy, ok = _json_object(row["value"])
         scope = str(row["key"]).split(":", 1)[1][:24]
-        if owner != uid or not scope or scope == account["verification_scope"]:
+        if not ok or str(policy.get("owner_user_id", "") or "") != uid:
+            continue
+        if not re.fullmatch(r"[0-9a-f]{24}", scope) or scope == account["verification_scope"]:
             continue
         ledger = _read_verification(os.path.join(data_root, "trade_verification", scope + ".json"))
         if ledger.get("status") == "ok":
@@ -649,23 +859,24 @@ def _collect_db(facts, db, mode, data_dir, uid, is_admin, day):
         owner = str(db.cfg("paper_worker_owner_user_id", "") or "")
         if owner and owner == uid:
             data, status = read_json_file(os.path.join(data_root, "daytrade", "worker_status.json"))
-            facts["worker"] = {"status": status, "data": data if isinstance(data, dict) else {}}
+            facts["worker"] = {"status": status if isinstance(data, dict) or status != "ok" else "error",
+                               "data": data if isinstance(data, dict) else {}}
 
     if live:
         raw = db._raw("coin_policy_v1")
-        policy = _json(raw) if raw is not None else None
-        coin = {"exists": raw is not None, "policy": policy or {}, "ledger": None, "ledger_status": ""}
-        mode_name = str((policy or {}).get("mode", "off") or "off").lower()
-        owner = str((policy or {}).get("owner_user_id", "") or "")
-        if policy and mode_name in ("shadow", "live") and owner == uid:
+        policy, ok = _json_object(raw) if raw is not None else ({}, True)
+        coin = {"exists": raw is not None, "corrupt": not ok, "policy": policy, "ledger": None, "ledger_status": ""}
+        mode_name = str(policy.get("mode", "off") or "off").lower()
+        owner = str(policy.get("owner_user_id", "") or "")
+        if ok and mode_name in ("shadow", "live") and owner == uid:
             ledger, status = read_json_file(os.path.join(data_root, "coin", coin_owner_scope(owner), f"state_{mode_name}.json"))
             coin["ledger"], coin["ledger_status"] = (ledger if isinstance(ledger, dict) else None), status
         facts["coin"] = coin
     else:
         raw = db._raw("us_trend_hold_policy_v1")
-        policy = _json(raw) if raw is not None else {}
+        policy, ok = _json_object(raw) if raw is not None else ({}, True)
         usth = {"enabled": policy.get("enabled") is True, "owner": str(policy.get("owner_user_id", "") or ""),
-                "ledger": None, "ledger_status": ""}
+                "corrupt": not ok, "ledger": None, "ledger_status": ""}
         if usth["enabled"] and usth["owner"] == uid:
             ledger, status = read_json_file(os.path.join(data_root, "us_trend_hold", "state.json"))
             usth["ledger"], usth["ledger_status"] = (ledger if isinstance(ledger, dict) else None), status
@@ -676,7 +887,7 @@ def _read_verification(path):
     """Per-account trade_verifier ledger, read directly (Ledger.load would
     rename a corrupt file). Holds as on the dashboard: one per symbol with
     an unacknowledged FAIL/UNCONFIRMED record."""
-    data, status = read_json_file(path)
+    data, status = read_json_file(path, lock=_ledger_lock(path))
     result = {"status": status, "file": os.path.basename(path)}
     if status != "ok" or not isinstance(data, dict) or not isinstance(data.get("records"), list):
         if status == "ok":
@@ -692,7 +903,7 @@ def _read_verification(path):
         if record.get("status") in ("FAIL", "UNCONFIRMED") and not record.get("acknowledged"):
             holds.setdefault(record.get("symbol"), {
                 "symbol": record.get("symbol"), "market": record.get("market"), "at": record.get("at"),
-                "reason": str(record.get("reason", "") or "")[:160], "status": record.get("status"), "records": 0})
+                "reason": clean_message(record.get("reason"))[:160], "status": record.get("status"), "records": 0})
             holds[record.get("symbol")]["records"] += 1
     result.update(holds=sorted(holds.values(), key=lambda h: str(h.get("at") or ""), reverse=True),
                   hold_records=sum(h["records"] for h in holds.values()),
@@ -702,26 +913,41 @@ def _read_verification(path):
 
 # ------------------------------------------------------------ log analysis
 def _repeat(row):
-    raw = _json(row.get("raw_response"))
-    count = max(1, _int(raw.get("repeat"), 1)) if "repeat" in raw else 1
-    return count, str(raw.get("last_at", "") or "")
+    """(count, last_at) of a row; IB repeats are compressed into one row."""
+    if "repeat" in row or "last_at" in row:
+        count, last_at = row.get("repeat"), row.get("last_at")
+    else:
+        raw = _json(row.get("raw_response"))
+        count, last_at = raw.get("repeat"), raw.get("last_at")
+    return (max(1, _int(count, 1)) if count is not None else 1), str(last_at or "")
 
 
-def group_errors(rows, source="거래 기록"):
-    """*_ERROR rows grouped by message: count (repeats included), first, last."""
+def group_errors(rows, source="거래 기록", past=False):
+    """*_ERROR rows grouped by message: count (repeats included), first, last.
+
+    past: a finished day may have been trimmed to the first and last row of
+    each repeated line (same event, symbol and message before " | "); its
+    counts are minimums, and a line left with exactly two rows is treated as
+    repeated."""
     groups = {}
     for row in rows:
         message = clean_message(row.get("message")) or str(row.get("event_type", ""))
         count, last_at = _repeat(row)
         created = str(row.get("created", "") or "")
         group = groups.setdefault(message, {"message": message, "count": 0, "first": created, "last": created,
-                                            "events": set(), "symbols": set(), "source": source, "level": "error"})
+                                            "events": set(), "symbols": set(), "source": source, "level": "error",
+                                            "count_is_min": bool(past), "maybe_trimmed": False, "_lines": {}})
         group["count"] += count
         group["first"] = min(group["first"], created)
         group["last"] = max(group["last"], created, last_at or created)
         group["events"].add(str(row.get("event_type", "")))
         if row.get("symbol"):
             group["symbols"].add(str(row.get("symbol")))
+        line = (str(row.get("event_type", "")), str(row.get("symbol") or ""), str(row.get("message") or "").split(" | ")[0])
+        group["_lines"][line] = group["_lines"].get(line, 0) + 1
+    for group in groups.values():
+        lines = group.pop("_lines")
+        group["maybe_trimmed"] = bool(past) and any(n == 2 for n in lines.values())
     return _finish_groups(groups)
 
 
@@ -731,6 +957,8 @@ def _finish_groups(groups):
         group["events"] = sorted(group["events"])
         group["symbols"] = sorted(group["symbols"])
         group["first_hhmm"], group["last_hhmm"] = _hhmm(group["first"]), _hhmm(group["last"])
+        group.setdefault("count_is_min", False)
+        group.setdefault("maybe_trimmed", False)
         result.append(group)
     result.sort(key=lambda g: (-g["count"], g["first"]))
     return result
@@ -738,7 +966,8 @@ def _finish_groups(groups):
 
 def group_text(group):
     span = group["first_hhmm"] if group["first_hhmm"] == group["last_hhmm"] else f"{group['first_hhmm']}~{group['last_hhmm']}"
-    return f"{group['message']} ×{group['count']} ({span})"
+    count = f"최소 {group['count']}회" if group.get("count_is_min") else f"×{group['count']}"
+    return f"{group['message']} {count} ({span})"
 
 
 def runtime_window(entries, day):
@@ -759,6 +988,11 @@ def runtime_window(entries, day):
     if first > start:
         return "partial", first.strftime("%H:%M")
     return "full", ""
+
+
+def runtime_last(entries):
+    stamps = [ts for ts in (_parse_ts((e or {}).get("timestamp")) for e in entries or [] if isinstance(e, dict)) if ts]
+    return max(stamps) if stamps else None
 
 
 def runtime_problems(entries, day):
@@ -783,6 +1017,105 @@ def runtime_problems(entries, day):
     return _finish_groups(groups)
 
 
+# ------------------------------------------------------------- worker state
+def worker_view(facts, lane_name, process=None):
+    """The lane's worker state: display rows, errors (-> 막힘), unknown
+    states (-> 확인 불가 inside the window) and the latest heartbeat.
+
+    Sources: PAPER data/paper/daytrade/worker_status.json (only for its
+    owner), and on the LIVE server its own per-account job registry
+    (process["rows"]). Without either, known is False and the caller falls
+    back to log activity."""
+    view = {"rows": [], "known": False, "errors": [], "unknown": [], "heartbeat": None, "source": ""}
+    jobs = LANE_JOBS.get(lane_name, ())
+    worker = facts.get("worker")
+    if facts["mode"] == "PAPER" and worker is not None:
+        if worker["status"] != "ok":
+            view["rows"].append({"job": "PAPER 워커", "status": "확인 불가", "at": "",
+                                 "message": "worker_status.json 없음" if worker["status"] == "missing" else "worker_status.json 읽기 실패"})
+        else:
+            data = worker["data"]
+            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+            at = str(data.get("last_run_at", "") or "")
+            view.update(known=True, source="PAPER 워커", heartbeat=_parse_ts(at))
+            if result.get("message") and not (PAPER_RESULT_KEYS & set(result)):
+                # The loop itself raised (struct._background_worker_loop).
+                message = clean_message(result.get("message"))[:200]
+                view["rows"].append({"job": "PAPER 워커", "status": "error", "message": message, "at": at})
+                view["errors"].append(f"PAPER 워커 오류: {message}")
+            for result_key, _job, label in jobs:
+                item = result.get(result_key)
+                if not isinstance(item, dict) or not item:
+                    continue
+                status = str(item.get("status", "") or "")
+                message = clean_message(item.get("message"))[:200]
+                view["rows"].append({"job": label, "status": status, "message": message, "at": at})
+                if status == "error":
+                    view["errors"].append(f"PAPER 워커 {label} 오류: {message or '상세 없음'}")
+    if facts["mode"] == "LIVE" and process is not None and not facts.get("foreign"):
+        key = (facts.get("account") or {}).get("policy_key")
+        mine = [item for item in process.get("rows") or [] if key and item.get("policy_key") == key]
+        view.update(known=True, source="LIVE 워커")
+        found = False
+        for _result_key, job, label in jobs:
+            for item in mine:
+                if not job or item.get("job") != job:
+                    continue
+                found = True
+                status = str(item.get("status", "") or "")
+                error = clean_message(item.get("error"))[:200]
+                at = str(item.get("last_check", "") or "")[:19]
+                view["rows"].append({"job": label, "status": status, "message": error or clean_message(item.get("message"))[:200], "at": at})
+                stamp = _parse_ts(at)
+                if stamp and (view["heartbeat"] is None or stamp > view["heartbeat"]):
+                    view["heartbeat"] = stamp
+                if status == "error":
+                    view["errors"].append(f"LIVE 워커 {label} 오류: {error or '상세 없음'}")
+                elif status == "account_changed":
+                    view["unknown"].append(f"계좌가 바뀌어 LIVE 워커({label})가 멈췄습니다")
+        if not found:
+            view["unknown"].append("LIVE 워커가 이 레인을 실행하고 있지 않습니다")
+        if process.get("error"):
+            view["unknown"].append("LIVE 워커 배정 오류: " + clean_message(process["error"])[:160])
+    return view
+
+
+def silence(seen, window, now):
+    """Minutes a source has been silent inside the active window (measured
+    from the later of its last record and the window start), when that is
+    more than WORKER_STALE_SEC; None when fine or outside the window."""
+    if not window:
+        return None
+    start, end = window
+    if not (start <= now < end):
+        return None
+    since = max(seen, start) if seen else start
+    seconds = (now - since).total_seconds()
+    return int(seconds // 60) if seconds > WORKER_STALE_SEC else None
+
+
+def _quiet(kind, seen, minutes, now, source=""):
+    """Reason text for a silent source (see silence)."""
+    if minutes is None:
+        return ""
+    last = _stamp(seen, now) if seen else ""
+    if kind == "worker":
+        return (f"{source} 응답 없음 — 마지막 기록 {last}, 장중 {minutes}분째 기록 없음" if seen
+                else f"{source} 기록이 없습니다 (장중 {minutes}분째)")
+    if kind == "runtime":
+        return (f"런타임 로그가 {last} 이후 끊겼습니다 (장중 {minutes}분째 기록 없음) — 워커가 멈췄을 수 있습니다" if seen
+                else f"런타임 로그 기록이 없습니다 (장중 {minutes}분째)")
+    return (f"워커 상태 확인 불가: LOC 자동 예약 실행 기록이 {last} 이후 없습니다 ({minutes}분째)" if seen
+            else f"워커 상태 확인 불가: 오늘 LOC 자동 예약 실행 기록이 없습니다 ({minutes}분째)")
+
+
+def _stale_note(view, now):
+    beat = view.get("heartbeat")
+    if view.get("known") and beat and (now - beat).total_seconds() > WORKER_STALE_SEC:
+        return f"{view['source']} 마지막 기록 {_stamp(beat, now)} ({int((now - beat).total_seconds() // 60)}분 전)"
+    return ""
+
+
 # ------------------------------------------------------------ lane builders
 def _new_lane(lane, mode, currency="KRW"):
     return {"key": f"{lane}:{mode}", "lane": lane, "lane_label": LANE_LABELS[lane], "mode": mode,
@@ -795,6 +1128,9 @@ def _new_lane(lane, mode, currency="KRW"):
 def _set(lane, status, reason):
     lane["status"], lane["status_label"], lane["reason"] = status, STATUS_LABELS[status], reason
     return lane
+
+
+FOREIGN_REASON = "이 계좌의 주문 정책은 다른 사용자 소유입니다 — 이 계정으로는 확인할 수 없습니다"
 
 
 def _paper_unavailable_block(facts, day):
@@ -842,8 +1178,11 @@ def _dt_fills(facts, prefix):
         if side == "SELL":
             item["realized"] = _money_after(row.get("message"), "순손익")
             if item["realized"] is None:
-                runtime = _json(row.get("raw_response")).get("runtime") or {}
-                item["realized"] = _float(runtime.get("realized")) if isinstance(runtime, dict) else None
+                if "rt_realized" in row:
+                    item["realized"] = _float(row.get("rt_realized"))
+                else:
+                    runtime = _json(row.get("raw_response")).get("runtime") or {}
+                    item["realized"] = _float(runtime.get("realized")) if isinstance(runtime, dict) else None
         fills.append(item)
     return fills, orders, errors
 
@@ -859,7 +1198,7 @@ def _count_fills(lane, fills):
 
 
 def _repeated_error_blocks(groups):
-    return [g for g in groups if g["count"] >= REPEATED_ERROR_MIN]
+    return [g for g in groups if g["count"] >= REPEATED_ERROR_MIN or g.get("maybe_trimmed")]
 
 
 def _dt_positions(facts, market):
@@ -908,37 +1247,6 @@ def _off_reason(facts, lane_name):
     return ""
 
 
-def _worker_rows(facts, lane_name, process_workers):
-    rows = []
-    jobs = {"daytrade_ks": (("auto_cycle", "entry_ks", "진입"), ("exit_watch", "exit_ks", "청산 감시")),
-            "daytrade_us": (("us_auto_cycle", "entry_us", "진입"), ("us_exit_watch", "exit_us", "청산 감시")),
-            "infinite_buy": (("loc_automation", "loc", "LOC 예약"), ("external_cycle_sync", "sync", "체결 동기화"))}
-    worker = facts.get("worker")
-    if worker is not None:
-        if worker["status"] != "ok":
-            rows.append({"job": "PAPER 워커", "status": "확인 불가",
-                         "message": "worker_status.json 없음" if worker["status"] == "missing" else "worker_status.json 읽기 실패",
-                         "at": ""})
-        else:
-            data = worker["data"]
-            result = data.get("result") or {}
-            for result_key, _job, label in jobs.get(lane_name, ()):
-                item = result.get(result_key) or {}
-                if isinstance(item, dict) and item:
-                    rows.append({"job": label, "status": str(item.get("status", "") or ""),
-                                 "message": clean_message(item.get("message"))[:200], "at": str(data.get("last_run_at", "") or "")})
-    policy_key_value = (facts.get("account") or {}).get("policy_key")
-    for item in process_workers or []:
-        if item.get("policy_key") != policy_key_value or not policy_key_value:
-            continue
-        for _result_key, job, label in jobs.get(lane_name, ()):
-            if item.get("job") == job:
-                rows.append({"job": label, "status": str(item.get("status", "") or ""),
-                             "message": clean_message(item.get("error") or item.get("message"))[:200],
-                             "at": str(item.get("last_check", "") or "")[:19]})
-    return rows
-
-
 def _us_holiday_notes(groups, calendar):
     """US orders that failed while the US market was closed for a holiday."""
     notes = []
@@ -955,31 +1263,26 @@ def _us_holiday_notes(groups, calendar):
     return notes
 
 
-def _worker_stale_note(facts, now, is_today):
-    worker = facts.get("worker")
-    if not is_today or not worker or worker["status"] != "ok":
-        return ""
-    last = _parse_ts(worker["data"].get("last_run_at"))
-    if last and (now - last).total_seconds() > PAPER_WORKER_STALE_SEC:
-        return f"PAPER 워커 마지막 실행 {last:%H:%M} ({int((now - last).total_seconds() // 60)}분 전) — 멈췄을 수 있습니다"
-    return ""
-
-
-def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, process_workers=None):
+def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, process=None):
     """Status of one day-trade lane. Rules (first match wins):
 
-    1. 확인 불가  the mode's DB could not be read.
+    1. 확인 불가  the mode's DB could not be read, the account does not
+                 decrypt, or the account's order policy belongs to another
+                 user.
     2. 꺼짐      not an admin (day trading is admin only), daytrade hard lock,
                  feature flag OFF (LIVE), LIVE order policy lane false or
                  missing, or the auto switch OFF.
     3. 막힘      PAPER mock account unavailable flag; runtime "계좌 주문을
-                 거부" (account halt); the same *_ERROR message >= 3 times;
-                 runtime "단타 신규 진입 차단" >= 3 times, or at least once
-                 on a day without buys.
-    4. 확인 불가  today, the runtime log is missing/unreadable/has nothing
-                 today, or the account (and so the file location) is unknown.
-                 A past date whose log was rotated out is 확인 불가 only
-                 without fills on a trading day (block vs. no signal unknown).
+                 거부" (account halt); the same *_ERROR message >= 3 times
+                 (on a past day also a line trimmed to its first and last
+                 row); runtime "단타 신규 진입 차단" >= 3 times, or at least
+                 once on a day without buys; today, a worker job in error.
+    4. 확인 불가  today: the runtime log is missing/unreadable, or has nothing
+                 today although the market opened 15+ min ago; inside the
+                 session the worker heartbeat or the runtime log has been
+                 silent for 15+ min, or a LIVE job is missing/account_changed.
+                 Fills do not override this. A past date whose log was
+                 rotated out is 확인 불가 only without fills on a trading day.
     5. 동작      at least one fill that day.
     6. 대기      market closed / holiday / before open, or no signal.
     """
@@ -987,28 +1290,37 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
     mode = facts["mode"]
     lane = _new_lane(lane_name, mode, "USD" if market == "US" else "KRW")
     if not facts["ok"]:
-        return _set(lane, UNKNOWN, f"{mode} DB를 읽지 못했습니다: {facts['error']}")
+        return _set(lane, UNKNOWN, f"{mode} 데이터를 확인할 수 없습니다: {facts['error']}")
     sw = facts["switches"]
     if not is_admin:
         return _set(lane, OFF, "단타는 관리자 전용 기능입니다")
     if facts.get("hard_locked"):
         return _set(lane, OFF, "단타 기능이 봉인되어 있습니다 (STOCK8_DAYTRADE_HARD_LOCK)")
+    if facts.get("foreign"):
+        return _set(lane, UNKNOWN, FOREIGN_REASON)
 
     prefix = "DT_US_" if market == "US" else "DT_KS_"
     fills, orders, error_rows = _dt_fills(facts, prefix)
     _count_fills(lane, fills)
     lane["orders"] = orders[:MAX_LIST]
-    error_groups = group_errors(error_rows)
+    error_groups = group_errors(error_rows, past=not is_today)
     runtime = facts["runtime"].get(lane_name) or {"entries": [], "status": "missing"}
     rt_groups = runtime_problems(runtime["entries"], day) if runtime["status"] == "ok" else []
+    window, window_at = runtime_window(runtime["entries"], day) if runtime["status"] == "ok" else (runtime["status"], "")
+    lane["sources"]["runtime_log"] = window
+    if window == "partial":
+        # The engine keeps the last 300 entries: earlier ones of the day are gone.
+        for group in rt_groups:
+            group["count_is_min"] = True
+        lane["notes"].append(f"런타임 로그는 {window_at} 이후만 남아 있습니다 (최근 300건 보관)")
     lane["problems"] = (error_groups + rt_groups)[:MAX_LIST]
     lane["positions"], lane["pending"] = _dt_positions(facts, market)
-    lane["worker"] = _worker_rows(facts, lane_name, process_workers)
-    stale = _worker_stale_note(facts, now, is_today)
-    if stale:
-        lane["notes"].append(stale)
+    view = worker_view(facts, lane_name, process)
+    lane["worker"] = view["rows"]
     if lane["realized_missing"]:
         lane["notes"].append(f"매도 {lane['realized_missing']}건의 손익을 기록에서 찾지 못했습니다")
+    if not is_today and error_groups:
+        lane["notes"].append(TRIM_NOTE)
 
     switch_on = sw["daytrade_us"] if market == "US" else sw["daytrade_ks"]
     exit_on = sw["daytrade_us_exit"] if market == "US" else sw["daytrade_ks_exit"]
@@ -1045,26 +1357,48 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
         blocks.append(group_text(entry_blocks[0]))
     elif entry_blocks:
         lane["notes"].append(f"신규 진입 차단 {entry_total}회 (일시적)")
+    if is_today:
+        blocks.extend(view["errors"])
     if blocks:
         if fills:
             lane["notes"].append(f"차단 사유가 있는 날에도 체결 {len(fills)}건이 있었습니다")
         lane["notes"].extend(f"추가 차단 사유: {b}" for b in blocks[1:3])
         return _set(lane, BLOCKED, blocks[0])
 
-    window, window_at = runtime_window(runtime["entries"], day) if runtime["status"] == "ok" else (runtime["status"], "")
-    lane["sources"]["runtime_log"] = window
     if not facts.get("dt_root"):
         return _set(lane, UNKNOWN, "런타임 파일 위치(계좌 해시)를 확인하지 못했습니다")
-    if window == "partial":
-        lane["notes"].append(f"런타임 로그는 {window_at} 이후만 남아 있습니다 (최근 300건 보관)")
-    closed = calendar.us_closed_all_day(day) if market == "US" else calendar.krx_closed_reason(day)
-    if is_today and window in ("missing", "error", "idle", "empty"):
-        what = {"missing": "런타임 로그 파일이 없습니다", "error": "런타임 로그를 읽지 못했습니다",
-                "idle": f"오늘 런타임 로그 기록이 없습니다 (마지막 {window_at})", "empty": "런타임 로그가 비어 있습니다"}[window]
-        if fills:
-            lane["notes"].append(f"체결 {len(fills)}건은 거래 기록으로 확인했습니다")
-        return _set(lane, UNKNOWN, what + " — 차단 여부를 확인할 수 없습니다")
-    if not is_today and window in ("rotated", "missing", "error", "idle", "empty"):
+    closed =calendar.us_closed_all_day(day) if market == "US" else calendar.krx_closed_reason(day)
+    fill_note = f"체결 {len(fills)}건은 거래 기록으로 확인했습니다" if fills else ""
+    if is_today:
+        expected = calendar.log_expected_since(lane_name, now)
+        opened = expected is not None and (now - expected).total_seconds() > WORKER_STALE_SEC
+        what = ""
+        if window in ("missing", "error"):
+            what = "런타임 로그 파일이 없습니다" if window == "missing" else "런타임 로그를 읽지 못했습니다"
+        elif window in ("idle", "empty") and opened:
+            what = (f"오늘 런타임 로그 기록이 없습니다 (마지막 {window_at})" if window == "idle"
+                    else "런타임 로그가 비어 있습니다")
+        if what:
+            if fill_note:
+                lane["notes"].append(fill_note)
+            return _set(lane, UNKNOWN, what + " — 차단 여부를 확인할 수 없습니다")
+        active = calendar.active_window(lane_name, now)
+        reasons = list(view["unknown"]) if active else []
+        if view["known"]:
+            beat = view["heartbeat"]
+            reasons.append(_quiet("worker", beat, silence(beat, active, now), now, view["source"]))
+        last = runtime_last(runtime["entries"])
+        reasons.append(_quiet("runtime", last, silence(last, active, now), now))
+        reasons = [r for r in reasons if r]
+        if reasons:
+            if fill_note:
+                lane["notes"].append(fill_note)
+            lane["notes"].extend(reasons[1:3])
+            return _set(lane, UNKNOWN, reasons[0])
+        stale = _stale_note(view, now)
+        if stale:
+            lane["notes"].append(stale)
+    elif window in ("rotated", "missing", "error", "idle", "empty"):
         lane["notes"].append("이 날짜의 런타임 로그는 보관 범위 밖이라 거래 기록(trade_log)만으로 판단했습니다")
         if not fills and not closed:
             return _set(lane, UNKNOWN, "체결 없음 · 런타임 로그가 남아 있지 않아 차단 여부를 알 수 없습니다")
@@ -1085,37 +1419,51 @@ def _ib_fill(row):
             "status": "체결", "message": clean_message(message)[:160]}
 
 
-def build_infinite_buy_lane(facts, day, now, is_today, calendar, process_workers=None):
+def _ib_order(row):
+    event = str(row.get("event_type", "") or "").upper()
+    side = "BUY" if "_BUY_" in event else ("SELL" if "_SELL_" in event or str(row.get("action", "")).upper() == "SELL" else "")
+    return {"time": _hhmmss(row.get("created")), "symbol": row.get("symbol", ""), "side": side,
+            "label": IB_ORDER_EVENTS[event], "qty": _int(row.get("order_qty")) or None,
+            "price": _float(row.get("order_price")) or None, "status": "예약·주문",
+            "message": clean_message(row.get("message"))[:160]}
+
+
+def build_infinite_buy_lane(facts, day, now, is_today, calendar, process=None):
     """Infinite buy. Rules (first match wins):
 
-    1. 확인 불가  DB unreadable.
+    1. 확인 불가  DB unreadable, account does not decrypt, or the account's
+                 order policy belongs to another user.
     2. 꺼짐      LIVE order policy infinite_buy false/missing, auto_trade_enabled
                  OFF, or loc_auto_schedule_enabled OFF (LIVE and PAPER).
     3. 막힘      FireGate authority/link block events that day, reservation
                  receipt unknown (kis_reservation_pending, today), PAPER mock
-                 account unavailable, or the same IB_*_ERROR message >= 3 times.
-    4. 동작      a fill logged that day (IB_*_FILLED).
-    5. 대기      no active cycle, US holiday, or no fill yet (reservations
+                 account unavailable, the same IB_*_ERROR message >= 3 times
+                 (past days: also a line trimmed to two rows), or today a
+                 worker job in error (PAPER loc_automation, LIVE loc/sync).
+    4. 확인 불가  today with an active cycle, inside the LOC window (10:00 to
+                 23:20/22:20 KST on a US trading day): the worker heartbeat is
+                 silent 15+ min, a LIVE job is missing/account_changed, or,
+                 without worker state, no IB run record for 15+ min (LIVE:
+                 IB_LOC_AUTOMATION_RUN; PAPER has no such record, so 워커
+                 상태 확인 불가).
+    5. 동작      a fill logged that day (IB_*_FILLED).
+    6. 대기      no active cycle, US holiday, or no fill yet (reservations
                  placed/kept are shown in the reason).
     """
     mode = facts["mode"]
     lane = _new_lane("infinite_buy", mode, "USD")
     if not facts["ok"]:
-        return _set(lane, UNKNOWN, f"{mode} DB를 읽지 못했습니다: {facts['error']}")
+        return _set(lane, UNKNOWN, f"{mode} 데이터를 확인할 수 없습니다: {facts['error']}")
+    if facts.get("foreign"):
+        return _set(lane, UNKNOWN, FOREIGN_REASON)
     sw, ib = facts["switches"], facts.get("ib") or {}
     rows = [r for r in facts["logs"] if str(r.get("event_type", "") or "").upper().startswith("IB_")]
     fills = [_ib_fill(r) for r in rows if str(r.get("event_type", "")).upper() in IB_FILL_EVENTS]
     _count_fills(lane, fills)
-    lane["orders"] = [{"time": _hhmmss(r.get("created")), "symbol": r.get("symbol", ""),
-                       "side": "BUY" if "BUY" in str(r.get("event_type")) else ("SELL" if "SELL" in str(r.get("event_type")) or r.get("action") == "SELL" else ""),
-                       "label": IB_ORDER_EVENTS[str(r.get("event_type")).upper()], "qty": _int(r.get("order_qty")) or None,
-                       "price": _float(r.get("order_price")) or None, "status": "예약·주문",
-                       "message": clean_message(r.get("message"))[:160]}
-                      for r in rows if str(r.get("event_type", "")).upper() in IB_ORDER_EVENTS][:MAX_LIST]
-    error_rows = [r for r in rows if str(r.get("event_type", "")).upper().endswith("_ERROR")]
-    block_rows = [r for r in rows if str(r.get("event_type", "")).upper() in IB_HARD_BLOCK_EVENTS]
-    error_groups = group_errors(error_rows)
-    block_groups = group_errors(block_rows, source="차단 이벤트")
+    lane["orders"] = [_ib_order(r) for r in rows if str(r.get("event_type", "")).upper() in IB_ORDER_EVENTS][:MAX_LIST]
+    error_groups = group_errors([r for r in rows if str(r.get("event_type", "")).upper().endswith("_ERROR")], past=not is_today)
+    block_groups = group_errors([r for r in rows if str(r.get("event_type", "")).upper() in IB_HARD_BLOCK_EVENTS],
+                                source="차단 이벤트", past=not is_today)
     for group in block_groups:
         group["level"] = "block"
     lane["problems"] = (block_groups + error_groups)[:MAX_LIST]
@@ -1123,11 +1471,14 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process_workers
                           "qty": _int(c.get("total_qty")), "avg_price": _float(c.get("avg_price")),
                           "round": f"{_int(c.get('current_round'))}/{_int(c.get('division_count'))}회차"}
                          for c in facts.get("cycles") or []]
-    lane["worker"] = _worker_rows(facts, "infinite_buy", process_workers)
+    view = worker_view(facts, "infinite_buy", process)
+    lane["worker"] = view["rows"]
     if ib.get("failure_reason") and is_today:
         lane["notes"].append("최근 예약 검증 실패 사유: " + clean_message(ib["failure_reason"])[:200])
     if lane["realized_missing"]:
         lane["notes"].append(f"매도 {lane['realized_missing']}건의 실현수익을 기록에서 찾지 못했습니다")
+    if not is_today:
+        lane["notes"].append(TRIM_NOTE)
 
     if not facts["account"].get("readable", True):
         return _set(lane, UNKNOWN, "계좌번호를 복호화하지 못해 주문 정책을 확인할 수 없습니다")
@@ -1158,16 +1509,39 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process_workers
         text = f"{', '.join(symbols) + ' ' if symbols else ''}{' · '.join(labels)}"
         days = [d for d in facts.get("ib_block_days") or [] if d <= day.isoformat()]
         if len(days) > 1:
-            text += f" — 최근 {HISTORY_DAYS}일 중 {len(days)}일 발생 (처음 {days[0][5:].replace('-', '/')})"
+            text += f" — 최근 {HISTORY_DAYS}일 중 최소 {len(days)}일 발생 (처음 {days[0][5:].replace('-', '/')})"
         blocks.append(text)
     if is_today and ib.get("reservation_pending"):
         blocks.append("예약 접수 여부를 확인하지 못해 새 예약을 멈췄습니다 (kis_reservation_pending) — 대조 필요")
     blocks.extend(group_text(g) for g in _repeated_error_blocks(error_groups))
-    if is_today and ib.get("cooldown_until") and ib["cooldown_until"] > now.replace(tzinfo=KST).timestamp():
+    cooldown = is_today and ib.get("cooldown_until") and ib["cooldown_until"] > now.replace(tzinfo=KST).timestamp()
+    if cooldown:
         lane["notes"].append("예약 재구성 대기 중: " + clean_message(ib.get("cooldown_reason"))[:160])
+    if is_today:
+        blocks.extend(view["errors"])
     if blocks:
         lane["notes"].extend(f"추가 차단 사유: {b}" for b in blocks[1:3])
         return _set(lane, BLOCKED, blocks[0])
+    if is_today and facts.get("cycles") and not cooldown:
+        active = calendar.active_window("infinite_buy", now)
+        reasons = list(view["unknown"]) if active else []
+        if view["known"]:
+            beat = view["heartbeat"]
+            reasons.append(_quiet("worker", beat, silence(beat, active, now), now, view["source"]))
+        elif mode == "LIVE":
+            seen = facts.get("ib_last_seen")
+            reasons.append(_quiet("ib_log", seen, silence(seen, active, now), now))
+        elif active:
+            reasons.append("워커 상태 확인 불가 (이 계정의 PAPER 워커 기록이 없습니다)")
+        reasons = [r for r in reasons if r]
+        if reasons:
+            if fills:
+                lane["notes"].append(f"체결 {len(fills)}건은 거래 기록으로 확인했습니다")
+            lane["notes"].extend(reasons[1:3])
+            return _set(lane, UNKNOWN, reasons[0])
+        stale = _stale_note(view, now)
+        if stale:
+            lane["notes"].append(stale)
     if fills:
         return _set(lane, RUNNING, f"매수 {lane['buys']} · 매도 {lane['sells']} 체결")
     if not facts.get("cycles"):
@@ -1182,10 +1556,10 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process_workers
     return _set(lane, WAITING, "체결·예약 기록 없음")
 
 
-def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False):
+def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False, hard_lock_known=True):
     """Coin (LIVE only, admin only). Rules (first match wins):
 
-    1. 확인 불가  LIVE DB unreadable.
+    1. 확인 불가  LIVE DB unreadable, or coin_policy_v1 is damaged.
     2. 꺼짐      no coin_policy_v1, mode off, another owner, or hard lock.
     3. 막힘      COIN_HALT that day without a later COIN_RESUME, or the same
                  COIN_*_ERROR / cancel message >= 3 times.
@@ -1194,8 +1568,12 @@ def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False):
     """
     lane = _new_lane("coin", "LIVE")
     if not facts["ok"]:
-        return _set(lane, UNKNOWN, f"LIVE DB를 읽지 못했습니다: {facts['error']}")
+        return _set(lane, UNKNOWN, f"LIVE 데이터를 확인할 수 없습니다: {facts['error']}")
     coin = facts.get("coin") or {}
+    if not hard_lock_known:
+        lane["notes"].append("PAPER 서버에서는 LIVE 서버의 코인 봉인(STOCK8_COIN_HARD_LOCK) 설정을 알 수 없습니다")
+    if coin.get("corrupt"):
+        return _set(lane, UNKNOWN, "코인 정책(coin_policy_v1) 데이터가 손상되어 확인할 수 없습니다")
     policy = coin.get("policy") or {}
     mode_name = str(policy.get("mode", "off") or "off").lower()
     rows = [r for r in facts["logs"] if str(r.get("event_type", "") or "").upper().startswith("COIN_")]
@@ -1213,7 +1591,7 @@ def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False):
     _count_fills(lane, fills)
     error_rows = [r for r in rows if str(r.get("event_type", "")).upper().endswith("_ERROR")
                   or str(r.get("event_type", "")).upper() == "COIN_ORDER_CANCELLED"]
-    error_groups = group_errors(error_rows)
+    error_groups = group_errors(error_rows, past=not is_today)
     lane["problems"] = error_groups[:MAX_LIST]
     ledger = coin.get("ledger") or {}
     for market, sleeve in (ledger.get("sleeves") or {}).items():
@@ -1256,11 +1634,15 @@ def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False):
 
 def build_usth_lane(facts, day, now, is_today, calendar):
     """PAPER US trend hold (shown only while enabled). Rules:
-    확인 불가 (DB) > 막힘 (mock account unavailable, same USTH_ERROR >= 3)
-    > 동작 (USTH_FILL that day) > 대기 (US holiday / no rebalance)."""
+    확인 불가 (DB, damaged policy) > 막힘 (mock account unavailable, same
+    USTH_ERROR >= 3) > 동작 (USTH_FILL that day) > 대기 (US holiday / no
+    rebalance)."""
     lane = _new_lane("us_trend_hold", "PAPER", "USD")
     if not facts["ok"]:
-        return _set(lane, UNKNOWN, f"PAPER DB를 읽지 못했습니다: {facts['error']}")
+        return _set(lane, UNKNOWN, f"PAPER 데이터를 확인할 수 없습니다: {facts['error']}")
+    usth = facts.get("usth") or {}
+    if usth.get("corrupt"):
+        return _set(lane, UNKNOWN, "추세보유 정책(us_trend_hold_policy_v1) 데이터가 손상되어 확인할 수 없습니다")
     rows = [r for r in facts["logs"] if str(r.get("event_type", "") or "").upper().startswith("USTH_")]
     fills = []
     for row in rows:
@@ -1277,9 +1659,8 @@ def build_usth_lane(facts, day, now, is_today, calendar):
             lane["orders"].append(item)
     _count_fills(lane, fills)
     lane["realized"] = None
-    error_groups = group_errors([r for r in rows if str(r.get("event_type", "")).upper().endswith("_ERROR")])
+    error_groups = group_errors([r for r in rows if str(r.get("event_type", "")).upper().endswith("_ERROR")], past=not is_today)
     lane["problems"] = error_groups
-    usth = facts.get("usth") or {}
     ledger = usth.get("ledger") or {}
     for etf, sleeve in (ledger.get("sleeves") or {}).items():
         if not isinstance(sleeve, dict):
@@ -1323,6 +1704,8 @@ def build_safety(facts, now, connection_cache=None):
         safety["verification"] = {"status": "not_configured"}
     elif not account.get("readable", True):
         safety["verification"] = {"status": "error", "message": "계좌번호를 복호화하지 못했습니다"}
+    elif facts.get("foreign"):
+        safety["verification"] = {"status": "foreign", "message": "다른 사용자 소유 계좌"}
     else:
         # The ledger file name is an account hash: not sent to the browser.
         safety["verification"] = {k: v for k, v in (facts.get("verification") or {"status": "missing"}).items() if k != "file"}
@@ -1343,7 +1726,10 @@ def build_safety(facts, now, connection_cache=None):
 def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, decrypt=None,
                  krx_holidays=(), us_holidays=None, us_early_closes=None, process=None,
                  daytrade_hard_locked=False, coin_hard_locked=False):
-    """The whole report for one user and one KST date. Read-only."""
+    """The whole report for one user and one KST date. Read-only.
+
+    process (this server's memory, optional): connection_cache (dashboard
+    KIS status) and, on LIVE, live_workers {"rows": [...], "error": ""}."""
     uid = str(uid or "").strip()
     if not uid:
         raise ValueError("로그인이 필요합니다.")
@@ -1357,7 +1743,7 @@ def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, de
     facts = {}
     for mode in MODES:
         if same and mode != server_mode:
-            facts[mode] = {"mode": mode, "ok": False, "error": "LIVE와 PAPER DB 경로가 같습니다"}
+            facts[mode] = {"mode": mode, "ok": False, "error": "LIVE와 PAPER DB 경로가 같습니다", "uid": uid}
             continue
         facts[mode] = collect_mode(mode, paths.get(mode), data_dir, uid, is_admin, day, decrypt,
                                    hard_locked=daytrade_hard_locked if mode == server_mode else False)
@@ -1374,11 +1760,10 @@ def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, de
                                              workers if mode == "LIVE" else None))
     if is_admin:
         lanes.append(build_coin_lane(facts["LIVE"], day, now, is_today,
-                                     coin_hard_locked=coin_hard_locked if server_mode == "LIVE" else False))
+                                     coin_hard_locked=coin_hard_locked if server_mode == "LIVE" else False,
+                                     hard_lock_known=server_mode == "LIVE"))
         usth = facts["PAPER"].get("usth") or {}
-        if not facts["PAPER"].get("ok"):
-            lanes.append(build_usth_lane(facts["PAPER"], day, now, is_today, calendar))
-        elif usth.get("enabled") and usth.get("owner") == uid:
+        if not facts["PAPER"].get("ok") or usth.get("corrupt") or (usth.get("enabled") and usth.get("owner") == uid):
             lanes.append(build_usth_lane(facts["PAPER"], day, now, is_today, calendar))
 
     counts = {status: 0 for status in STATUS_ORDER}

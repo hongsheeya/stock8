@@ -157,13 +157,14 @@ export class Component implements OnInit {
         if (v.status === 'not_configured') return '계좌 미설정';
         if (v.status === 'missing') return '확인 불가 (장부 파일 없음)';
         if (v.status === 'error') return '확인 불가 (' + (v.message || '장부를 읽지 못함') + ')';
+        if (v.status === 'foreign') return '확인 불가 (다른 사용자 소유 계좌)';
         const holds = (v.holds || []).length;
         return holds ? `매수 보류 ${holds}종목 (${v.hold_records}건)` : '매수 보류 없음';
     }
 
     public verificationClass(s: any): string {
         const v = s?.verification || {};
-        if (!s?.ok || v.status === 'missing' || v.status === 'error') return 'is-warn';
+        if (!s?.ok || v.status === 'missing' || v.status === 'error' || v.status === 'foreign') return 'is-warn';
         if (v.status === 'not_configured') return '';
         return (v.holds || []).length ? 'is-danger' : 'is-ok';
     }

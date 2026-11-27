@@ -87,7 +87,7 @@ div(*ngIf="!loading", class="dx-page rp-page")
                                         span(class="dx-tag", [ngClass]="problemClass(p)") {{problemLevel(p)}}
                                         small {{p.source}}
                                     td(class="dx-wrap rp-msg") {{p.message}}
-                                    td(class="num dx-strong") ×{{p.count}}
+                                    td(class="num dx-strong") {{p.count_is_min ? '최소 ' + p.count : '×' + p.count}}
                                     td(class="num") {{problemSpan(p)}}
 
                 div(class="rp-block", *ngIf="l.fills?.length || l.orders?.length")
