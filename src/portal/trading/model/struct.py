@@ -2443,10 +2443,13 @@ class Struct:
         if market_day.weekday() >= 5:
             return {"enabled": True, "executed": False, "waiting": True, "message": "주말이라 LOC 자동 예약 대기 중입니다.", "scheduled_at": scheduled_at, "schedule_window": schedule_window}
         try:
-            holiday = ""
-            broker = self.broker_api
-            if hasattr(broker, "us_market_holiday_label"):
-                holiday = str(broker.us_market_holiday_label(market_day) or "")
+            # The reservation books the US session dated market_day (the KST
+            # date), so look that date up as is. us_market_holiday_label()
+            # shifts to ET and reads the day before at KST 10:00-13:59 (12:59
+            # in summer time). The table is a KisApi class constant: it is
+            # there for any broker and on a KisApi object built before a reload.
+            holidays = getattr(self.kis_api, "US_MARKET_HOLIDAYS", None) or {}
+            holiday = str(holidays.get(market_day.strftime("%Y-%m-%d"), "") or "")
             if holiday:
                 return {
                     "enabled": True,
