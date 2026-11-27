@@ -234,6 +234,10 @@ class KisApi:
         return et.hour >= 20 or et.hour < 4
 
     def us_market_holiday_label(self, now=None):
+        """Holiday of the US session in progress at `now` (KST, shifted to ET).
+        A session already known by its date, such as the one a LOC
+        reservation books (its KST date), is looked up in US_MARKET_HOLIDAYS
+        as is."""
         now_et = self._us_eastern_now(now)
         return self.US_MARKET_HOLIDAYS.get(now_et.date().isoformat(), "")
 
