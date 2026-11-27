@@ -1423,9 +1423,10 @@ class Engine:
             # average. Without it the stored star (11-27 SOXL: 94.0 from 10-27,
             # price ~32) would call a $160 seed re-exhausted and sell a tenth
             # at the close. Hold instead; the next read decides.
-            reason = str(cycle.get("_firegate_price_error") or "FireGate 5일 평균 없음")[:120]
+            # A fixed message, so _log_event folds repeats into one row a day.
+            reason = "가격 조회 실패" if cycle.get("_firegate_price_error") else "가격 기록 없음"
             return {"state": state, "state_name": "리버스모드 (5일 평균 미확인)", "moc_qty": 0, "star": 0,
-                    "sells": [], "buys": [], "hold_reason": f"FireGate 5일 평균을 읽지 못해 리버스 주문 보류: {reason}"}
+                    "sells": [], "buys": [], "hold_reason": f"FireGate 5일 평균을 읽지 못해 리버스 주문 보류({reason})"}
         re_exhausted = active and star > 0 and buy_price > 0 and int(math.floor(remaining / 4 / buy_price)) < 1
         if not active or re_exhausted or buy_price <= 0:
             return {"state": state, "state_name": "리버스모드 (재소진)" if re_exhausted else "리버스모드 (첫날)",

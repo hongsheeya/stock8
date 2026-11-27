@@ -1077,3 +1077,6 @@ if __name__ == "__main__":
     except RelinkRefused as exc:
         print(f"중단: {redact(exc)}")
         sys.exit(2)
+    except Exception as exc:  # no traceback: Firestore errors carry users/<email>/ paths
+        print(f"오류로 중단: {type(exc).__name__}: {redact(str(exc))[:300]}")
+        sys.exit(3)

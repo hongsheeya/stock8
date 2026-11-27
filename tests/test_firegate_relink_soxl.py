@@ -529,6 +529,9 @@ class BridgeDuplicateTests(unittest.TestCase):
         tx = fg.transaction_from_cycle_trade(trade, PID, portfolio=portfolio())
         self.assertEqual(tx["brokerOrderNo"], "30167321")
         self.assertIsNone(fg.booked_broker_order([relinked], {**tx, "size": 9}))
+        dated = {**relinked, "date": "2026. 11. 02"}
+        self.assertIs(fg.booked_broker_order([dated], tx), dated)
+        self.assertIsNone(fg.booked_broker_order([dated], {**tx, "date": "2026. 11. 20"}))  # number reused later
 
 
 class ReversePriceGuardTests(unittest.TestCase):

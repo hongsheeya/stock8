@@ -1346,10 +1346,15 @@ def booked_broker_order(transactions, tx):
     order_no = str((tx or {}).get("brokerOrderNo", "") or "").strip().lstrip("0")
     if not order_no:
         return None
+    tx_day = _parse_firegate_datetime((tx or {}).get("date"), None)
     for row in transactions or []:
         if (str(row.get("brokerOrderNo", "") or "").strip().lstrip("0") == order_no
                 and str(row.get("type", "")).lower() == str(tx.get("type", "")).lower()
                 and _safe_int(row.get("size"), 0) == _safe_int(tx.get("size"), -1)):
+            row_day = _parse_firegate_datetime(row.get("date"), None)
+            # Order numbers are only unique within a few days at KIS.
+            if tx_day is not None and row_day is not None and abs((tx_day - row_day).days) > 3:
+                continue
             return row
     return None
 
