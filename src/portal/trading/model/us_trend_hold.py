@@ -117,6 +117,20 @@ def et_now(epoch):
     return utc + datetime.timedelta(hours=-4 if start <= utc < end else -5)
 
 
+def _replace_with_retry(src, dst, attempts=8, delay=0.025):
+    """os.replace, retried briefly on PermissionError: on Windows a reader
+    holding dst open (the daily report, antivirus, the search indexer) makes
+    the replace fail with WinError 5 for that moment."""
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay * (attempt + 1))
+
+
 def round_usd(value):
     return round(float(value), 2) if value >= 1 else round(float(value), 4)
 
@@ -153,7 +167,7 @@ class UsTrendHold:
         tmp = self.state_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(self.state, handle, ensure_ascii=False)
-        os.replace(tmp, self.state_path)
+        _replace_with_retry(tmp, self.state_path)
 
     def update_policy(self, policy):
         policy = normalize_policy(policy)
