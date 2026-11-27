@@ -1454,8 +1454,12 @@ class Engine:
         if et.weekday() >= 5 or kis_api.us_market_holiday_label(now_kst):
             return {"status": "closed", "message": "미국 휴장"}
         (h1, m1), (h2, m2) = self.REVERSE_MOC_WINDOW_ET
-        if not (h1 * 60 + m1 <= et.hour * 60 + et.minute < h2 * 60 + m2):
-            return {"status": "outside_window", "message": "MOC 접수 시간 아님 (미국 09:35~15:40)"}
+        # The window ends 20 minutes before the close: 12:40 ET on a 13:00
+        # early close, where MOC entry stops at 12:50.
+        end = h2 * 60 + m2 - self._us_close_shift_minutes(kis_api, et)
+        if not (h1 * 60 + m1 <= et.hour * 60 + et.minute < end):
+            return {"status": "outside_window",
+                    "message": f"MOC 접수 시간 아님 (미국 {h1:02d}:{m1:02d}~{end // 60:02d}:{end % 60:02d})"}
         if time.time() - float(state.get("checked_at") or 0) < self.REVERSE_MOC_CHECK_SEC:
             return {"status": "throttled", "message": state.get("message", "")}
         state["checked_at"] = time.time()
@@ -2350,11 +2354,44 @@ class Engine:
                 continue
         return 0
 
+    @staticmethod
+    def _us_close_shift_minutes(kis_api, et):
+        """Minutes before 16:00 ET that this ET date's session closes: 0, or
+        180 on a 13:00 early close (kis_api.US_EARLY_CLOSES). The table is read
+        as data: the order-policy wrapper forwards plain attributes as is but
+        wraps methods, and a missing broker means no shift."""
+        try:
+            closes = getattr(kis_api, "US_EARLY_CLOSES", None)
+            text = str((closes if isinstance(closes, dict) else {}).get(et.date().isoformat(), "") or "")
+            if not text:
+                return 0
+            hour, minute = text.split(":")
+            close = int(hour) * 60 + int(minute)
+        except Exception:
+            return 0
+        return 16 * 60 - close if 9 * 60 + 30 < close < 16 * 60 else 0
+
+    def _paper_loc_close_shift(self, et):
+        """_us_close_shift_minutes once per ET date: the window is checked on
+        every heartbeat, and loading the broker builds the order-policy
+        wrapper each time. Not cached while no broker is configured."""
+        day = et.date().isoformat()
+        cached = self.__dict__.get("_paper_loc_close_shift_cache")
+        if cached and cached[0] == day:
+            return cached[1]
+        kis_api = self._load_kis_api()
+        shift = self._us_close_shift_minutes(kis_api, et)
+        if kis_api is not None:
+            self.__dict__["_paper_loc_close_shift_cache"] = (day, shift)
+        return shift
+
     def paper_loc_window(self, now=None):
-        """The once-a-day decision window shortly before the 16:00 ET close."""
+        """The once-a-day decision window shortly before the 16:00 ET close
+        (12:55-12:59 on a 13:00 early close)."""
         et = self._us_eastern_now(now)
-        start = self._config_minutes("paper_loc_decision_time_et", "15:55")
-        end = self._config_minutes("paper_loc_decision_end_et", "15:59")
+        shift = self._paper_loc_close_shift(et)
+        start = self._config_minutes("paper_loc_decision_time_et", "15:55") - shift
+        end = self._config_minutes("paper_loc_decision_end_et", "15:59") - shift
         minute = et.hour * 60 + et.minute
         if et.weekday() >= 5:
             state = "closed"

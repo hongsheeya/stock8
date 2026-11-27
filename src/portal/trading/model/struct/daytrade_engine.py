@@ -761,7 +761,7 @@ class DomesticDaytradeEngine:
             "exit_mode": "open" if str(self._config(prefix + "exit_mode", "vwap") or "vwap").strip().lower() == "open" else "vwap",
             # KS in KST from 30 minutes after the open; US in ET likewise.
             "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
-            "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
+            "end": self._session_entry_end(prefix, us),
             "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "10"), 10)),
             # 10-21, a year of KIS 1m bars (2025-10-16..2026-10-20, 613 trades):
             # the 09:15 rule made +14.1% on the seed (quarters -5.6/0.0/-6.1/
@@ -785,6 +785,20 @@ class DomesticDaytradeEngine:
             "stop_block_hours": max(0, self._safe_int(self._config(prefix + "stop_block_hours", "12"), 12)),
             "reversal_block": str(self._config(prefix + "reversal_block", "false") or "false").strip().lower() in ("1", "true", "yes", "on"),
         }
+
+    def _session_entry_end(self, prefix, us):
+        """Last entry time (HH:MM, the market's own clock). On a US early
+        close it is capped an hour before the close (12:00 ET for 13:00):
+        entries until 15:00 would come after the close. A configured earlier
+        end stays; ordinary days are unchanged."""
+        end = str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30"))
+        shift = self._us_close_shift_minutes() if us else 0
+        if shift <= 0:
+            return end
+        cap = 16 * 60 - shift - 60
+        value = self._hhmm_minutes(end)
+        minutes = cap if value is None else min(value, cap)
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
     def _regime_trend_clock(self, market="KS"):
         """(session date, HH:MM) on the market's own clock: KST for KS, ET for US."""
@@ -1245,7 +1259,7 @@ class DomesticDaytradeEngine:
             "trail_pct": number("trail_pct", 3.0),
             "stop_pct": number("stop_pct", 4.0),
             "start": str(self._config(prefix + "start", "10:00" if us else "09:30") or ("10:00" if us else "09:30")),
-            "end": str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30")),
+            "end": self._session_entry_end(prefix, us),
             "cooldown_min": max(0, self._safe_int(self._config(prefix + "cooldown_min", "15"), 15)),
             "max_entries": max(1, self._safe_int(self._config(prefix + "max_entries", "3"), 3)),
             "candidates": max(1, min(20, self._safe_int(self._config(prefix + "candidates", "10"), 10))),
@@ -1542,24 +1556,17 @@ class DomesticDaytradeEngine:
         return str(market or "").upper() in ("US", "NYSE", "NASD", "NASDAQ", "AMEX", "NYS")
 
     def _is_market_close_approaching(self, market="KS"):
-        """장 마감 임박 여부 (강제청산 트리거): 국장 KST 15:10~15:20, 미장 ET 15:40+"""
+        """장 마감 임박 여부 (강제청산 트리거): 국장 KST 15:10~15:20, 미장 ET 15:40+
+        (조기 폐장일은 12:40+)"""
         now = self._now()
         if self._is_us_market(market):
             # KST-13h only holds in summer; after DST ends the window ran an
             # hour late, past the 16:00 ET close.
-            et_hour, et_min = (now.hour - 13) % 24, now.minute
-            if ZoneInfo is not None:
-                try:
-                    et = (now if now.tzinfo else now.replace(tzinfo=ZoneInfo("Asia/Seoul"))).astimezone(ZoneInfo("America/New_York"))
-                    et_hour, et_min = et.hour, et.minute
-                except Exception:
-                    pass
-            # ET 15:40~16:05 사이
-            if et_hour == 15 and et_min >= 40:
-                return True
-            if et_hour == 16 and et_min <= 5:
-                return True
-            return False
+            et = self._us_et_now()
+            minute = et.hour * 60 + et.minute
+            close = self._us_close_minutes(et.date())
+            # 마감 20분 전 ~ 마감 5분 후: 평일 ET 15:40~16:05, 조기 폐장일 12:40~13:05
+            return close - 20 <= minute <= close + 5
         else:
             # 국장: 15:20부터는 종가 단일가라 domestic_market.route가 주문을 거부하고
             # 자동 루프(_daytrade_market_open)도 15:20에 멈춘다. 마감 판단은 그 전에
@@ -1760,7 +1767,7 @@ class DomesticDaytradeEngine:
         return dst_start <= now_kst < dst_end
 
     def _us_market_open(self):
-        """미국 본장 시간 (ET 09:30~16:00)"""
+        """미국 본장 시간 (ET 09:30~16:00, 조기 폐장일은 13:00까지)"""
         if _PAPER_CONTINUOUS:
             return True
         if ZoneInfo is not None:
@@ -1771,7 +1778,7 @@ class DomesticDaytradeEngine:
         if now_et.weekday() >= 5 or self._us_holiday_label(now_et):
             return False
         hhmm = now_et.hour * 100 + now_et.minute
-        return 930 <= hhmm < 1600
+        return 930 <= hhmm and now_et.hour * 60 + now_et.minute < self._us_close_minutes(now_et.date())
 
     def _us_holiday_label(self, now_et):
         """NYSE closure name for this ET date, else "". 11-26 (Thanksgiving)
@@ -1783,6 +1790,78 @@ class DomesticDaytradeEngine:
             return str(holidays.get(now_et.date().isoformat(), "") or "")
         except Exception:
             return ""
+
+    def _us_close_minutes(self, et_date):
+        """Regular-session close in ET minutes for this ET date: 960 (16:00),
+        or 780 (13:00) on NYSE early closes (kis_api.US_EARLY_CLOSES). 11-27,
+        the day after Thanksgiving, every US close check here still said
+        16:00, so the flatten (15:40) and MOC (15:30) came after the 13:00
+        close and day trades would have been held over the weekend."""
+        try:
+            closes = getattr(self.struct.kis_api, "US_EARLY_CLOSES", None)
+            text = str((closes if isinstance(closes, dict) else {}).get(et_date.isoformat(), "") or "")
+            if text:
+                hour, minute = text.split(":")
+                value = int(hour) * 60 + int(minute)
+                if 9 * 60 + 30 < value < 16 * 60:
+                    return value
+        except Exception:
+            pass
+        return 16 * 60
+
+    def _us_et_now(self):
+        """Now in ET. Never raises: stop-loss and flatten checks depend on it,
+        and _is_us_dst() builds a ZoneInfo outside any try."""
+        now = self._now()
+        if ZoneInfo is not None:
+            try:
+                aware = now if now.tzinfo else now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                return aware.astimezone(ZoneInfo("America/New_York"))
+            except Exception:
+                pass
+        try:
+            dst = self._us_dst_by_rule(now)
+        except Exception:
+            dst = False
+        return now - datetime.timedelta(hours=13 if dst else 14)
+
+    @staticmethod
+    def _us_dst_by_rule(now_kst):
+        """US DST by the calendar rule (second Sunday of March to first Sunday
+        of November), for runtimes without tz data."""
+        y = now_kst.year
+        mar1 = datetime.datetime(y, 3, 1)
+        start = mar1 + datetime.timedelta(days=(6 - mar1.weekday()) % 7 + 7)
+        nov1 = datetime.datetime(y, 11, 1)
+        end = nov1 + datetime.timedelta(days=(6 - nov1.weekday()) % 7)
+        return start <= now_kst.replace(tzinfo=None) < end
+
+    def _us_close_shift_minutes(self):
+        """How many minutes before 16:00 ET today's US session closes (0
+        normally, 180 on a 13:00 early close). Close-relative times move by it."""
+        try:
+            return max(0, 16 * 60 - self._us_close_minutes(self._us_et_now().date()))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _hhmm_minutes(text):
+        """Minutes since midnight for "HH:MM", else None."""
+        try:
+            hour, minute = str(text).strip().split(":")
+            value = int(hour) * 60 + int(minute)
+        except Exception:
+            return None
+        return value if 0 <= value < 24 * 60 else None
+
+    @classmethod
+    def _shift_hhmm(cls, text, delta_minutes):
+        """"HH:MM" moved by delta minutes; unparsable text is returned as is."""
+        value = cls._hhmm_minutes(text)
+        if value is None:
+            return text
+        total = max(0, min(value + int(delta_minutes), 23 * 60 + 59))
+        return f"{total // 60:02d}:{total % 60:02d}"
 
     def _ks_holiday(self, now_kst):
         try:
@@ -2607,8 +2686,13 @@ class DomesticDaytradeEngine:
         value = str(self._config("daytrade_us_moc_guard_enabled", "false") or "false").strip().lower()
         return value in ("1", "true", "yes", "on")
 
+    def _us_moc_last_place_hhmm(self):
+        # 30 minutes before the close: 12:30 ET on a 13:00 early close (MOC
+        # entry stops at 12:50 there).
+        return self._shift_hhmm(self._US_MOC_LAST_PLACE_HHMM, -self._us_close_shift_minutes())
+
     def _us_moc_window_open(self):
-        return self._us_market_open() and self._regime_trend_clock("US")[1] < self._US_MOC_LAST_PLACE_HHMM
+        return self._us_market_open() and self._regime_trend_clock("US")[1] < self._us_moc_last_place_hhmm()
 
     def _clear_us_moc(self, state):
         for key in ("moc_order_no", "moc_qty", "moc_placed_at", "moc_cancel_requested_at", "moc_cancel_error",
@@ -4412,7 +4496,7 @@ class DomesticDaytradeEngine:
         if not _PAPER_MODE and not force and str(market or "").upper() == "US" and not self._us_market_open():
             return {"executed": False, "submitted": False, "market_closed": True,
                     "action": "WAIT_MARKET", "order_value": 0,
-                    "message": "미국 정규장(ET 09:30~16:00) 외 시간 — 자동 주문은 전송하지 않습니다.",
+                    "message": "미국 정규장(ET 09:30~16:00, 조기 폐장일 13:00) 외 시간 — 자동 주문은 전송하지 않습니다.",
                     "status": precomputed_status or {}}
         if self._hard_locked():
             return {
