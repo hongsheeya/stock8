@@ -1,0 +1,11 @@
+{
+    "mode": "page",
+    "id": "page.report",
+    "title": "/report",
+    "namespace": "report",
+    "viewuri": "/report",
+    "category": "report",
+    "controller": "user",
+    "layout": "layout.trading",
+    "template": "wiz-page-report()"
+}
