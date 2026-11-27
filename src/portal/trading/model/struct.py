@@ -1681,8 +1681,10 @@ class Struct:
         engine_cls = self.model("us_trend_hold")
         kis = self.kis_api
         holidays = getattr(kis, "US_MARKET_HOLIDAYS", {}) or {}
+        early_closes = getattr(kis, "US_EARLY_CLOSES", {}) or {}
         return engine_cls(kis, self.us_trend_hold_dir(), policy, self._us_trend_hold_closes,
-                          log=self._us_trend_hold_log, holiday_fn=lambda day: holidays.get(day, ""))
+                          log=self._us_trend_hold_log, holiday_fn=lambda day: holidays.get(day, ""),
+                          early_close_fn=lambda day: early_closes.get(day, ""))
 
     def us_trend_hold_worker_status(self):
         registry = _sys.__dict__.get(_USTH_WORKER_KEY) or {}

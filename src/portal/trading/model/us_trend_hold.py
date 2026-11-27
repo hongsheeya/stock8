@@ -122,7 +122,7 @@ def round_usd(value):
 
 
 class UsTrendHold:
-    def __init__(self, broker, state_dir, policy, closes_fn, log=None, now=None, holiday_fn=None):
+    def __init__(self, broker, state_dir, policy, closes_fn, log=None, now=None, holiday_fn=None, early_close_fn=None):
         """broker: KIS api (get_current_price, buy_order, sell_order, get_balance,
         get_overseas_order_history). closes_fn(symbol) -> [(date, close)]."""
         self.broker = broker
@@ -130,6 +130,7 @@ class UsTrendHold:
         self.log = log or (lambda *a, **k: None)
         self.now = now or time.time
         self.holiday_fn = holiday_fn or (lambda day: "")
+        self.early_close_fn = early_close_fn or (lambda day: "")
         os.makedirs(state_dir, exist_ok=True)
         self.state_path = os.path.join(state_dir, "state.json")
         self.state = self._load_state()
@@ -206,7 +207,22 @@ class UsTrendHold:
     def _trading_window(self, et):
         if et.weekday() >= 5 or self.holiday_fn(et.date().isoformat()):
             return False
-        return TRADE_START <= (et.hour, et.minute) < TRADE_END
+        return TRADE_START <= (et.hour, et.minute) < self._trade_end(et)
+
+    def _trade_end(self, et):
+        """TRADE_END, 30 minutes before the close: 12:30 ET on a 13:00 early
+        close (early_close_fn gives "HH:MM" for those ET dates)."""
+        try:
+            text = str(self.early_close_fn(et.date().isoformat()) or "")
+            if text:
+                hour, minute = text.split(":")
+                close = int(hour) * 60 + int(minute)
+                if 9 * 60 + 30 < close < 16 * 60:
+                    end = close - (16 * 60 - (TRADE_END[0] * 60 + TRADE_END[1]))
+                    return (end // 60, end % 60)
+        except Exception:
+            pass
+        return TRADE_END
 
     def _signals(self, session):
         cached = self.state.get("signals") or {}

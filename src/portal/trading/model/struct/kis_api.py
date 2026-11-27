@@ -170,6 +170,32 @@ class KisApi:
         "2028-11-23": "Thanksgiving Day",
         "2028-12-25": "Christmas Day",
     }
+    # NYSE/Nasdaq 1:00 p.m. ET early closes (NYSE Group 2026-2028 calendar,
+    # announced 2025-12-23). 11-27: the day after Thanksgiving every US close
+    # check still said 16:00, so day trades held at 13:00 could not be
+    # flattened before the weekend.
+    US_EARLY_CLOSES = {
+        "2026-11-27": "13:00",
+        "2026-12-24": "13:00",
+        "2027-11-26": "13:00",
+        "2028-07-03": "13:00",
+        "2028-11-24": "13:00",
+    }
+    US_REGULAR_CLOSE_MINUTES = 16 * 60
+
+    @classmethod
+    def us_close_minutes_for(cls, day):
+        """Regular-session close in ET minutes for an ET date (date or
+        YYYY-MM-DD): 960 (16:00), or the early close listed above."""
+        key = day.isoformat() if hasattr(day, "isoformat") else str(day or "")[:10]
+        text = str(cls.US_EARLY_CLOSES.get(key, "") or "")
+        try:
+            hour, minute = text.split(":")
+            value = int(hour) * 60 + int(minute)
+        except Exception:
+            return cls.US_REGULAR_CLOSE_MINUTES
+        # Only an earlier close inside the regular session is meaningful.
+        return value if 9 * 60 + 30 < value < cls.US_REGULAR_CLOSE_MINUTES else cls.US_REGULAR_CLOSE_MINUTES
 
     def __init__(self, struct):
         self.struct = struct
@@ -237,6 +263,10 @@ class KisApi:
         now_et = self._us_eastern_now(now)
         return self.US_MARKET_HOLIDAYS.get(now_et.date().isoformat(), "")
 
+    def us_market_close_minutes(self, now=None):
+        """Today's regular-session close in ET minutes (13:00 on early closes)."""
+        return self.us_close_minutes_for(self._us_eastern_now(now).date())
+
     def _us_auto_exchange_session(self, now=None):
         now_et = self._us_eastern_now(now)
         if now_et.weekday() >= 5:
@@ -247,7 +277,8 @@ class KisApi:
         hhmm = now_et.hour * 100 + now_et.minute
         if 400 <= hhmm < 930:
             return {"ready": True, "session": "premarket", "label": "프리마켓"}
-        if 930 <= hhmm < 1600:
+        close = self.us_close_minutes_for(now_et.date())
+        if 930 <= hhmm and now_et.hour * 60 + now_et.minute < close:
             return {"ready": True, "session": "regular", "label": "본장"}
         return {"ready": False, "session": "closed", "label": "장외 대기"}
 
