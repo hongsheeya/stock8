@@ -187,7 +187,7 @@ class KisApi:
     def us_close_minutes_for(cls, day):
         """Regular-session close in ET minutes for an ET date (date or
         YYYY-MM-DD): 960 (16:00), or the early close listed above."""
-        key = day.isoformat() if hasattr(day, "isoformat") else str(day or "")[:10]
+        key = (day.isoformat() if hasattr(day, "isoformat") else str(day or ""))[:10]
         text = str(cls.US_EARLY_CLOSES.get(key, "") or "")
         try:
             hour, minute = text.split(":")
@@ -262,10 +262,6 @@ class KisApi:
     def us_market_holiday_label(self, now=None):
         now_et = self._us_eastern_now(now)
         return self.US_MARKET_HOLIDAYS.get(now_et.date().isoformat(), "")
-
-    def us_market_close_minutes(self, now=None):
-        """Today's regular-session close in ET minutes (13:00 on early closes)."""
-        return self.us_close_minutes_for(self._us_eastern_now(now).date())
 
     def _us_auto_exchange_session(self, now=None):
         now_et = self._us_eastern_now(now)

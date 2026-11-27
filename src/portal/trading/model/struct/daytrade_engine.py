@@ -787,11 +787,18 @@ class DomesticDaytradeEngine:
         }
 
     def _session_entry_end(self, prefix, us):
-        """Last entry time (HH:MM, the market's own clock). The US end is an
-        hour before a 16:00 close, so on a 13:00 early close it moves to
-        12:00 ET; entries until 15:00 would come after the close."""
+        """Last entry time (HH:MM, the market's own clock). On a US early
+        close it is capped an hour before the close (12:00 ET for 13:00):
+        entries until 15:00 would come after the close. A configured earlier
+        end stays; ordinary days are unchanged."""
         end = str(self._config(prefix + "end", "15:00" if us else "14:30") or ("15:00" if us else "14:30"))
-        return self._shift_hhmm(end, -self._us_close_shift_minutes()) if us else end
+        shift = self._us_close_shift_minutes() if us else 0
+        if shift <= 0:
+            return end
+        cap = 16 * 60 - shift - 60
+        value = self._hhmm_minutes(end)
+        minutes = cap if value is None else min(value, cap)
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
     def _regime_trend_clock(self, market="KS"):
         """(session date, HH:MM) on the market's own clock: KST for KS, ET for US."""
@@ -1803,6 +1810,8 @@ class DomesticDaytradeEngine:
         return 16 * 60
 
     def _us_et_now(self):
+        """Now in ET. Never raises: stop-loss and flatten checks depend on it,
+        and _is_us_dst() builds a ZoneInfo outside any try."""
         now = self._now()
         if ZoneInfo is not None:
             try:
@@ -1810,22 +1819,48 @@ class DomesticDaytradeEngine:
                 return aware.astimezone(ZoneInfo("America/New_York"))
             except Exception:
                 pass
-        return now - datetime.timedelta(hours=13 if self._is_us_dst() else 14)
+        try:
+            dst = self._us_dst_by_rule(now)
+        except Exception:
+            dst = False
+        return now - datetime.timedelta(hours=13 if dst else 14)
+
+    @staticmethod
+    def _us_dst_by_rule(now_kst):
+        """US DST by the calendar rule (second Sunday of March to first Sunday
+        of November), for runtimes without tz data."""
+        y = now_kst.year
+        mar1 = datetime.datetime(y, 3, 1)
+        start = mar1 + datetime.timedelta(days=(6 - mar1.weekday()) % 7 + 7)
+        nov1 = datetime.datetime(y, 11, 1)
+        end = nov1 + datetime.timedelta(days=(6 - nov1.weekday()) % 7)
+        return start <= now_kst.replace(tzinfo=None) < end
 
     def _us_close_shift_minutes(self):
         """How many minutes before 16:00 ET today's US session closes (0
         normally, 180 on a 13:00 early close). Close-relative times move by it."""
-        return max(0, 16 * 60 - self._us_close_minutes(self._us_et_now().date()))
+        try:
+            return max(0, 16 * 60 - self._us_close_minutes(self._us_et_now().date()))
+        except Exception:
+            return 0
 
     @staticmethod
-    def _shift_hhmm(text, delta_minutes):
-        """"HH:MM" moved by delta minutes; unparsable text is returned as is."""
+    def _hhmm_minutes(text):
+        """Minutes since midnight for "HH:MM", else None."""
         try:
             hour, minute = str(text).strip().split(":")
-            total = int(hour) * 60 + int(minute) + int(delta_minutes)
+            value = int(hour) * 60 + int(minute)
         except Exception:
+            return None
+        return value if 0 <= value < 24 * 60 else None
+
+    @classmethod
+    def _shift_hhmm(cls, text, delta_minutes):
+        """"HH:MM" moved by delta minutes; unparsable text is returned as is."""
+        value = cls._hhmm_minutes(text)
+        if value is None:
             return text
-        total = max(0, min(total, 23 * 60 + 59))
+        total = max(0, min(value + int(delta_minutes), 23 * 60 + 59))
         return f"{total // 60:02d}:{total % 60:02d}"
 
     def _ks_holiday(self, now_kst):

@@ -6,13 +6,14 @@ and MOC (15:30 ET) came after the 13:00 close, entries stayed open until
 close, so a PAPER day trade bought before 13:00 would have been held over the
 weekend.
 """
+import contextlib
 import datetime
 import importlib.util
 import pathlib
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_daytrade_engine_regressions import _engine_with_state, daytrade_engine
 from test_kis_api_buying_power import _StructStub as _KisStruct, kis_api
@@ -21,6 +22,7 @@ from test_us_trend_hold import FakeBroker, E as UsTrendHold
 
 try:
     from zoneinfo import ZoneInfo
+    ZoneInfo("America/New_York")  # tz data present (the runtime venv has tzdata)
 except Exception:  # pragma: no cover
     ZoneInfo = None
 
@@ -53,6 +55,7 @@ class EarlyCloseTableTests(unittest.TestCase):
     def test_close_minutes(self):
         self.assertEqual(kis_api.KisApi.us_close_minutes_for(datetime.date(2026, 11, 27)), 13 * 60)
         self.assertEqual(kis_api.KisApi.us_close_minutes_for("2026-12-24"), 13 * 60)
+        self.assertEqual(kis_api.KisApi.us_close_minutes_for(datetime.datetime(2026, 11, 27, 9, 0)), 13 * 60)
         self.assertEqual(kis_api.KisApi.us_close_minutes_for(datetime.date(2026, 11, 30)), 16 * 60)
 
 
@@ -63,7 +66,6 @@ class KisSessionTests(unittest.TestCase):
         self.assertEqual(api._us_auto_exchange_session(_kst_for_et(2026, 11, 27, 12, 59))["session"], "regular")
         self.assertEqual(api._us_auto_exchange_session(_kst_for_et(2026, 11, 27, 13, 0))["session"], "closed")
         self.assertEqual(api._us_auto_exchange_session(_kst_for_et(2026, 11, 30, 15, 59))["session"], "regular")
-        self.assertEqual(api.us_market_close_minutes(_kst_for_et(2026, 11, 27, 10, 0)), 13 * 60)
 
 
 class _FixedDatetime(datetime.datetime):
@@ -124,11 +126,65 @@ class DaytradeEarlyCloseTests(unittest.TestCase):
         self.assertEqual(normal._regime_trend_params("US")["end"], "15:00")
         self.assertEqual(normal._momentum_params("US")["end"], "15:00")
 
+    def _moc_guard_at(self, *et_args):
+        engine = self._engine(*et_args)
+        enabled = {"daytrade_us_moc_guard_enabled": "true"}
+        engine._config = lambda key, default=None: enabled.get(key, default)
+        engine._us_exchange = lambda _symbol: "NASD"
+        engine._append_runtime_log = lambda *a, **k: None
+        broker = Mock()
+        broker.request_options = lambda **_k: contextlib.nullcontext()
+        broker.get_overseas_order_history.return_value = []
+        broker.sell_order.return_value = {"order_no": "M1", "order_type": "MOC"}
+        engine._broker = lambda: broker
+        state = dict(symbol="TEST", market="US", strategy_id="paper_regime_trend", position_qty=10,
+                     avg_price=30.0, orders=[], last_price=30.0)
+        _FixedDatetime.fixed = datetime.datetime(*et_args, tzinfo=ZoneInfo("America/New_York"))
+        fake = SimpleNamespace(datetime=_FixedDatetime, timedelta=datetime.timedelta,
+                               date=datetime.date, timezone=datetime.timezone)
+        with patch.object(daytrade_engine, "_PAPER_CONTINUOUS", False), patch.object(daytrade_engine, "datetime", fake):
+            return engine._us_moc_guard(state, "TEST"), broker
+
+    def test_moc_guard_places_nothing_after_12_30_on_an_early_close(self):
+        status, broker = self._moc_guard_at(2026, 11, 27, 12, 35)
+        self.assertEqual(status, "idle")
+        broker.sell_order.assert_not_called()
+        status, broker = self._moc_guard_at(2026, 11, 27, 12, 25)
+        self.assertEqual(status, "placed")
+        broker.sell_order.assert_called_once_with("TEST", 10, price=0, order_type="MOC", exchange="NASD")
+        # An ordinary day still places it at 12:35.
+        status, _broker = self._moc_guard_at(2026, 11, 30, 12, 35)
+        self.assertEqual(status, "placed")
+
+    def test_configured_entry_end_is_capped_not_shifted(self):
+        # An earlier configured end stays; a later one stops an hour before the close.
+        early = self._engine(2026, 11, 27, 10, 0)
+        early.struct.configs["daytrade_momentum_us_end"] = "11:00"
+        early.struct.configs["daytrade_regime_trend_us_end"] = "15:45"
+        self.assertEqual(early._momentum_params("US")["end"], "11:00")
+        self.assertEqual(early._regime_trend_params("US")["end"], "12:00")
+        normal = self._engine(2026, 11, 30, 10, 0)
+        normal.struct.configs["daytrade_regime_trend_us_end"] = "15:45"
+        self.assertEqual(normal._regime_trend_params("US")["end"], "15:45")
+
     def test_missing_table_keeps_the_16_close(self):
         engine = self._engine(2026, 11, 27, 15, 40)
         engine.struct.kis_api = None
         self.assertTrue(engine._is_market_close_approaching("US"))
         self.assertEqual(engine._us_moc_last_place_hhmm(), "15:30")
+
+    def test_missing_tz_data_does_not_raise(self):
+        # Without tz data ZoneInfo(...) raises; the stop/flatten checks must not.
+        def no_tzdata(name):
+            raise LookupError(f"No time zone found with key {name}")
+        engine = self._engine(2026, 11, 30, 15, 40)
+        with patch.object(daytrade_engine, "ZoneInfo", no_tzdata):
+            self.assertTrue(engine._is_market_close_approaching("US"))
+            self.assertEqual(engine._regime_trend_params("US")["end"], "15:00")
+        engine = self._engine(2026, 11, 27, 12, 40)
+        with patch.object(daytrade_engine, "ZoneInfo", no_tzdata):
+            self.assertTrue(engine._is_market_close_approaching("US"))
+            self.assertEqual(engine._momentum_params("US")["end"], "12:00")
 
 
 class _EarlyKis(_Kis):
@@ -146,12 +202,12 @@ class InfiniteBuyEarlyCloseTests(unittest.TestCase):
         return engine
 
     def test_reverse_moc_window_ends_at_12_40(self):
-        kis = _EarlyKis(datetime.datetime(2026, 11, 27, 12, 45))
+        kis = _EarlyKis(datetime.datetime(2026, 11, 27, 12, 40))
         result = self._engine(kis).run_firegate_reverse_moc()
         self.assertEqual(kis.sells, [])
         self.assertEqual(result["status"], "outside_window")
         self.assertIn("12:40", result["message"])
-        kis = _EarlyKis(datetime.datetime(2026, 11, 27, 12, 30))
+        kis = _EarlyKis(datetime.datetime(2026, 11, 27, 12, 39))
         self._engine(kis).run_firegate_reverse_moc()
         self.assertEqual(kis.sells, [("SOXL", 9, "MOC")])
 
@@ -174,6 +230,17 @@ class InfiniteBuyEarlyCloseTests(unittest.TestCase):
         self.assertEqual((window["window"], window["state"]), ("12:55-12:59 ET", "open"))
         window = engine.paper_loc_window(_kst_for_et(2026, 11, 30, 12, 56))
         self.assertEqual((window["window"], window["state"]), ("15:55-15:59 ET", "before"))
+
+    @unittest.skipIf(ZoneInfo is None, "zoneinfo unavailable")
+    def test_paper_loc_window_loads_the_broker_once_per_day(self):
+        loads = []
+        engine = self._engine(None)
+        engine._load_kis_api = lambda: loads.append(1) or SimpleNamespace(US_EARLY_CLOSES=dict(EARLY))
+        for minute in (50, 51, 52):
+            engine.paper_loc_window(_kst_for_et(2026, 11, 27, 12, minute))
+        self.assertEqual(len(loads), 1)
+        engine.paper_loc_window(_kst_for_et(2026, 11, 30, 12, 50))
+        self.assertEqual(len(loads), 2)
 
 
 class UsTrendHoldEarlyCloseTests(unittest.TestCase):

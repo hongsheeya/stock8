@@ -2371,11 +2371,25 @@ class Engine:
             return 0
         return 16 * 60 - close if 9 * 60 + 30 < close < 16 * 60 else 0
 
+    def _paper_loc_close_shift(self, et):
+        """_us_close_shift_minutes once per ET date: the window is checked on
+        every heartbeat, and loading the broker builds the order-policy
+        wrapper each time. Not cached while no broker is configured."""
+        day = et.date().isoformat()
+        cached = self.__dict__.get("_paper_loc_close_shift_cache")
+        if cached and cached[0] == day:
+            return cached[1]
+        kis_api = self._load_kis_api()
+        shift = self._us_close_shift_minutes(kis_api, et)
+        if kis_api is not None:
+            self.__dict__["_paper_loc_close_shift_cache"] = (day, shift)
+        return shift
+
     def paper_loc_window(self, now=None):
         """The once-a-day decision window shortly before the 16:00 ET close
         (12:55-12:59 on a 13:00 early close)."""
         et = self._us_eastern_now(now)
-        shift = self._us_close_shift_minutes(self._load_kis_api(), et)
+        shift = self._paper_loc_close_shift(et)
         start = self._config_minutes("paper_loc_decision_time_et", "15:55") - shift
         end = self._config_minutes("paper_loc_decision_end_et", "15:59") - shift
         minute = et.hour * 60 + et.minute
