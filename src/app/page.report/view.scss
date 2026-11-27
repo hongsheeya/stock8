@@ -1,0 +1,310 @@
+:host {
+    display: block;
+    height: 100%;
+}
+
+.rp-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.dx-tag.rp-wait {
+    color: var(--bn-primary);
+    background: color-mix(in srgb, var(--bn-primary) 12%, transparent);
+}
+
+// ---- (a) summary: a table on wide screens, stacked cards on phones
+.rp-summary {
+    display: flex;
+    flex-direction: column;
+}
+
+.rp-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 1.1fr) 84px minmax(0, 3fr) 52px 52px minmax(96px, 0.9fr);
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    padding: 10px 8px;
+    text-align: left;
+    font-size: 13px;
+    color: var(--bn-body);
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--bn-hairline);
+    cursor: pointer;
+
+    &:last-child {
+        border-bottom: 0;
+    }
+
+    &:hover:not(.rp-row-head) {
+        background: color-mix(in srgb, var(--bn-elevated) 55%, transparent);
+    }
+
+    .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+}
+
+.rp-row-head {
+    cursor: default;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bn-muted);
+}
+
+.rp-num small {
+    display: none;
+}
+
+.rp-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+
+    strong {
+        font-size: 14px;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+}
+
+.rp-mode {
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--bn-muted-strong);
+    background: var(--bn-elevated);
+
+    &.is-live {
+        color: var(--dx-up);
+        background: color-mix(in srgb, var(--dx-up) 12%, transparent);
+    }
+}
+
+.rp-reason {
+    min-width: 0;
+    line-height: 1.45;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    color: var(--bn-muted-strong);
+}
+
+.rp-legend {
+    margin: 10px 0 0;
+    line-height: 1.5;
+}
+
+// ---- (b) lane details
+.rp-lane {
+    padding: 0;
+}
+
+.rp-lane-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    padding: 14px 20px;
+    text-align: left;
+    background: none;
+    border: 0;
+    color: var(--bn-body);
+    cursor: pointer;
+}
+
+.rp-lane-reason {
+    min-width: 0;
+    font-size: 13px;
+    color: var(--bn-muted-strong);
+    overflow-wrap: anywhere;
+}
+
+.rp-toggle {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bn-muted);
+    white-space: nowrap;
+}
+
+.rp-lane-body {
+    padding: 0 20px 16px;
+}
+
+.rp-notes {
+    margin: 0 0 12px;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--bn-muted-strong);
+    list-style: disc;
+}
+
+.rp-block {
+    margin-top: 12px;
+
+    h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--bn-body);
+    }
+
+    .dx-table-wrap + .dx-table-wrap {
+        margin-top: 8px;
+    }
+}
+
+.rp-msg {
+    min-width: 220px;
+    max-width: 520px;
+    overflow-wrap: anywhere;
+}
+
+.rp-order td {
+    color: var(--bn-muted-strong);
+}
+
+// ---- (c) safety and (d) market
+.rp-safety-card {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bn-elevated) 50%, transparent);
+    min-width: 0;
+
+    h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    .dx-alert {
+        margin-bottom: 8px;
+    }
+}
+
+.rp-sub {
+    margin: 0 0 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--bn-body);
+}
+
+.rp-kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid var(--bn-hairline);
+
+    &:last-child {
+        border-bottom: 0;
+    }
+
+    > span:first-child {
+        flex: 0 0 auto;
+        color: var(--bn-muted);
+    }
+
+    > span:last-child {
+        min-width: 0;
+        text-align: right;
+        overflow-wrap: anywhere;
+    }
+
+    small {
+        display: block;
+        font-size: 11px;
+        color: var(--bn-muted);
+    }
+}
+
+.rp-early {
+    margin-left: 6px;
+}
+
+.rp-holds {
+    margin: 4px 0 8px;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+
+    li {
+        display: flex;
+        gap: 8px;
+        padding: 3px 0;
+        color: var(--bn-muted-strong);
+    }
+
+    strong {
+        flex: 0 0 auto;
+        color: var(--bn-body);
+    }
+}
+
+@media (max-width: 760px) {
+    .rp-row-head {
+        display: none;
+    }
+
+    .rp-row {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-areas:
+            "name name status"
+            "reason reason reason"
+            "buys sells pnl";
+        gap: 6px 10px;
+        padding: 12px 4px;
+
+        > :nth-child(1) { grid-area: name; }
+        > :nth-child(2) { grid-area: status; justify-self: end; }
+        > :nth-child(3) { grid-area: reason; }
+        > :nth-child(4) { grid-area: buys; text-align: left; }
+        > :nth-child(5) { grid-area: sells; text-align: left; }
+        > :nth-child(6) { grid-area: pnl; }
+    }
+
+    .rp-num small {
+        display: inline;
+        margin-right: 4px;
+        font-size: 11px;
+        color: var(--bn-muted);
+    }
+
+    .rp-lane-head {
+        grid-template-columns: minmax(0, 1fr) auto;
+        padding: 12px 14px;
+
+        .rp-lane-reason {
+            grid-column: 1 / -1;
+            grid-row: 2;
+        }
+    }
+
+    .rp-lane-body {
+        padding: 0 14px 14px;
+    }
+
+    .rp-msg {
+        min-width: 180px;
+    }
+
+    .rp-kv {
+        flex-direction: column;
+        gap: 2px;
+
+        > span:last-child {
+            text-align: left;
+        }
+    }
+}

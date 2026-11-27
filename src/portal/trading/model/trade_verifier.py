@@ -377,6 +377,21 @@ def evaluate(record, lookup, now, claimed=()):
     return update
 
 
+def _replace_with_retry(src, dst, attempts=8, delay=0.025):
+    """os.replace, retried briefly on PermissionError. On Windows a reader
+    holding dst open (the other server's daily report, antivirus, the search
+    indexer) makes the replace fail with WinError 5 for that moment, and a
+    lost save here silently drops a sent order's verification record."""
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay * (attempt + 1))
+
+
 class Ledger:
     """JSON ledger of one account: records (newest last) and acknowledgements."""
 
@@ -410,7 +425,7 @@ class Ledger:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False)
-            os.replace(tmp, self.path)
+            _replace_with_retry(tmp, self.path)
         except Exception:
             try:
                 os.unlink(tmp)

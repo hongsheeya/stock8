@@ -32,6 +32,20 @@ STATUS = sys.__dict__.setdefault("_stock8_coin_status", {})
 PROBE_STATUS = sys.__dict__.setdefault("_stock8_coin_probe_status", {})
 _LOG_SEEN = sys.__dict__.setdefault("_stock8_coin_log_seen", {})
 
+def _replace_with_retry(src, dst, attempts=8, delay=0.025):
+    """os.replace, retried briefly on PermissionError: on Windows a reader
+    holding dst open (the daily report, antivirus, the search indexer) makes
+    the replace fail with WinError 5 for that moment."""
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay * (attempt + 1))
+
+
 POLICY_KEY = "coin_policy_v1"
 ALL_MARKETS = ("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE")
 # DOGE: a 1 KRW tick at ~110 KRW costs ~0.9% per tick; off unless chosen.
@@ -146,7 +160,7 @@ class CoinEngine:
         tmp = self.state_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(self.state, handle, ensure_ascii=False)
-        os.replace(tmp, self.state_path)  # atomic: a crash never leaves half a ledger
+        _replace_with_retry(tmp, self.state_path)  # atomic: a crash never leaves half a ledger
 
     def _new_sleeve(self, cash):
         return {"cash": float(cash), "alloc_krw": float(cash), "volume": 0.0, "long": False, "entry_px": 0.0,
