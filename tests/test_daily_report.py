@@ -118,11 +118,15 @@ class Env:
                 self.runtime(mode, name, [rt("2026-11-26 23:00:00", "어제"), rt("2026-11-27 08:00:00", "자동청산 감시 대상이 없습니다.")])
         self.worker("2026-11-27 15:39:00")
 
-    def worker(self, last_run_at, result=None):
-        self.file("paper/daytrade/worker_status.json", {"last_run_at": last_run_at, "result": result if result is not None else {
+    def worker(self, last_run_at, result=None, owner=UID):
+        """The shared PAPER snapshot; owner=None writes the pre-11-27 format."""
+        payload = {"last_run_at": last_run_at, "result": result if result is not None else {
             "auto_cycle": {"message": "국내 주식 시장이 열려있지 않습니다."}, "exit_watch": {"message": "국장 종료"},
             "us_auto_cycle": {"message": "미국 주식 시장이 열려있지 않습니다."},
-            "loc_automation": {"status": "waiting", "message": "모의 LOC 대체 대기"}}})
+            "loc_automation": {"status": "waiting", "message": "모의 LOC 대체 대기"}}}
+        if owner is not None:
+            payload["owner_user_id"] = owner
+        self.file("paper/daytrade/worker_status.json", payload)
 
     def dt_root(self, mode):
         if mode == "LIVE":
@@ -473,11 +477,12 @@ class ScopeTests(unittest.TestCase):
 
     def test_worker_status_only_for_its_owner(self):
         env = Env(self)
-        env.file("paper/daytrade/worker_status.json", {"last_run_at": "2026-11-27 15:39:00",
-                                                       "result": {"auto_cycle": {"message": "국내 주식 시장이 열려있지 않습니다."}}})
         self.assertTrue(lane(env.build(), "daytrade_ks:PAPER")["worker"])
-        env.config["PAPER"]["paper_worker_owner_user_id"] = "other"
-        self.assertEqual(lane(env.build(), "daytrade_ks:PAPER")["worker"], [])
+        env.worker("2026-11-27 15:39:00", {"auto_cycle": {"message": "남의 워커 메시지"}}, owner="other")
+        item = lane(env.build(), "daytrade_ks:PAPER")
+        self.assertEqual(item["worker"], [])
+        self.assertIn("워커 상태 확인 불가 (다른 사용자 워커 기록)", item["notes"])
+        self.assertNotIn("남의 워커 메시지", json.dumps(item, ensure_ascii=False))
 
     def test_payload_carries_no_account_numbers_or_hashes(self):
         env = Env(self)
@@ -757,26 +762,78 @@ class WorkerLivenessTests(unittest.TestCase):
         self.assertEqual(lane(other, "infinite_buy:LIVE")["status"], report.WAITING)
         self.assertNotIn("남의 오류", json.dumps(other, ensure_ascii=False))
 
-    def test_live_infinite_buy_seen_from_paper_uses_run_records(self):
+    def test_live_infinite_buy_seen_from_paper_is_not_judged_by_run_records(self):
+        # A healthy day: reservations at 10:01 are the day's only
+        # IB_LOC_AUTOMATION_RUN row; later passes end as "already scheduled".
         env = Env(self)
         env.cycles["LIVE"] = [{"symbol": "SOXL", "status": "ACTIVE", "qty": 165}]
-        env.logs["LIVE"] = [log("IB_LOC_AUTOMATION_RUN", "2026-11-27 10:00:10", "LOC 자동 예약 점검 결과: {}", "SYSTEM",
-                                raw=json.dumps({"repeat": 40, "last_at": "2026-11-27 11:00:00"}))]
-        item = lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")
-        self.assertEqual(item["status"], report.UNKNOWN)
-        self.assertIn("LOC 자동 예약 실행 기록이 11:00 이후 없습니다", item["reason"])
-        env.logs["LIVE"][0]["raw_response"] = json.dumps({"repeat": 40, "last_at": "2026-11-27 13:58:00"})
-        self.assertEqual(lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")["status"], report.WAITING)
-        env.logs["LIVE"] = []
-        self.assertIn("오늘 LOC 자동 예약 실행 기록이 없습니다", lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")["reason"])
+        env.logs["LIVE"] = [log("IB_LOC_AUTOMATION_RUN", "2026-11-27 10:01:10", "LOC 자동 예약 점검 결과: {}", "SYSTEM"),
+                            log("IB_LOC_BUY_SCHEDULED", "2026-11-27 10:01:05", "LOC 매수 예약", "SOXL", "BUY")]
+        for logs in (env.logs["LIVE"], []):
+            env.logs["LIVE"] = logs
+            item = lane(env.build(now=self.AT_1400), "infinite_buy:LIVE")
+            self.assertEqual(item["status"], report.WAITING)
+            self.assertIn("LIVE 워커 상태는 LIVE 서버(3001)의 일일 보고에서 확인하세요", item["notes"])
+        # The LIVE day-trade lane seen from PAPER gets the same note.
+        self.fresh_runtime(env, "LIVE")
+        self.assertIn("LIVE 워커 상태는 LIVE 서버(3001)의 일일 보고에서 확인하세요",
+                      lane(env.build(now=self.AT_1400), "daytrade_ks:LIVE")["notes"])
 
-    def test_paper_infinite_buy_without_worker_state_is_unknown_in_window(self):
+    def test_paper_infinite_buy_of_a_non_owner_keeps_its_status_with_a_note(self):
         env = Env(self)
         env.cycles["PAPER"] = [{"symbol": "TQQQ", "status": "ACTIVE", "qty": 3}]
-        env.config["PAPER"]["paper_worker_owner_user_id"] = "other"
+        env.worker("2026-11-27 13:59:00", {"loc_automation": {"status": "error", "message": "남의 LOC 오류"}}, owner="other")
         item = lane(env.build(now=self.AT_1400), "infinite_buy:PAPER")
+        self.assertEqual(item["status"], report.WAITING)   # someone else's error is not this user's 막힘
+        self.assertIn("워커 상태 확인 불가 (다른 사용자 워커 기록)", item["notes"])
+
+    def test_another_users_fresh_snapshot_does_not_hide_a_stopped_worker(self):
+        env = Env(self)
+        env.worker("2026-11-27 14:59:30", owner="other")       # someone else's worker keeps writing
+        self.fresh_runtime(env, "PAPER", "2026-11-27 09:05:00")  # this user's engine went quiet
+        item = lane(env.build(now=datetime.datetime(2026, 11, 27, 15, 0)), "daytrade_ks:PAPER")
         self.assertEqual(item["status"], report.UNKNOWN)
-        self.assertIn("워커 상태 확인 불가", item["reason"])
+        self.assertIn("런타임 로그가 09:05 이후 끊겼습니다", item["reason"])
+        self.assertIn("워커 상태 확인 불가 (다른 사용자 워커 기록)", item["notes"])
+
+    def test_legacy_snapshot_without_owner_is_not_trusted(self):
+        env = Env(self)
+        env.worker("2026-11-27 09:10:00", {"auto_cycle": {"status": "error", "message": "옛 형식 오류"}}, owner=None)
+        self.fresh_runtime(env, "PAPER")
+        item = lane(env.build(now=self.AT_1400), "daytrade_ks:PAPER")
+        self.assertEqual(item["status"], report.WAITING)
+        self.assertTrue(any("소유자 표시가 없는 예전 워커 기록" in n for n in item["notes"]))
+        self.assertEqual(item["worker"], [])
+
+
+class WorkerSnapshotWriterTests(unittest.TestCase):
+    """struct._write_worker_status_snapshot stamps the owner (file only)."""
+
+    def _writer(self):
+        tree = ast.parse((ROOT / "src/portal/trading/model/struct.py").read_text(encoding="utf-8"))
+        struct_class = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Struct")
+        method = next(n for n in struct_class.body if isinstance(n, ast.FunctionDef) and n.name == "_write_worker_status_snapshot")
+        written = {}
+        fs = NS(makedirs=lambda path: None, write=NS(json=lambda path, data: written.update(path=path, data=data)))
+        ns = {"wiz": NS(project=NS(fs=lambda: fs)), "PAPER_MODE": True}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "struct.py", "exec"), ns)
+        return ns["_write_worker_status_snapshot"], written
+
+    def test_owner_is_added_and_existing_keys_kept(self):
+        write, written = self._writer()
+        payload = {"last_run_at": "2026-11-27 15:39:00", "result": {"auto_cycle": {"message": "x"}}}
+        write(NS(_current_user_id=lambda: "owner-1"), payload)
+        self.assertEqual(written["path"], "data/paper/daytrade/worker_status.json")
+        self.assertEqual(written["data"], {**payload, "owner_user_id": "owner-1"})
+        self.assertNotIn("owner_user_id", payload)  # the in-memory last_result is untouched
+
+    def test_owner_lookup_failure_still_writes(self):
+        write, written = self._writer()
+
+        def broken():
+            raise RuntimeError("no session")
+        write(NS(_current_user_id=broken), {"last_run_at": "t"})
+        self.assertEqual(written["data"], {"last_run_at": "t", "owner_user_id": ""})
 
 
 class LogVolumeAndTrimTests(unittest.TestCase):
@@ -796,15 +853,23 @@ class LogVolumeAndTrimTests(unittest.TestCase):
         self.assertIn("기록 과다", item["reason"])
         self.assertEqual(item["buys"], None)
 
-    def test_past_day_trimmed_line_counts_as_repeated(self):
+    def test_past_day_two_row_line_is_unknown_not_blocked(self):
+        # Two real failures and a trimmed run of 41 look the same afterwards.
         env = Env(self)
         message = "매수 주문 실패 [RIVN]: 모의투자 영업일이 아닙니다. (rt_cd=1, exchange=NASD, qty=52)"
         env.logs["PAPER"] = [log("DT_US_BUY_ERROR", "2026-11-26 00:11:34", message, "RIVN", "ERROR"),
                              log("DT_US_BUY_ERROR", "2026-11-26 05:37:50", message, "RIVN", "ERROR")]
         item = lane(env.build(day=datetime.date(2026, 11, 26)), "daytrade_us:PAPER")
-        self.assertEqual(item["status"], report.BLOCKED)
+        self.assertEqual(item["status"], report.UNKNOWN)
+        self.assertIn("로그 정리로 반복 횟수를 알 수 없습니다", item["reason"])
         self.assertIn("최소 2회 (00:11~05:37)", item["reason"])
-        self.assertTrue(any("로그 정리" in n for n in item["notes"]))
+        # Three rows left on a past day are still 막힘.
+        env.logs["PAPER"].append(log("DT_US_BUY_ERROR", "2026-11-26 03:00:00", message, "RIVN", "ERROR"))
+        self.assertEqual(lane(env.build(day=datetime.date(2026, 11, 26)), "daytrade_us:PAPER")["status"], report.BLOCKED)
+        env.cycles["PAPER"] = [{"symbol": "TQQQ", "status": "ACTIVE", "qty": 3}]
+        env.logs["PAPER"] = [log("IB_LOC_BUY_ERROR", "2026-11-26 10:00:00", "LOC 매수 예약 실패", "TQQQ"),
+                             log("IB_LOC_BUY_ERROR", "2026-11-26 11:00:00", "LOC 매수 예약 실패", "TQQQ")]
+        self.assertEqual(lane(env.build(day=datetime.date(2026, 11, 26)), "infinite_buy:PAPER")["status"], report.UNKNOWN)
         # Today the same two rows are just two errors.
         env.logs["PAPER"] = [log("DT_US_BUY_ERROR", "2026-11-27 00:11:34", message, "RIVN", "ERROR"),
                              log("DT_US_BUY_ERROR", "2026-11-27 05:37:50", message, "RIVN", "ERROR")]

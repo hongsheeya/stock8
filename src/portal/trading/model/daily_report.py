@@ -715,7 +715,7 @@ def collect_mode(mode, db_path, data_dir, uid, is_admin, day, decrypt=None, hard
     facts = {"mode": mode, "ok": False, "error": "", "account": {}, "switches": {}, "policy": None,
              "policy_error": "", "foreign": False, "logs": [], "cycles": [], "runtime": {}, "state": None,
              "state_status": "", "verification": None, "old_ledgers": [], "worker": None, "coin": None,
-             "usth": None, "paper_unavailable": None, "connection": {}, "ib_block_days": [], "ib_last_seen": None,
+             "usth": None, "paper_unavailable": None, "connection": {}, "ib_block_days": [], "worker_note": "",
              "hard_locked": bool(hard_locked), "dt_root": ""}
     db = ModeDb(db_path, uid, is_admin, decrypt)
     try:
@@ -785,12 +785,9 @@ def _collect_db(facts, db, mode, data_dir, uid, is_admin, day):
     start, end = _day_bounds(day)
     facts["logs"] = db.scoped_rows("trade_log", f"created >= ? AND created < ? AND {_LOG_EVENT_SQL}",
                                    [start, end] + list(_NAMED_EVENTS), columns=_LOG_COLUMNS)
-    seen = db.scoped_rows(
-        "trade_log", "created >= ? AND created < ? AND substr(event_type, 1, 3) = 'IB_'", (start, end),
-        columns="max(created) AS created, max(CASE WHEN json_valid(raw_response) "
-                "THEN json_extract(raw_response, '$.last_at') END) AS last_at", order="")
-    stamps = [ts for ts in (_parse_ts((seen[0] if seen else {}).get(k)) for k in ("created", "last_at")) if ts]
-    facts["ib_last_seen"] = max(stamps) if stamps else None
+    # No IB heartbeat from trade_log: IB_LOC_AUTOMATION_RUN is written only
+    # when a day's reservations are first attempted, verified or forced; a
+    # healthy day's later passes end as "already scheduled" without a row.
     facts["cycles"] = db.scoped_rows(
         "trading_cycle", "status IN ('ACTIVE', 'HOLDING', 'PENDING_EXTENSION')", (),
         columns="symbol, status, cycle_number, current_round, division_count, total_qty, avg_price, updated",
@@ -856,11 +853,22 @@ def _collect_db(facts, db, mode, data_dir, uid, is_admin, day):
             facts["old_ledgers"].append(ledger)
 
     if not live:
-        owner = str(db.cfg("paper_worker_owner_user_id", "") or "")
-        if owner and owner == uid:
-            data, status = read_json_file(os.path.join(data_root, "daytrade", "worker_status.json"))
-            facts["worker"] = {"status": status if isinstance(data, dict) or status != "ok" else "error",
-                               "data": data if isinstance(data, dict) else {}}
+        # One shared file that every PAPER owner's worker overwrites: only a
+        # snapshot stamped with this user as owner describes this user's
+        # worker. Anything else is a note, never a status (it could turn
+        # someone else's error into 막힘, or hide a stopped worker as 대기).
+        data, status = read_json_file(os.path.join(data_root, "daytrade", "worker_status.json"))
+        owner = str(data.get("owner_user_id", "") or "") if isinstance(data, dict) else ""
+        if status == "ok" and isinstance(data, dict) and owner == uid:
+            facts["worker"] = {"status": "ok", "data": data}
+        elif status == "missing":
+            facts["worker_note"] = "워커 상태 확인 불가 (worker_status.json 없음)"
+        elif status != "ok" or not isinstance(data, dict):
+            facts["worker_note"] = "워커 상태 확인 불가 (worker_status.json 읽기 실패)"
+        elif owner:
+            facts["worker_note"] = "워커 상태 확인 불가 (다른 사용자 워커 기록)"
+        else:
+            facts["worker_note"] = "워커 상태 확인 불가 (소유자 표시가 없는 예전 워커 기록 — 다른 사용자 것일 수 있음)"
 
     if live:
         raw = db._raw("coin_policy_v1")
@@ -1022,17 +1030,17 @@ def worker_view(facts, lane_name, process=None):
     """The lane's worker state: display rows, errors (-> 막힘), unknown
     states (-> 확인 불가 inside the window) and the latest heartbeat.
 
-    Sources: PAPER data/paper/daytrade/worker_status.json (only for its
-    owner), and on the LIVE server its own per-account job registry
-    (process["rows"]). Without either, known is False and the caller falls
-    back to log activity."""
-    view = {"rows": [], "known": False, "errors": [], "unknown": [], "heartbeat": None, "source": ""}
+    Sources: PAPER data/paper/daytrade/worker_status.json (only a snapshot
+    stamped with this user as owner_user_id), and on the LIVE server its own
+    per-account job registry (process["rows"]). Without either, known is
+    False, `note` says why, and the status is not changed by worker state
+    (day-trade lanes still check their own runtime log)."""
+    view = {"rows": [], "known": False, "errors": [], "unknown": [], "heartbeat": None, "source": "", "note": ""}
     jobs = LANE_JOBS.get(lane_name, ())
     worker = facts.get("worker")
-    if facts["mode"] == "PAPER" and worker is not None:
-        if worker["status"] != "ok":
-            view["rows"].append({"job": "PAPER 워커", "status": "확인 불가", "at": "",
-                                 "message": "worker_status.json 없음" if worker["status"] == "missing" else "worker_status.json 읽기 실패"})
+    if facts["mode"] == "PAPER":
+        if worker is None:
+            view["note"] = facts.get("worker_note") or "워커 상태 확인 불가"
         else:
             data = worker["data"]
             result = data.get("result") if isinstance(data.get("result"), dict) else {}
@@ -1077,6 +1085,8 @@ def worker_view(facts, lane_name, process=None):
             view["unknown"].append("LIVE 워커가 이 레인을 실행하고 있지 않습니다")
         if process.get("error"):
             view["unknown"].append("LIVE 워커 배정 오류: " + clean_message(process["error"])[:160])
+    elif facts["mode"] == "LIVE" and not facts.get("foreign"):
+        view["note"] = "LIVE 워커 상태는 LIVE 서버(3001)의 일일 보고에서 확인하세요"
     return view
 
 
@@ -1102,11 +1112,8 @@ def _quiet(kind, seen, minutes, now, source=""):
     if kind == "worker":
         return (f"{source} 응답 없음 — 마지막 기록 {last}, 장중 {minutes}분째 기록 없음" if seen
                 else f"{source} 기록이 없습니다 (장중 {minutes}분째)")
-    if kind == "runtime":
-        return (f"런타임 로그가 {last} 이후 끊겼습니다 (장중 {minutes}분째 기록 없음) — 워커가 멈췄을 수 있습니다" if seen
-                else f"런타임 로그 기록이 없습니다 (장중 {minutes}분째)")
-    return (f"워커 상태 확인 불가: LOC 자동 예약 실행 기록이 {last} 이후 없습니다 ({minutes}분째)" if seen
-            else f"워커 상태 확인 불가: 오늘 LOC 자동 예약 실행 기록이 없습니다 ({minutes}분째)")
+    return (f"런타임 로그가 {last} 이후 끊겼습니다 (장중 {minutes}분째 기록 없음) — 워커가 멈췄을 수 있습니다" if seen
+            else f"런타임 로그 기록이 없습니다 (장중 {minutes}분째)")
 
 
 def _stale_note(view, now):
@@ -1198,7 +1205,18 @@ def _count_fills(lane, fills):
 
 
 def _repeated_error_blocks(groups):
-    return [g for g in groups if g["count"] >= REPEATED_ERROR_MIN or g.get("maybe_trimmed")]
+    return [g for g in groups if g["count"] >= REPEATED_ERROR_MIN]
+
+
+def _trimmed_groups(groups):
+    """Past-day lines left with exactly two rows: two real failures, or the
+    first and last of many after the log trim. Not decidable, so not 막힘."""
+    return [g for g in groups if g.get("maybe_trimmed") and g["count"] < REPEATED_ERROR_MIN]
+
+
+def _trimmed_reason(groups):
+    trimmed = _trimmed_groups(groups)
+    return f"로그 정리로 반복 횟수를 알 수 없습니다: {group_text(trimmed[0])}" if trimmed else ""
 
 
 def _dt_positions(facts, market):
@@ -1273,16 +1291,19 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
                  feature flag OFF (LIVE), LIVE order policy lane false or
                  missing, or the auto switch OFF.
     3. 막힘      PAPER mock account unavailable flag; runtime "계좌 주문을
-                 거부" (account halt); the same *_ERROR message >= 3 times
-                 (on a past day also a line trimmed to its first and last
-                 row); runtime "단타 신규 진입 차단" >= 3 times, or at least
-                 once on a day without buys; today, a worker job in error.
-    4. 확인 불가  today: the runtime log is missing/unreadable, or has nothing
-                 today although the market opened 15+ min ago; inside the
-                 session the worker heartbeat or the runtime log has been
-                 silent for 15+ min, or a LIVE job is missing/account_changed.
-                 Fills do not override this. A past date whose log was
-                 rotated out is 확인 불가 only without fills on a trading day.
+                 거부" (account halt); the same *_ERROR message >= 3 times;
+                 runtime "단타 신규 진입 차단" >= 3 times, or at least once
+                 on a day without buys; today, a worker job in error.
+    4. 확인 불가  a past day's error line left with two rows (the log trim
+                 keeps first and last, so 2 or many is unknown); today: the
+                 runtime log is missing/unreadable, or has nothing today
+                 although the market opened 15+ min ago; inside the session
+                 the worker heartbeat (own worker state only) or the runtime
+                 log has been silent for 15+ min, or a LIVE job is
+                 missing/account_changed. Fills do not override this.
+                 Unreadable worker state (other user's snapshot, the other
+                 server) is a note only. A past date whose log was rotated
+                 out is 확인 불가 only without fills on a trading day.
     5. 동작      at least one fill that day.
     6. 대기      market closed / holiday / before open, or no signal.
     """
@@ -1339,6 +1360,8 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
         if fills:
             lane["notes"].append(f"이날 체결 {len(fills)}건 (스위치·정책은 현재 값 기준)")
         return _set(lane, OFF, off_reason)
+    if is_today and view["note"]:
+        lane["notes"].append(view["note"])
 
     blocks = []
     unavailable = _paper_unavailable_block(facts, day) if mode == "PAPER" else ""
@@ -1350,7 +1373,7 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
     repeated = _repeated_error_blocks(error_groups)
     blocks.extend(group_text(g) for g in repeated)
     if market == "US":
-        lane["notes"].extend(_us_holiday_notes(repeated, calendar))
+        lane["notes"].extend(_us_holiday_notes(repeated + _trimmed_groups(error_groups), calendar))
     entry_blocks = [g for g in rt_groups if g["message"].startswith(ENTRY_BLOCK_PREFIX)]
     entry_total = sum(g["count"] for g in entry_blocks)
     if entry_blocks and (entry_total >= ENTRY_BLOCK_MIN or lane["buys"] == 0):
@@ -1364,10 +1387,13 @@ def build_daytrade_lane(facts, market, day, now, is_today, calendar, is_admin, p
             lane["notes"].append(f"차단 사유가 있는 날에도 체결 {len(fills)}건이 있었습니다")
         lane["notes"].extend(f"추가 차단 사유: {b}" for b in blocks[1:3])
         return _set(lane, BLOCKED, blocks[0])
+    trimmed = _trimmed_reason(error_groups)
+    if trimmed:
+        return _set(lane, UNKNOWN, trimmed)
 
     if not facts.get("dt_root"):
         return _set(lane, UNKNOWN, "런타임 파일 위치(계좌 해시)를 확인하지 못했습니다")
-    closed =calendar.us_closed_all_day(day) if market == "US" else calendar.krx_closed_reason(day)
+    closed = calendar.us_closed_all_day(day) if market == "US" else calendar.krx_closed_reason(day)
     fill_note = f"체결 {len(fills)}건은 거래 기록으로 확인했습니다" if fills else ""
     if is_today:
         expected = calendar.log_expected_since(lane_name, now)
@@ -1437,15 +1463,17 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process=None):
                  OFF, or loc_auto_schedule_enabled OFF (LIVE and PAPER).
     3. 막힘      FireGate authority/link block events that day, reservation
                  receipt unknown (kis_reservation_pending, today), PAPER mock
-                 account unavailable, the same IB_*_ERROR message >= 3 times
-                 (past days: also a line trimmed to two rows), or today a
-                 worker job in error (PAPER loc_automation, LIVE loc/sync).
-    4. 확인 불가  today with an active cycle, inside the LOC window (10:00 to
-                 23:20/22:20 KST on a US trading day): the worker heartbeat is
-                 silent 15+ min, a LIVE job is missing/account_changed, or,
-                 without worker state, no IB run record for 15+ min (LIVE:
-                 IB_LOC_AUTOMATION_RUN; PAPER has no such record, so 워커
-                 상태 확인 불가).
+                 account unavailable, the same IB_*_ERROR message >= 3 times,
+                 or today a worker job in error (PAPER loc_automation, LIVE
+                 loc/sync).
+    4. 확인 불가  a past day's error line left with two rows (log trim);
+                 today with an active cycle, inside the LOC window (10:00 to
+                 23:20/22:20 KST on a US trading day): the own worker state's
+                 heartbeat is silent 15+ min, or a LIVE job is missing /
+                 account_changed. Without own worker state (the other server,
+                 another user's PAPER snapshot) only a note is added: trade_log
+                 has no heartbeat (IB_LOC_AUTOMATION_RUN is written only on a
+                 day's first attempt, verification or a forced run).
     5. 동작      a fill logged that day (IB_*_FILLED).
     6. 대기      no active cycle, US holiday, or no fill yet (reservations
                  placed/kept are shown in the reason).
@@ -1493,6 +1521,8 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process=None):
         if fills:
             lane["notes"].append(f"이날 체결 {len(fills)}건 (스위치·정책은 현재 값 기준)")
         return _set(lane, OFF, off_reason)
+    if is_today and view["note"]:
+        lane["notes"].append(view["note"])
 
     blocks = []
     unavailable = _paper_unavailable_block(facts, day) if mode == "PAPER" else ""
@@ -1522,17 +1552,14 @@ def build_infinite_buy_lane(facts, day, now, is_today, calendar, process=None):
     if blocks:
         lane["notes"].extend(f"추가 차단 사유: {b}" for b in blocks[1:3])
         return _set(lane, BLOCKED, blocks[0])
-    if is_today and facts.get("cycles") and not cooldown:
+    trimmed = _trimmed_reason(error_groups)  # any block event is already 막힘 above
+    if trimmed:
+        return _set(lane, UNKNOWN, trimmed)
+    if is_today and facts.get("cycles") and not cooldown and view["known"]:
         active = calendar.active_window("infinite_buy", now)
         reasons = list(view["unknown"]) if active else []
-        if view["known"]:
-            beat = view["heartbeat"]
-            reasons.append(_quiet("worker", beat, silence(beat, active, now), now, view["source"]))
-        elif mode == "LIVE":
-            seen = facts.get("ib_last_seen")
-            reasons.append(_quiet("ib_log", seen, silence(seen, active, now), now))
-        elif active:
-            reasons.append("워커 상태 확인 불가 (이 계정의 PAPER 워커 기록이 없습니다)")
+        beat = view["heartbeat"]
+        reasons.append(_quiet("worker", beat, silence(beat, active, now), now, view["source"]))
         reasons = [r for r in reasons if r]
         if reasons:
             if fills:
@@ -1627,6 +1654,9 @@ def build_coin_lane(facts, day, now, is_today, coin_hard_locked=False, hard_lock
     blocks.extend(group_text(g) for g in _repeated_error_blocks(error_groups))
     if blocks:
         return _set(lane, BLOCKED, blocks[0])
+    trimmed = _trimmed_reason(error_groups)
+    if trimmed:
+        return _set(lane, UNKNOWN, trimmed)
     if fills:
         return _set(lane, RUNNING, f"{'섀도 ' if mode_name == 'shadow' else ''}매수 {lane['buys']} · 매도 {lane['sells']}")
     return _set(lane, WAITING, "섀도 모드 · 진입 신호 대기" if mode_name == "shadow" else "진입 신호 대기")
@@ -1682,6 +1712,9 @@ def build_usth_lane(facts, day, now, is_today, calendar):
     blocks.extend(group_text(g) for g in _repeated_error_blocks(error_groups))
     if blocks:
         return _set(lane, BLOCKED, blocks[0])
+    trimmed = _trimmed_reason(error_groups)
+    if trimmed:
+        return _set(lane, UNKNOWN, trimmed)
     if fills:
         return _set(lane, RUNNING, f"매수 {lane['buys']} · 매도 {lane['sells']} 체결")
     closed = calendar.us_closed_all_day(day)

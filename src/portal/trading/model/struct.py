@@ -1749,12 +1749,22 @@ class Struct:
         return max(5, value)
 
     def _write_worker_status_snapshot(self, payload):
+        # 11-27: every PAPER owner's worker overwrites this one file, so the
+        # snapshot names its owner (the worker runs in that owner's session);
+        # the daily report trusts it only for that user. File only: the
+        # in-memory last_result keeps its keys.
+        try:
+            owner = str(self._current_user_id() or "")
+        except Exception:
+            owner = ""
         try:
             import json as _json
             fs = wiz.project.fs()
             data_root = "data/paper/daytrade" if PAPER_MODE else "data/live/daytrade"
             fs.makedirs(data_root)
             safe_payload = _json.loads(_json.dumps(payload or {}, ensure_ascii=False, default=str))
+            if isinstance(safe_payload, dict):
+                safe_payload["owner_user_id"] = owner
             fs.write.json(f"{data_root}/worker_status.json", safe_payload)
         except Exception:
             pass

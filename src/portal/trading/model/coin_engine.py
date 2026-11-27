@@ -47,7 +47,7 @@ def _replace_with_retry(src, dst, attempts=8, delay=0.025):
 
 
 POLICY_KEY = "coin_policy_v1"
-ALL_MARKETS =("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE")
+ALL_MARKETS = ("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE")
 # DOGE: a 1 KRW tick at ~110 KRW costs ~0.9% per tick; off unless chosen.
 DEFAULT_MARKETS = ("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
 MODES = ("off", "shadow", "live")
