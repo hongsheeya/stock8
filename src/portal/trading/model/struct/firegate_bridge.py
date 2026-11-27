@@ -1085,7 +1085,11 @@ def _push_local_to_firegate(bridge, trading, symbol_filter=""):
                 if not tx:
                     skipped_trades += 1
                     continue
-                _, portfolio = bridge.add_transaction_and_update_portfolio(portfolio, tx)
+                if booked_broker_order(existing_transactions, tx):
+                    skipped_trades += 1
+                    continue
+                saved_tx, portfolio = bridge.add_transaction_and_update_portfolio(portfolio, tx)
+                existing_transactions.append({**tx, **(saved_tx if isinstance(saved_tx, dict) else {})})
                 pushed_trades += 1
                 cycle_pushed_trades += 1
 
@@ -1296,6 +1300,9 @@ def transaction_from_cycle_trade(trade, portfolio_id, portfolio=None):
         "orderType": str((trade or {}).get("order_type", "")),
         "strategyType": str((trade or {}).get("strategy_type", "")),
     }
+    broker_order_no = str((trade or {}).get("broker_order_no", "") or "").strip()
+    if broker_order_no:
+        tx["brokerOrderNo"] = broker_order_no
     if tx["type"] == "buy" and str(tx.get("strategyType", "")).upper() == "CRASH_BUY":
         tx["tDelta"] = 0
     elif tx["type"] == "buy" and portfolio:
@@ -1328,6 +1335,27 @@ def transaction_document_id(tx):
     source_trade_id = str((tx or {}).get("sourceTradeId", "") or "").strip()
     if source_trade_id and "/" not in source_trade_id:
         return source_trade_id[:140]
+    return None
+
+
+def booked_broker_order(transactions, tx):
+    """A transaction already booking this broker fill (same order number, side
+    and size), whatever local trade id it came from. 11-27: the SOXL relink
+    added broker fills that have no local row; a later broker re-sync gives
+    them a new cycle_trade id, which the sourceTradeId check cannot see."""
+    order_no = str((tx or {}).get("brokerOrderNo", "") or "").strip().lstrip("0")
+    if not order_no:
+        return None
+    tx_day = _parse_firegate_datetime((tx or {}).get("date"), None)
+    for row in transactions or []:
+        if (str(row.get("brokerOrderNo", "") or "").strip().lstrip("0") == order_no
+                and str(row.get("type", "")).lower() == str(tx.get("type", "")).lower()
+                and _safe_int(row.get("size"), 0) == _safe_int(tx.get("size"), -1)):
+            row_day = _parse_firegate_datetime(row.get("date"), None)
+            # Order numbers are only unique within a few days at KIS.
+            if tx_day is not None and row_day is not None and abs((tx_day - row_day).days) > 3:
+                continue
+            return row
     return None
 
 
@@ -1706,7 +1734,10 @@ def sync_cycle_trade(struct, cycle, trade, force=False):
         tx = transaction_from_cycle_trade(trade, portfolio.get("id"), portfolio=portfolio)
         if not tx:
             return {"synced": False, "reason": "invalid_trade"}
-        if matching_manual_transactions(bridge.list_transactions(portfolio.get('id')), tx):
+        portfolio_transactions = bridge.list_transactions(portfolio.get('id'))
+        if booked_broker_order(portfolio_transactions, tx):
+            return {"synced": False, "reason": "duplicate_broker_order", "portfolio_id": portfolio.get("id")}
+        if matching_manual_transactions(portfolio_transactions, tx):
             raise FireGateBridgeError('동일 날짜·수량·가격의 수동 입력이 있습니다. 중복 반영 방지를 위해 FireGate 자동 추가를 보류합니다. 체결 대조가 필요합니다.')
         saved_tx, updated = bridge.add_transaction_and_update_portfolio(portfolio, tx)
         return {
