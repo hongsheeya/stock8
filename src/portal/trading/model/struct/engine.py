@@ -1416,6 +1416,16 @@ class Engine:
         buy_qty = max(0, int(math.floor(quarter / buy_price))) if buy_price > 0 else 0
         state = str(cycle.get("_firegate_reverse_state", "") or "NORMAL")
         active = state == "ACTIVE"
+        price_unknown = bool(cycle.get("_firegate_price_error")) or (
+            "_firegate_five_day_avg" in cycle and float(cycle.get("_firegate_five_day_avg") or 0) <= 0)
+        if active and price_unknown:
+            # The ACTIVE lines and the re-exhausted MOC both hang on the 5-day
+            # average. Without it the stored star (11-27 SOXL: 94.0 from 10-27,
+            # price ~32) would call a $160 seed re-exhausted and sell a tenth
+            # at the close. Hold instead; the next read decides.
+            reason = str(cycle.get("_firegate_price_error") or "FireGate 5일 평균 없음")[:120]
+            return {"state": state, "state_name": "리버스모드 (5일 평균 미확인)", "moc_qty": 0, "star": 0,
+                    "sells": [], "buys": [], "hold_reason": f"FireGate 5일 평균을 읽지 못해 리버스 주문 보류: {reason}"}
         re_exhausted = active and star > 0 and buy_price > 0 and int(math.floor(remaining / 4 / buy_price)) < 1
         if not active or re_exhausted or buy_price <= 0:
             return {"state": state, "state_name": "리버스모드 (재소진)" if re_exhausted else "리버스모드 (첫날)",
@@ -1486,6 +1496,11 @@ class Engine:
             if not merged:
                 continue
             plan = self.firegate_reverse_plan(merged)
+            if plan and plan.get("hold_reason"):
+                msg = f"{symbol} 리버스 MOC 보류: {plan['hold_reason']}"
+                self._log_event(symbol, cycle.get("id", ""), "REVERSE_MOC_SKIPPED", action=ACTION_SELL, message=msg)
+                results.append({"symbol": symbol, "status": "skipped", "message": msg})
+                continue
             if not plan or int(plan.get("moc_qty") or 0) <= 0:
                 continue
             results.append(self._place_reverse_moc(kis_api, merged, plan, session))
@@ -1576,7 +1591,8 @@ class Engine:
                 "order_type": "LOC",
                 "order_qty": int(primary.get("order_qty", 0) or 0),
                 "buy_orders": buys,
-                "reason": f"FireGate {reverse['state_name']}" + (" — 매수 없음 (MOC 매도일)" if reverse["moc_qty"] else ""),
+                "reason": reverse.get("hold_reason")
+                or f"FireGate {reverse['state_name']}" + (" — 매수 없음 (MOC 매도일)" if reverse["moc_qty"] else ""),
             }
         current_round = int(cycle["current_round"])
         division_count = int(cycle["division_count"])
@@ -4801,7 +4817,8 @@ class Engine:
                 sell_orders = reverse["sells"]
                 if not sell_orders:
                     skipped.append({"symbol": symbol, "cycle_id": cycle["id"], "label": "FireGate MOC", "price": 0,
-                                    "reason": f"FireGate {reverse['state_name']}: MOC 매도 {reverse['moc_qty']}주는 미국 장중에 접수"})
+                                    "reason": reverse.get("hold_reason")
+                                    or f"FireGate {reverse['state_name']}: MOC 매도 {reverse['moc_qty']}주는 미국 장중에 접수"})
                     continue
             else:
                 sell_orders = self._firegate_v4_sell_orders(cycle)

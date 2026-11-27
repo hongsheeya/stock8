@@ -30,6 +30,7 @@ KIS는 읽기 조회만 쓴다(GET inquire-ccnl / inquire-balance).
 import argparse
 import copy
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -52,8 +53,12 @@ STATE_KEYS = ("holdingQty", "avgPrice", "totalBuy", "totalSell", "tValue", "reve
 KIS_READ_PATHS = (
     "/uapi/overseas-stock/v1/trading/inquire-ccnl",
     "/uapi/overseas-stock/v1/trading/inquire-balance",
+    "/uapi/overseas-stock/v1/trading/order-resv-list",
 )
 PRICE_TOLERANCE = 0.006
+# FireGate's average carries the 0.25% commission KIS leaves out; a missing or
+# extra fill moves it much more than that.
+AVG_TOLERANCE_PCT = 1.0
 DATE_TOLERANCE_DAYS = 3
 
 
@@ -93,9 +98,11 @@ def _order_key(order_no):
 
 
 def redact(text):
-    """Firestore errors echo document paths (users/<email>/...); mask those and
-    anything shaped like an account number (12345678-01)."""
+    """Firestore errors echo document paths (users/<email>/...); a requests
+    error echoes the KIS URL with CANO/ACNT_PRDT_CD. Mask those and anything
+    shaped like an account number (12345678-01)."""
     text = re.sub(r"[\w.+-]+(?:@|%40)[\w.-]+", "<email>", str(text or ""))
+    text = re.sub(r"(CANO|ACNT_PRDT_CD)=[^&\s]*", r"\1=<account>", text)
     return re.sub(r"(?<![0-9])[0-9]{8}-[0-9]{2}(?![0-9])", "<account>", text)
 
 
@@ -400,8 +407,20 @@ def reconcile_quantities(kis_sources):
     return values.pop(), []
 
 
+def plan_digest(plan):
+    """8 hex chars over every transaction and the final state, so a confirm
+    phrase copied from one plan run only applies that exact plan."""
+    final = plan["final"]
+    material = [[t.get("_doc_id"), t.get("type"), t.get("size"), t.get("price"), t.get("tDelta")]
+                for t in plan["transactions"]]
+    material.append([final.get(k) for k in ("holdingQty", "avgPrice", "totalBuy", "totalSell", "tValue",
+                                            "reverseState", "reverseModeStarPrice")])
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:8]
+
+
 def confirm_phrase(plan, cycle_id):
-    return f"{plan['method']} {SYMBOL} {plan['portfolio_id']} {plan['final'].get('holdingQty')} {cycle_id[:6]}"
+    return (f"{plan['method']} {SYMBOL} {plan['portfolio_id']} {plan['final'].get('holdingQty')} "
+            f"{cycle_id[:6]} {plan_digest(plan)}")
 
 
 def apply_refusals(plan, context, confirm_text):
@@ -410,9 +429,19 @@ def apply_refusals(plan, context, confirm_text):
     cycle_id = context["cycle_id"]
     kis_qty = context.get("kis_qty")
     if not context.get("kis_qty_verified"):
-        reasons.append("KIS 보유수량이 이번 실행의 KIS 조회나 --kis-qty 입력으로 확인되지 않음")
+        reasons.append("이번 실행에서 KIS 잔고·체결을 직접 조회하지 않음(--no-kis-read/--fills-json으로는 적용 불가)")
     if kis_qty is None or int(plan["final"].get("holdingQty", -1)) != int(kis_qty):
         reasons.append(f"최종 FireGate 보유 {plan['final'].get('holdingQty')}주 ≠ KIS 보유 {kis_qty}주")
+    kis_avg = context.get("kis_avg")
+    final_avg = float(plan["final"].get("avgPrice", 0) or 0)
+    if kis_avg and abs(final_avg - kis_avg) / kis_avg * 100 > AVG_TOLERANCE_PCT:
+        reasons.append(f"최종 평단 {final_avg} vs KIS {kis_avg}: {AVG_TOLERANCE_PCT}% 넘게 다름")
+    kis_only = [t for t in plan["transactions"] if t.get("commissionUnverified") and not t.get("rebuiltFromTransactionId")]
+    if kis_only and not context.get("kis_only_covered"):
+        reasons.append(f"로컬 기록이 없는 KIS 체결 {len(kis_only)}건: KIS 전체 종목 보기나 예약주문 이력으로 "
+                       "빠진 체결이 없는지 확인하지 못함")
+    for warning in plan.get("warnings") or []:
+        reasons.append(f"재생 경고: {warning}")
     running = managed_running(context["portfolios"])
     target = context["target"]
     if plan["method"] == "A":
@@ -447,10 +476,18 @@ def apply_refusals(plan, context, confirm_text):
 class GuardedFireGate(fg.FireGateBridge):
     """GET only unless writes are switched on; never DELETE."""
 
-    def __init__(self, email, id_token):
+    def __init__(self, email, id_token, refresh_token=""):
         super().__init__(email, id_token)
         self.allow_writes = False
         self.write_log = []
+        self._refresh_token = refresh_token
+
+    def ensure_fresh(self, grace_sec=900):
+        """Refresh the id token in memory before writing, so a long KIS read
+        does not leave the writes to fail half-way on a 401."""
+        if self._refresh_token and fg._id_token_expired_or_stale(self.id_token, grace_sec):
+            data = fg.refresh_id_token(self._refresh_token)
+            self.id_token = data.get("id_token") or data.get("idToken") or self.id_token
 
     def _request(self, method, url, body=None, params=None):
         method = str(method).upper()
@@ -516,12 +553,33 @@ def _verify_state(actual, expected, cycle_id, label):
         raise RelinkRefused(f"{label} 검증 실패: " + "; ".join(problems))
 
 
+BASE_KEYS = ("holdingQty", "avgPrice", "totalBuy", "totalSell", "tValue", "reverseMode", "reverseState",
+             "reverseModeStarPrice", "sourceCycleId", "isRunning", "stock8Archived", "updatedAt")
+
+
+def _assert_unchanged(client, base, base_tx_ids, planned_ids=()):
+    """Re-read right before the state PATCH: the plan was built from a read
+    taken before the (minutes-long) KIS queries. A FireGate edit, an app
+    auto-exit PATCH or a new transaction since then means the plan is stale."""
+    fresh = client.get_portfolio(base["id"])
+    changed = [k for k in BASE_KEYS if fresh.get(k) != base.get(k)]
+    ids_now = {str(t.get("_doc_id") or t.get("id")) for t in client.list_transactions(base["id"])}
+    expected = {str(i) for i in base_tx_ids} | {str(i) for i in planned_ids}
+    if changed or ids_now != expected:
+        raise RelinkRefused(f"계획 이후 포트폴리오 {base['id']}가 바뀜(필드 {changed}, 거래 "
+                            f"+{sorted(ids_now - expected)[:5]} -{sorted(expected - ids_now)[:5]}) — 상태는 쓰지 않음, 다시 실행")
+
+
 def apply_a(client, plan, context, progress):
     target_id = plan["portfolio_id"]
-    changes = a_portfolio_changes(context["target"], plan, context["cycle_id"], context["local_trade_ids"])
+    base = context["target"]
+    base_tx_ids = [t.get("_doc_id") or t.get("id") for t in context["fg_transactions"]]
+    changes = a_portfolio_changes(base, plan, context["cycle_id"], context["local_trade_ids"])
+    getattr(client, "ensure_fresh", lambda: None)()
     client.allow_writes = True
     try:
         _create_planned_transactions(client, plan, progress)
+        _assert_unchanged(client, base, base_tx_ids, [t["_doc_id"] for t in plan["transactions"]])
         # One PATCH: the engine sees the old state with the old link, or the new
         # state with the new link, never a half-updated portfolio.
         client.update_portfolio(target_id, changes)
@@ -538,20 +596,27 @@ def apply_b(client, plan, context, progress):
     new = plan["new_portfolio"]
     new_id = plan["portfolio_id"]
     old_id = context["target"]["id"]
+    base_tx_ids = [t.get("_doc_id") or t.get("id") for t in context["fg_transactions"]]
+    getattr(client, "ensure_fresh", lambda: None)()
     client.allow_writes = True
     try:
         existing = {str(p.get("id")): p for p in client.list_portfolios()}
         if str(new_id) not in existing:
-            client.create_portfolio({k: v for k, v in new.items() if not k.startswith("_")}, doc_id=new_id)
-            progress.record("portfolio_created", portfolio_id=new_id, isRunning=False)
+            # Archived while it is built: the pull, find_portfolio and the
+            # running check all skip stock8Archived, so a half-entered history
+            # never reaches the local cycle (isRunning=False alone would not).
+            client.create_portfolio({**{k: v for k, v in new.items() if not k.startswith("_")},
+                                     "stock8Archived": True}, doc_id=new_id)
+            progress.record("portfolio_created", portfolio_id=new_id, isRunning=False, stock8Archived=True)
         elif str(existing[str(new_id)].get("relinkRepairId", "")) != REPAIR_ID:
             raise RelinkRefused(f"새 포트폴리오 ID {new_id}가 다른 기록에 쓰이고 있음")
         _create_planned_transactions(client, plan, progress)
         final = plan["final"]
         activate = {key: final.get(key) for key in STATE_KEYS if key in final}
-        activate.update(isRunning=True, sourceCycleId=context["cycle_id"],
+        activate.update(isRunning=True, stock8Archived=False, sourceCycleId=context["cycle_id"],
                         reconciledSourceTradeIds=list(context["local_trade_ids"]),
                         stock8Reconciliation=f"{REPAIR_ID}: 포트폴리오 {old_id} 거래 재입력 + KIS 체결")
+        _assert_unchanged(client, context["target"], base_tx_ids)
         # New first, then archive the old one right after: a moment with two
         # running portfolios blocks (ambiguous); a moment with none would not.
         client.update_portfolio(new_id, activate)
@@ -632,7 +697,7 @@ def firegate_client(db, user_id, box):
         # Refreshed in memory only; the app's stored session is not touched.
         data = fg.refresh_id_token(cfg.get("refresh_token"))
         id_token = data.get("id_token") or data.get("idToken")
-    return GuardedFireGate(cfg["email"], id_token)
+    return GuardedFireGate(cfg["email"], id_token, cfg.get("refresh_token", ""))
 
 
 def kis_reader(db, user_id, box):
@@ -696,12 +761,17 @@ def _read_kis_view(api, pdno, exchange, start_ymd, end_ymd, symbol, max_pages):
                   "CCLD_NCCS_DVSN": "00", "OVRS_EXCG_CD": exchange, "SORT_SQN": "DS", "ORD_DT": "",
                   "ORD_GNO_BRNO": "", "ODNO": "", "CTX_AREA_NK200": nk, "CTX_AREA_FK200": fk}
         data = _kis_page(api, params, "N" if (nk or fk) else "")
-        for item in api._overseas_ccnl_rows(data):
+        page_rows = api._overseas_ccnl_rows(data)
+        for item in page_rows:
             order = api._normalize_overseas_ccnl_row(item, exchange, start_ymd)
             if order and str(order.get("symbol", "")).upper() == symbol:
                 found.append({k: v for k, v in order.items() if k != "raw"})
         tr_cont = str(data.get("tr_cont", "") or "")
         cursor = (str(data.get("ctx_area_nk200", "") or "").strip(), str(data.get("ctx_area_fk200", "") or "").strip())
+        if not tr_cont and len(page_rows) >= 20:
+            # Same rule as the app's strict read: a full page without a
+            # continuation flag may have more behind it.
+            raise RuntimeError(f"KIS 연속조회 완료 정보 누락: {exchange}/{pdno or 'ALL'} {page + 1}페이지")
         if tr_cont not in ("M", "F"):
             return found
         if not any(cursor) or cursor in seen or cursor == (nk.strip(), fk.strip()):
@@ -715,11 +785,13 @@ def read_kis_fills(api, start_ymd, end_ymd, symbol=SYMBOL, max_pages=80, restart
     """Every SOXL fill line in [start, end]. The symbol view must read to its
     end on each US exchange code (else this raises). The all-symbol view (KIS
     sometimes omits reservation-origin fills when PDNO is set) is added when it
-    completes; while other orders keep changing the list (SYDB0050) it cannot,
-    and that is reported. A fill missing from both views still fails the
-    final FireGate-vs-KIS quantity check. Returns (orders, notes)."""
+    completes; while other orders keep changing the list (SYDB0050) it cannot.
+    Then the filled reservations (order-resv-list, which raises on a partial
+    read) stand in for it. Returns (orders, notes, covered): covered is False
+    when neither the all-symbol view nor the reservation history was read."""
     rows = {}
     notes = []
+    all_view_complete = True
     for pdno in (symbol, ""):
         for exchange in ("NASD", "NYSE", "AMEX"):
             found = None
@@ -736,13 +808,70 @@ def read_kis_fills(api, start_ymd, end_ymd, symbol=SYMBOL, max_pages=80, restart
             if found is None:
                 if pdno:
                     raise RuntimeError(f"KIS 조회 중 자료 변경이 계속됨(SYDB0050): {exchange}/{pdno}")
-                notes.append(f"KIS 전체 종목 보기({exchange})는 다른 주문 변경으로 끝까지 읽지 못함 — 종목 보기와 수량 대조로 판단")
+                all_view_complete = False
+                notes.append(f"KIS 전체 종목 보기({exchange})는 다른 주문 변경으로 끝까지 읽지 못함")
                 continue
             for order in found:
-                key = (_order_key(order.get("order_no")), order.get("action"), order.get("order_date"),
-                       int(order.get("filled_qty") or 0), round(float(order.get("filled_price") or 0), 4))
-                rows.setdefault(key, order)
-    return list(rows.values()), notes
+                rows.setdefault(_fill_key(order), order)
+    covered = all_view_complete
+    if not all_view_complete:
+        try:
+            reservations = _read_filled_reservations(api, start_ymd, end_ymd, symbol)
+        except Exception as exc:
+            notes.append(f"KIS 예약주문 이력도 읽지 못함: {type(exc).__name__}: {redact(str(exc))[:100]}")
+        else:
+            covered = True
+            # Multiset: three 1-share LOC fills at one close price are three fills.
+            have = {}
+            for order in rows.values():
+                have[_fill_signature(order)] = have.get(_fill_signature(order), 0) + 1
+            extra = []
+            for order in reservations:
+                sig = _fill_signature(order)
+                if have.get(sig, 0) > 0:
+                    have[sig] -= 1
+                else:
+                    extra.append(order)
+            for order in extra:
+                rows.setdefault(_fill_key(order), order)
+            notes.append(f"대신 KIS 예약주문 이력(GET order-resv-list)을 끝까지 읽음: 체결 {len(reservations)}건, "
+                         f"종목 보기에 없던 체결 {len(extra)}건")
+    return list(rows.values()), notes, covered
+
+
+def _fill_key(order):
+    return (_order_key(order.get("order_no")), order.get("action"), order.get("order_date"),
+            int(order.get("filled_qty") or 0), round(float(order.get("filled_price") or 0), 4))
+
+
+def _fill_signature(order):
+    """Same fill whatever order number KIS showed (reservation vs order)."""
+    return (str(order.get("action", "")).upper(), str(order.get("order_date", ""))[:8],
+            int(order.get("filled_qty") or 0), round(float(order.get("filled_price") or 0), 4))
+
+
+def _read_filled_reservations(api, start_ymd, end_ymd, symbol):
+    """Filled reservation-origin rows, normalized like the app's fallback.
+    get_overseas_reservation_orders raises on any partial read; the app's
+    _overseas_reservation_history_rows would swallow that, so the list is
+    read here once and handed to it for the normalization only."""
+    reservations = []
+    day = datetime.datetime.strptime(start_ymd, "%Y%m%d").date()
+    last = datetime.datetime.strptime(end_ymd, "%Y%m%d").date()
+    while day <= last:
+        # KIS refuses a reservation-list range of 7 days or more (APBK1744).
+        chunk_end = min(day + datetime.timedelta(days=5), last)
+        with api.request_options(timeout=60, retries=0):
+            reservations.extend(api.get_overseas_reservation_orders(start_date=day.strftime("%Y%m%d"),
+                                                                    end_date=chunk_end.strftime("%Y%m%d")) or [])
+        day = chunk_end + datetime.timedelta(days=1)
+    api.get_overseas_reservation_orders = lambda **_kwargs: reservations
+    try:
+        rows = api._overseas_reservation_history_rows(start_ymd, end_ymd, None)
+    finally:
+        del api.get_overseas_reservation_orders
+    return [{k: v for k, v in r.items() if k != "raw"} for r in rows
+            if str(r.get("symbol", "")).upper() == symbol]
 
 
 def build_context(args):
@@ -768,29 +897,26 @@ def build_context(args):
         kis_sources[f"앱 브로커 스냅샷({local['snapshot']['at']})"] = local["snapshot"]["qty"]
     kis_fills = None
     kis_avg = None
-    verified = False
+    live_read = False  # --apply needs this run's own KIS balance and fill reads
+    covered = False
     if args.kis_qty is not None:
-        kis_sources["--kis-qty 입력"] = args.kis_qty
-        verified = True
+        kis_sources["--kis-qty 입력"] = args.kis_qty  # one more source that must agree
     if args.fills_json:
         kis_fills = normalize_kis_fills(json.loads(Path(args.fills_json).read_text(encoding="utf-8")))
-        notes.append(f"체결 목록은 --fills-json({Path(args.fills_json).name})에서 읽음")
-    if not args.no_kis_read:
+        notes.append(f"체결 목록은 --fills-json({Path(args.fills_json).name})에서 읽음 — 계획 확인용, 적용 불가")
+    if not args.no_kis_read and not args.fills_json:
         try:
             api, kis_config = kis_reader(db, user_id, box)
-            orders, read_notes = read_kis_fills(api, window_start.replace("-", ""),
-                                                datetime.date.today().strftime("%Y%m%d"))
+            orders, read_notes, covered = read_kis_fills(api, window_start.replace("-", ""),
+                                                         datetime.date.today().strftime("%Y%m%d"))
             notes.extend(read_notes)
             with api.request_options(timeout=30, retries=0):
                 balance = api.get_balance()
-            if balance.get("error") or balance.get("errors"):
-                raise RuntimeError(f"잔고 조회 일부 실패: {str(balance.get('error') or balance.get('errors'))[:120]}")
             holding = [h for h in balance.get("holdings", []) or [] if str(h.get("symbol", "")).upper() == SYMBOL]
             kis_sources["KIS 잔고 조회(이번 실행, GET)"] = sum(int(float(h.get("qty", 0) or 0)) for h in holding)
             kis_avg = float(holding[0].get("avg_price", 0) or 0) if holding else None
-            verified = True
-            if kis_fills is None:
-                kis_fills = normalize_kis_fills(orders)
+            kis_fills = normalize_kis_fills(orders)
+            live_read = True
             notes.append(f"KIS 읽기 조회 사용: 체결내역 {window_start}~오늘(GET inquire-ccnl, SOXL 종목 보기는 끝까지), "
                          f"잔고(GET inquire-balance); 앱 설정 쓰기 시도 {len(kis_config.dropped_writes)}건은 저장하지 않음")
         except Exception as exc:  # a failed read is not zero shares or zero fills
@@ -800,6 +926,7 @@ def build_context(args):
         kis_fills = [f for f in local_fills if f["date"] >= window_start]
         problems.append("KIS 체결내역을 읽지 않음: 로컬 기록만으로는 11/09 이전 차이를 확인할 수 없음")
     fills, merge_problems = merge_fills(kis_fills, normalize_local_fills(local["trades"]), window_start)
+    fills = [f for f in fills if f["date"] >= window_start]
     problems.extend(merge_problems)
     kis_qty, qty_problems = reconcile_quantities(kis_sources)
     problems.extend(qty_problems)
@@ -810,7 +937,7 @@ def build_context(args):
         "portfolios": portfolios, "all_portfolios": all_portfolios, "target": target,
         "fg_transactions": fg_txs, "window_start": window_start,
         "fills": fills, "kis_sources": kis_sources, "kis_qty": kis_qty, "kis_avg": kis_avg,
-        "kis_qty_verified": verified, "problems": problems, "notes": notes,
+        "kis_qty_verified": live_read, "kis_only_covered": covered, "problems": problems, "notes": notes,
     }
 
 
@@ -871,9 +998,9 @@ def main(argv=None):
     parser.add_argument("--portfolio-id", type=int, default=DEFAULT_PORTFOLIO_ID)
     parser.add_argument("--method", choices=("A", "B", "both"), default="both")
     parser.add_argument("--since", help="KIS 체결 조회 시작일(기본: FireGate 마지막 거래일)")
-    parser.add_argument("--kis-qty", type=int, help="사용자가 확인한 KIS SOXL 보유수량")
-    parser.add_argument("--no-kis-read", action="store_true", help="KIS 조회를 하지 않음(--apply 불가에 가까움)")
-    parser.add_argument("--fills-json", help="KIS 체결 목록 JSON(get_overseas_order_history 형식)")
+    parser.add_argument("--kis-qty", type=int, help="사용자가 확인한 KIS SOXL 보유수량(다른 출처와 일치해야 함)")
+    parser.add_argument("--no-kis-read", action="store_true", help="KIS 조회를 하지 않음(계획 확인용, --apply 불가)")
+    parser.add_argument("--fills-json", help="KIS 체결 목록 JSON(계획 확인용, --apply 불가)")
     parser.add_argument("--plan-out", help="계획 JSON 저장 경로")
     parser.add_argument("--apply", choices=("A", "B"), help="FireGate에 실제로 쓴다(확인 문구 필요)")
     parser.add_argument("--confirm", default="", help="계획 출력의 확인 문구를 그대로")
