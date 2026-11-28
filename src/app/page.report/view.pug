@@ -23,13 +23,32 @@ div(*ngIf="!loading", class="dx-page rp-page")
             span {{n}}
 
     ng-container(*ngIf="data")
+        //- 수익 한눈에: 실투자·모의투자 각각 그날 실현손익
+        section(class="dx-card rp-profit", *ngIf="data.profit")
+            div(class="dx-card-head")
+                h2 {{data.is_today ? '오늘' : dateLabel(data.date)}} 실현손익
+                small 매도 체결 기준 · 원화와 달러는 환산하지 않고 따로 합산
+            div(class="rp-profit-grid")
+                div(class="rp-profit-mode", *ngFor="let mode of profitModes")
+                    div(class="rp-profit-label")
+                        span(class="rp-mode", [class.is-live]="mode === 'LIVE'") {{mode}}
+                        | {{mode === 'LIVE' ? '실투자' : '모의투자'}}
+                    div(class="rp-profit-values")
+                        div(*ngFor="let t of profit(mode).totals", class="rp-profit-value", [ngClass]="pnlClass(t.realized)") {{money(t.realized, t.currency)}}
+                        div(*ngIf="!profit(mode).totals.length", class="rp-profit-value is-muted") {{profitEmptyText(mode)}}
+                    div(class="rp-profit-lanes", *ngIf="profit(mode).lanes.length")
+                        button(*ngFor="let i of profit(mode).lanes", type="button", class="rp-profit-chip", (click)="openLaneByKey(i.key)")
+                            span {{i.lane_label}}
+                            b([ngClass]="pnlClass(i.realized)") {{money(i.realized, i.currency)}}
+                    div(class="rp-profit-note", *ngIf="!profit(mode).complete") {{profitCaveat(mode)}}
+
         div(class="rp-counts")
             span(*ngFor="let s of statusOrder", class="dx-tag", [ngClass]="statusClass(s)") {{statusLabel(s)}} {{count(s)}}
 
-        //- (a) 한눈에 요약
+        //- (a) 기능별 상태
         section(class="dx-card")
             div(class="dx-card-head")
-                h2 한눈에 요약
+                h2 기능별 상태
                 small 상태·이유는 그날 기록 기준 · 행을 누르면 상세로 이동
             div(class="rp-summary")
                 div(class="rp-row rp-row-head", aria-hidden="true")
