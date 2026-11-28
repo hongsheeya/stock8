@@ -3148,18 +3148,21 @@ class KisApi:
         # one row per currency, and the mock answer listed CNY/HKD/JPY/USD/VND
         # with CNY first: reading the first row gave 201.43 as USD/KRW and US
         # daytrade budgets (KRW seed / usd_krw) about 6.7x too large. Nothing
-        # guarantees the production answer keeps USD first. A row without a
-        # currency code is still read (single-row answers); rows that name
-        # only other currencies give no rate, and the FX fallback decides.
+        # guarantees the production answer keeps USD first. Rows without a
+        # currency code are still read when no row has one (single-row
+        # answers). Otherwise, with no USD row, output2 gives no rate and the
+        # FX fallback decides.
         currency_rows = output2 if isinstance(output2, list) else [output2]
         currency_rows = [r for r in currency_rows if isinstance(r, dict) and r]
-        usd_rows = [r for r in currency_rows
-                    if str(r.get("crcy_cd", "") or "").strip().upper() == "USD"]
-        uncoded_rows = [r for r in currency_rows if not str(r.get("crcy_cd", "") or "").strip()]
-        currency_row = (usd_rows or uncoded_rows or [{}])[0]
+        codes = [str(r.get("crcy_cd", "") or "").strip().upper() for r in currency_rows]
+        usd_rows = [r for r, code in zip(currency_rows, codes) if code == "USD"]
+        currency_row = {}
+        if usd_rows:
+            currency_row = usd_rows[0]
+        elif currency_rows and not any(codes):
+            currency_row = currency_rows[0]
         if currency_rows and not currency_row:
-            other_codes = [str(r.get("crcy_cd", "") or "").strip().upper() for r in currency_rows]
-            self._log("warning", f"get_present_balance: output2 has no USD row (currencies={other_codes}); "
+            self._log("warning", f"get_present_balance: output2 has no USD row (currencies={codes}); "
                                  f"its rates are not read as USD/KRW")
 
         summary_row = output3 if isinstance(output3, dict) else {}

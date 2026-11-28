@@ -156,12 +156,28 @@ class KisBuyingPowerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self._present_balance([{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"}], output3={})
 
+    def test_present_balance_never_takes_another_currencys_rate_when_the_usd_rate_is_zero(self):
+        output2 = [{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43", "bass_exrt": "201.0", "exrt": "200.9"},
+                   {"crcy_cd": "USD", "frst_bltn_exrt": "0"}]
+        info, fallback_calls = self._present_balance(output2, fallback={"rate": 1350.0, "source": "yfinance:KRW=X"})
+        self.assertEqual(fallback_calls, [1])
+        self.assertEqual(info["usd_krw"], 1350.0)
+
+        info, _ = self._present_balance(output2)
+        self.assertEqual(info["usd_krw"], 0)
+
     def test_present_balance_still_reads_a_row_without_a_currency_code(self):
         for output2 in ({"frst_bltn_exrt": "1400"}, [{"frst_bltn_exrt": "1400"}]):
             info, fallback_calls = self._present_balance(output2)
             self.assertEqual(info["usd_krw"], 1400.0)
             self.assertEqual(info["meta"]["exchange_rate_source"], "present_balance")
             self.assertEqual(fallback_calls, [])
+
+        # Once other rows carry codes, a row without one is not trusted as USD.
+        info, fallback_calls = self._present_balance(
+            [{"frst_bltn_exrt": "1400"}, {"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"}])
+        self.assertEqual(fallback_calls, [1])
+        self.assertEqual(info["usd_krw"], 0)
 
     def test_domestic_rank_queries_use_official_ranking_endpoints(self):
         api = kis_api.KisApi(_StructStub())
