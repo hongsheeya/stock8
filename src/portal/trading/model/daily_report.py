@@ -1783,21 +1783,25 @@ def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, de
         facts[mode]["uid"] = uid
     workers = process.get("live_workers") if server_mode == "LIVE" else None
 
+    # Grouped by mode (all LIVE rows, then all PAPER rows) so the two
+    # accounts are not interleaved feature by feature.
     lanes = []
-    for market in ("KS", "US"):
-        for mode in MODES:
-            lanes.append(build_daytrade_lane(facts[mode], market, day, now, is_today, calendar, is_admin,
-                                             workers if mode == "LIVE" else None))
     for mode in MODES:
-        lanes.append(build_infinite_buy_lane(facts[mode], day, now, is_today, calendar,
-                                             workers if mode == "LIVE" else None))
-    if is_admin:
-        lanes.append(build_coin_lane(facts["LIVE"], day, now, is_today,
-                                     coin_hard_locked=coin_hard_locked if server_mode == "LIVE" else False,
-                                     hard_lock_known=server_mode == "LIVE"))
-        usth = facts["PAPER"].get("usth") or {}
-        if not facts["PAPER"].get("ok") or usth.get("corrupt") or (usth.get("enabled") and usth.get("owner") == uid):
-            lanes.append(build_usth_lane(facts["PAPER"], day, now, is_today, calendar))
+        mode_workers = workers if mode == "LIVE" else None
+        for market in ("KS", "US"):
+            lanes.append(build_daytrade_lane(facts[mode], market, day, now, is_today, calendar, is_admin,
+                                             mode_workers))
+        lanes.append(build_infinite_buy_lane(facts[mode], day, now, is_today, calendar, mode_workers))
+        if not is_admin:
+            continue
+        if mode == "LIVE":
+            lanes.append(build_coin_lane(facts["LIVE"], day, now, is_today,
+                                         coin_hard_locked=coin_hard_locked if server_mode == "LIVE" else False,
+                                         hard_lock_known=server_mode == "LIVE"))
+        else:
+            usth = facts["PAPER"].get("usth") or {}
+            if not facts["PAPER"].get("ok") or usth.get("corrupt") or (usth.get("enabled") and usth.get("owner") == uid):
+                lanes.append(build_usth_lane(facts["PAPER"], day, now, is_today, calendar))
 
     counts = {status: 0 for status in STATUS_ORDER}
     for lane in lanes:
