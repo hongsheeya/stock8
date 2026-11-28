@@ -1814,7 +1814,7 @@ def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, de
         "date": day.isoformat(), "today": today.isoformat(), "is_today": is_today,
         "dates": date_options(today), "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "server_mode": server_mode, "is_admin": bool(is_admin),
-        "lanes": lanes, "counts": counts,
+        "lanes": lanes, "counts": counts, "profit": build_profit_summary(lanes),
         "safety": safety, "market": calendar.schedule(day),
         "sources": {mode: {"ok": bool(facts[mode].get("ok")), "error": facts[mode].get("error", ""),
                            "own": mode == server_mode} for mode in MODES},
@@ -1822,8 +1822,41 @@ def build_report(uid, day, *, now, is_admin, server_mode, db_paths, data_dir, de
     }
 
 
+def build_profit_summary(lanes):
+    """The day's realized P&L per mode at a glance, summed from the lanes.
+
+    KRW and USD stay separate: the report reads stored values only and has no
+    exchange rate of its own, so a combined won figure would be invented.
+    A lane whose P&L could not be read is listed, never counted as 0."""
+    summary = {}
+    for mode in MODES:
+        totals, items, unknown = {}, [], []
+        sells = missing = 0
+        for lane in lanes:
+            if lane.get("mode") != mode:
+                continue
+            sells += int(lane.get("sells") or 0)
+            missing += int(lane.get("realized_missing") or 0)
+            realized = lane.get("realized")
+            if realized is None:
+                if lane.get("status") == UNKNOWN:
+                    unknown.append(lane["lane_label"])
+                continue
+            currency = lane.get("currency") or "KRW"
+            totals[currency] = round(totals.get(currency, 0.0) + float(realized), 2)
+            items.append({"key": lane["key"], "lane_label": lane["lane_label"], "currency": currency,
+                          "realized": round(float(realized), 2)})
+        summary[mode] = {
+            "totals": [{"currency": c, "realized": totals[c]} for c in ("KRW", "USD") if c in totals],
+            "lanes": items, "sells": sells, "realized_missing": missing, "unknown_lanes": unknown,
+            "complete": missing == 0 and not unknown,
+        }
+    return summary
+
+
 class DailyReport:
     build_report = staticmethod(build_report)
+    build_profit_summary = staticmethod(build_profit_summary)
     parse_day = staticmethod(parse_day)
     date_options = staticmethod(date_options)
     mode_db_path = staticmethod(mode_db_path)

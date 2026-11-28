@@ -76,6 +76,32 @@ export class Component implements OnInit {
         this.expanded[lane.key] = !this.expanded[lane.key];
     }
 
+    // ---- 수익 한눈에 (data.profit, built by daily_report.build_profit_summary)
+    public readonly profitModes: string[] = ['LIVE', 'PAPER'];
+
+    public profit(mode: string): any {
+        return this.data?.profit?.[mode] || { totals: [], lanes: [], sells: 0, realized_missing: 0, unknown_lanes: [], complete: false };
+    }
+
+    public profitEmptyText(mode: string): string {
+        const p = this.profit(mode);
+        if ((p.unknown_lanes || []).length || p.realized_missing) return '확인 불가';
+        return p.sells ? '확인 불가' : '매도 없음';
+    }
+
+    public profitCaveat(mode: string): string {
+        const p = this.profit(mode);
+        const parts: string[] = [];
+        if (p.realized_missing) parts.push(`매도 ${p.realized_missing}건은 손익을 읽지 못해 합계에서 빠짐`);
+        if ((p.unknown_lanes || []).length) parts.push(`확인 불가: ${p.unknown_lanes.join(', ')}`);
+        return parts.join(' · ');
+    }
+
+    public async openLaneByKey(key: string) {
+        const lane = (this.data?.lanes || []).find((l: any) => l.key === key);
+        if (lane) await this.openLane(lane);
+    }
+
     public async openLane(lane: any) {
         this.expanded[lane.key] = true;
         await this.service.render();

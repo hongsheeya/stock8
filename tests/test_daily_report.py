@@ -1079,6 +1079,48 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn(env.root, res.data["message"])
 
 
+class ProfitSummaryTests(unittest.TestCase):
+    """11-28: the user could not see the day's profit at a glance; the top of
+    the report sums each mode's realized P&L per currency."""
+
+    def test_report_carries_each_modes_realized_total(self):
+        env = Env(self)
+        env.logs["PAPER"] = [
+            log("DT_KS_SELL_FULL", "2026-11-27 15:11:47", "233740 SELL_FULL 실행 | 손익 ₩+186,905 | 수수료 ₩520 | 순손익 ₩+186,385",
+                "233740", "SELL", 402, 4545.0, "10", 402),
+            log("DT_KS_SELL_FULL", "2026-11-27 15:12:06", "488080 SELL_FULL 실행 | 순손익 ₩-20,000",
+                "488080", "SELL", 42, 13240.0, "11", 42),
+        ]
+        result = env.build()
+        paper = result["profit"]["PAPER"]
+        self.assertEqual(paper["totals"], [{"currency": "KRW", "realized": 166385}])
+        self.assertEqual([(i["key"], i["realized"]) for i in paper["lanes"]], [("daytrade_ks:PAPER", 166385)])
+        self.assertEqual(paper["sells"], 2)
+        self.assertEqual(set(result["profit"]), {"LIVE", "PAPER"})
+
+    def test_currencies_stay_separate_and_unknown_is_never_zero(self):
+        lanes = [
+            {"key": "daytrade_ks:LIVE", "lane_label": "국내 단타", "mode": "LIVE", "status": report.RUNNING,
+             "currency": "KRW", "realized": 12000.0, "sells": 2, "realized_missing": 1},
+            {"key": "daytrade_us:LIVE", "lane_label": "미국 단타", "mode": "LIVE", "status": report.RUNNING,
+             "currency": "USD", "realized": -1.5, "sells": 1, "realized_missing": 0},
+            {"key": "infinite_buy:LIVE", "lane_label": "무한매수", "mode": "LIVE", "status": report.RUNNING,
+             "currency": "USD", "realized": -623.54, "sells": 1, "realized_missing": 0},
+            {"key": "coin:LIVE", "lane_label": "코인", "mode": "LIVE", "status": report.UNKNOWN,
+             "currency": "KRW", "realized": None, "sells": None, "realized_missing": 0},
+            {"key": "daytrade_ks:PAPER", "lane_label": "국내 단타", "mode": "PAPER", "status": report.WAITING,
+             "currency": "KRW", "realized": None, "sells": 0, "realized_missing": 0},
+        ]
+        summary = report.build_profit_summary(lanes)
+        live = summary["LIVE"]
+        self.assertEqual(live["totals"], [{"currency": "KRW", "realized": 12000.0}, {"currency": "USD", "realized": -625.04}])
+        self.assertEqual(live["unknown_lanes"], ["코인"])
+        self.assertEqual(live["realized_missing"], 1)
+        self.assertFalse(live["complete"])
+        paper = summary["PAPER"]
+        self.assertEqual((paper["totals"], paper["sells"], paper["complete"]), ([], 0, True))  # no sells, not unknown
+
+
 class PageWiringTests(unittest.TestCase):
     def test_route_menu_and_title(self):
         app = json.loads((ROOT / "src/app/page.report/app.json").read_text(encoding="utf-8"))
