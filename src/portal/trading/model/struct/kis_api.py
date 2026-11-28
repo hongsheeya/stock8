@@ -3116,10 +3116,23 @@ class KisApi:
         해외주식 현재잔고/환율 조회
         반환: dict {usd_krw, krw_balance, withdrawable_krw, raw}
         """
-        # 11-28 PAPER: the production TR id alone made the mock gateway answer
-        # EGW02006 "모의투자 TR 이 아닙니다" on every call, so the PAPER
-        # dashboard never had a cash balance and always showed "잔고 조회 실패".
-        tr_id = "CTRP6504R" if self.is_real else "VTRP6504R"
+        # 11-28 PAPER: not read at all. The mock gateway rejects CTRP6504R
+        # (EGW02006 "모의투자 TR 이 아닙니다"), and VTRP6504R passes but its
+        # answer is wrong here:
+        # - output2 lists CNY/HKD/JPY/USD/VND with CNY first, so the first
+        #   row's rate (201.43) was read as USD/KRW and US daytrade budgets
+        #   (KRW seed / usd_krw) came out about 6.7x too large;
+        # - output3 has no KRW cash field, and its tot_asst_amt (340,245,500)
+        #   contradicted the domestic balance (100,332,637, nothing held).
+        # Every caller catches this and falls back as it did under EGW02006
+        # (domestic balance for cash, the FX fallback for the rate), now
+        # without spending a slot of the shared mock gateway.
+        if not self.is_real:
+            raise Exception(
+                "get_present_balance: 모의투자에서는 해외 현재잔고(VTRP6504R)가 원화 잔액·환율을 "
+                "바르게 주지 않아 조회하지 않습니다"
+            )
+        tr_id = "CTRP6504R"
         path = "/uapi/overseas-stock/v1/trading/inquire-present-balance"
         params = {
             "CANO": self.account_prefix,

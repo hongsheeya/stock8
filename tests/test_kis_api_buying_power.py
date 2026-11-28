@@ -77,21 +77,37 @@ class KisBuyingPowerTests(unittest.TestCase):
             ],
             "output3": {"tot_dncl_amt": "1219202", "wdrw_psbl_tot_amt": "1219202"},
         }
-        info = api.get_present_balance()
+        with patch.object(kis_api, "PAPER_MODE", False):  # PAPER never reads it (11-28)
+            info = api.get_present_balance()
         self.assertEqual(info["usd_cash_usd"], 97.54)
         self.assertEqual(info["meta"]["usd_cash_key"], "frcr_drwg_psbl_amt_1")
 
-    def test_present_balance_uses_the_mock_tr_id_in_paper(self):
-        # The mock gateway rejects CTRP6504R with EGW02006 "모의투자 TR 이 아닙니다".
+    def test_present_balance_is_not_read_in_paper(self):
+        # 11-28: the mock answer (VTRP6504R) put CNY first (rate 201.43 read as
+        # USD/KRW) and a tot_asst_amt that contradicted the domestic balance.
         seen = []
-        for paper, expected in ((True, "VTRP6504R"), (False, "CTRP6504R")):
-            api = kis_api.KisApi(_StructStub())
-            api._request = lambda *args, **kwargs: seen.append(args[2]) or {
-                "rt_cd": "0", "output2": [{"crcy_cd": "USD", "frst_bltn_exrt": "1400"}],
-                "output3": {"tot_dncl_amt": "1000", "wdrw_psbl_tot_amt": "1000"}}
-            with patch.object(kis_api, "PAPER_MODE", paper):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *args, **kwargs: seen.append(args[2]) or {
+            "rt_cd": "0",
+            "output2": [{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"},
+                        {"crcy_cd": "USD", "frst_bltn_exrt": "1342.7"}],
+            "output3": {"tot_asst_amt": "340245500", "frcr_evlu_tota": "340245500"}}
+        with patch.object(kis_api, "PAPER_MODE", True):
+            with self.assertRaises(Exception) as caught:
                 api.get_present_balance()
-            self.assertEqual(seen[-1], expected)
+        self.assertIn("모의투자", str(caught.exception))
+        self.assertEqual(seen, [])
+
+    def test_present_balance_keeps_the_production_tr_id_in_live(self):
+        seen = []
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *args, **kwargs: seen.append(args[2]) or {
+            "rt_cd": "0", "output2": [{"crcy_cd": "USD", "frst_bltn_exrt": "1400"}],
+            "output3": {"tot_dncl_amt": "1000", "wdrw_psbl_tot_amt": "1000"}}
+        with patch.object(kis_api, "PAPER_MODE", False):
+            info = api.get_present_balance()
+        self.assertEqual(seen, ["CTRP6504R"])
+        self.assertEqual(info["usd_krw"], 1400.0)
 
     def test_domestic_buying_power_never_uses_margin_inclusive_max_amount(self):
         api = kis_api.KisApi(_StructStub())
