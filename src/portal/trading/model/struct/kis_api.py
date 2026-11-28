@@ -3010,7 +3010,12 @@ class KisApi:
         try:
             present = self.get_present_balance() or {}
             usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
-            withdrawable_krw = self._safe_float(present.get("withdrawable_krw", present.get("krw_balance", 0)), 0)
+            # 11-28: only KIS's own 인출가능총금액 (output3 wdrw_psbl_tot_amt).
+            # present["withdrawable_krw"] falls back to the deposit total when
+            # it is 0, and KRW tied up in domestic settlement would then show
+            # as auto-exchangeable dollars.
+            summary = (present.get("raw") or {}).get("output3") or {}
+            withdrawable_krw = self._safe_float(summary.get("wdrw_psbl_tot_amt", 0), 0)
             if usd_krw > 0 and withdrawable_krw > 0:
                 krw_auto_exchange_estimate_usd = withdrawable_krw / usd_krw
         except Exception:
@@ -3193,30 +3198,34 @@ class KisApi:
         krw_keys = {k: v for k, v in row.items() if v and str(v) != "0" and str(v) != "0.00"}
         self._log("info", f"present_balance non-zero fields: {krw_keys}")
 
-        krw_info = self._pick_amount_info(row, [
+        # 11-28: KRW cash and withdrawable come from output3 (the summary)
+        # only. They were picked from output3 merged with a currency row, and
+        # the lists held that row's foreign fields (frcr_dncl_amt_2 외화예수금액2,
+        # frcr_evlu_amt2 외화평가금액2/출금가능원화금액). _pick_amount_info takes the
+        # first positive key, so with no KRW cash in output3 the USD deposit
+        # became withdrawable_krw. get_buying_power_info then added it again
+        # as a "KRW auto-exchange" estimate on top of the USD cash it already
+        # counts, loosening the auto-exchange planning check before buy orders.
+        # Missing output3 fields stay unknown (present False), never filled
+        # from a currency row.
+        krw_info = self._pick_amount_info(summary_row, [
             # 실제 원화 예수금/잔고 계열만 사용한다.
             # wdrw_psbl_tot_amt / ord_psbl_krw_amt 는 주문·출금 가능액이라 총자산 계산에 쓰면 부풀 수 있다.
             "tot_dncl_amt",
             "dncl_amt",
             "krw_dncl_amt",
             "dnca_tot_amt",
-            "frcr_dncl_amt_2",
             "krw_evlu_amt",
             "krw_amt",
         ])
-        withdrawable_info = self._pick_amount_info(row, [
-            # output3 요약 필드 우선
+        withdrawable_info = self._pick_amount_info(summary_row, [
             "wdrw_psbl_tot_amt",
-            # output2 / 기타 후보
             "ord_psbl_krw_amt",
             "krw_ord_psbl_amt",
             "withdrawable_krw",
             "nxdy_krw_auto_xchg_amt",
             "krw_buy_mgn_amt",
             "krw_dncl_amt",
-            "frcr_dncl_amt_2",
-            "frcr_evlu_amt2",
-            # 추가 후보 키
             "tot_dncl_amt",
             "dnca_tot_amt",
             "dncl_amt",
