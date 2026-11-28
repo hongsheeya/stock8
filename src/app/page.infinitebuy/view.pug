@@ -19,7 +19,7 @@ div(class="firegate-page dx-page")
             small {{'#' + c.cycle_number}}
             span(class="ib-progress")
                 i([style.width.%]="cycleProgress(c)")
-            span {{c.current_round || 0}}/{{c.division_count || 0}}
+            span {{cycleRoundLabel(c)}}
             span ${{(c.total_spent || 0) | number:'1.0-0'}}
             b([class]="tone(c.profit_rate)") {{(c.profit_rate > 0 ? '+' : '') + ((c.profit_rate || 0) | number:'1.2-2')}}%
 
@@ -76,20 +76,24 @@ div(class="firegate-page dx-page")
                             td
                                 strong {{p.symbol}}
                                 small(class="dx-muted ib-sub") {{p.has_cycle ? '#' + (p.cycle_number || 1) + ' · 시드 $' + (p.total_investment | number:'1.0-0') : '대기'}}
-                            td(class="num") {{p.has_cycle ? (p.t_value | number:'1.0-2') + ' / ' + p.division_count : '-'}}
+                            td(class="num")
+                                | {{p.has_cycle ? (p.t_is_firegate ? 'T ' : '') + (p.t_value | number:'1.0-2') + ' / ' + p.division_count : '-'}}
+                                small(*ngIf="p.firegate_exhausted", class="dx-muted ib-sub") 소진 · 리버스 기준
                             td(class="num") {{p.total_qty || 0}}주
                             td(class="num") {{p.avg_price > 0 ? '$' + (p.avg_price | number:'1.2-2') : '-'}}
                             td(class="num") {{p.current_price > 0 ? '$' + (p.current_price | number:'1.2-2') : '-'}}
                             td(class="num", [class]="tone(p.profit_rate)") {{p.has_cycle ? ((p.profit_rate > 0 ? '+' : '') + (p.profit_rate | number:'1.2-2') + '%') : '-'}}
-                            td
+                            td(*ngIf="p.firegate_exhausted", colspan="2", class="dx-muted") 리버스모드 — FireGate 안내 기준 (FireGate 화면에서 확인)
+                            td(*ngIf="!p.firegate_exhausted")
                                 div(*ngFor="let o of (p.buy_orders || []).slice(0, 1)", class="ib-order") {{o.order_qty}}주 · ${{o.loc_price | number:'1.2-2'}}
                                     small(class="dx-muted") {{o.label}}
                                 div(*ngIf="p.buy_orders?.length > 1", class="ib-order dx-muted") {{dipSummary(p.buy_orders)}}
                                 span(*ngIf="!p.buy_orders?.length", class="dx-muted") -
-                            td
+                            td(*ngIf="!p.firegate_exhausted")
                                 div(*ngFor="let o of p.sell_orders", class="ib-order") {{o.order_qty}}주 · ${{o.price | number:'1.2-2'}}
                                     small(class="dx-muted") {{o.label}}
                                 span(*ngIf="!p.sell_orders?.length", class="dx-muted") -
+            p(class="ib-note") 회차(T)는 FireGate와 같은 소수 T입니다. '오늘 매수·매도'는 Stock8 사이클 값으로 계산한 v4 일반 안내입니다. FireGate가 리버스모드면 실제 예약은 FireGate 리버스 안내(5일 평균 기준)를 따르므로 이 값과 다를 수 있어요.
             p(class="ib-note") FireGate 사이트 화면은 브라우저가 외부 사이트 로그인을 자주 끊어서 기본으로 숨겼어요. 수정이 필요하면 'FireGate 새 탭'을 쓰세요. 새 탭에서는 로그인이 유지됩니다.
         iframe(*ngIf="!loading && bridge?.configured && showFireGateFrame",
             id="fireGateIframe",

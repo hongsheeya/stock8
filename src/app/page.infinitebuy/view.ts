@@ -1,5 +1,6 @@
 import { OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
+import { roundLabel, roundProgress } from '@wiz/libs/portal/trading/cycle-round';
 
 declare const wiz: any;
 
@@ -367,9 +368,13 @@ export class Component implements OnInit {
         await this.renderIfAlive();
     }
 
+    // 회차는 FireGate와 같은 소수 T (cycle-round.ts).
     public cycleProgress(cycle: any): number {
-        const total = Number(cycle?.division_count || 0);
-        return total > 0 ? Math.min(100, Math.round(Number(cycle?.current_round || 0) / total * 100)) : 0;
+        return roundProgress(cycle);
+    }
+
+    public cycleRoundLabel(cycle: any): string {
+        return roundLabel(cycle);
     }
 
     public tone(value: any): string {
