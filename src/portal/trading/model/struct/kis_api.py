@@ -3157,17 +3157,32 @@ class KisApi:
         output2 = data.get("output2", [])
         output3 = data.get("output3", {})
 
+        # 11-28: the rate is read from the USD row, not output2[0]. output2 has
+        # one row per currency, and the mock answer listed CNY/HKD/JPY/USD/VND
+        # with CNY first: reading the first row gave 201.43 as USD/KRW and US
+        # daytrade budgets (KRW seed / usd_krw) about 6.7x too large. Nothing
+        # guarantees the production answer keeps USD first. Rows without a
+        # currency code are still read when no row has one (single-row
+        # answers). Otherwise, with no USD row, output2 gives no rate and the
+        # FX fallback decides.
+        currency_rows = output2 if isinstance(output2, list) else [output2]
+        currency_rows = [r for r in currency_rows if isinstance(r, dict) and r]
+        codes = [str(r.get("crcy_cd", "") or "").strip().upper() for r in currency_rows]
+        usd_rows = [r for r, code in zip(currency_rows, codes) if code == "USD"]
         currency_row = {}
-        if isinstance(output2, list) and len(output2) > 0:
-            currency_row = output2[0] or {}
-        elif isinstance(output2, dict):
-            currency_row = output2
+        if usd_rows:
+            currency_row = usd_rows[0]
+        elif currency_rows and not any(codes):
+            currency_row = currency_rows[0]
+        if currency_rows and not currency_row:
+            self._log("warning", f"get_present_balance: output2 has no USD row (currencies={codes}); "
+                                 f"its rates are not read as USD/KRW")
 
         summary_row = output3 if isinstance(output3, dict) else {}
 
         if not currency_row and not summary_row:
-            self._log("error", f"get_present_balance: output2/output3 empty. keys={list(data.keys())}")
-            raise Exception(f"get_present_balance: output2/output3 empty. Response keys: {list(data.keys())}")
+            self._log("error", f"get_present_balance: no USD row in output2 and output3 empty. keys={list(data.keys())}")
+            raise Exception(f"get_present_balance: no USD row in output2 and output3 empty. Response keys: {list(data.keys())}")
 
         # 원화 합계는 output3를 우선 사용, 환율은 output2를 우선 사용
         row = {}
@@ -3250,8 +3265,6 @@ class KisApi:
 
         # 10-18: inquire-balance has no cash field, so held dollars read as $0.
         # Withdrawable USD is the conservative figure (deposit as a fallback).
-        usd_rows = [r for r in (output2 if isinstance(output2, list) else [output2]) if isinstance(r, dict)
-                    and str(r.get("crcy_cd", "") or "").upper() == "USD"]
         usd_row = usd_rows[0] if usd_rows else {}
         usd_cash_info = self._pick_amount_info(usd_row, [
             "frcr_drwg_psbl_amt_1",
