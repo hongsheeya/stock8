@@ -1,6 +1,7 @@
 import { Input, OnInit } from '@angular/core';
 import { Service } from '@wiz/libs/portal/season/service';
 import { i18n } from '@wiz/libs/portal/trading/i18n';
+import { cycleT, formatT, roundLabel, roundProgress, reverseLabel } from '@wiz/libs/portal/trading/cycle-round';
 
 interface Toast {
     id: number;
@@ -1209,9 +1210,30 @@ export class Component implements OnInit {
     }
 
     // ─── Cycle Utils ───
+    // 회차는 FireGate와 같은 소수 T로 보여 준다(cycle-round.ts).
     public cycleProgress(cycle: any): number {
-        if (!cycle.division_count) return 0;
-        return Math.round((cycle.current_round / cycle.division_count) * 100);
+        return roundProgress(cycle);
+    }
+
+    public cycleRoundLabel(cycle: any): string {
+        return roundLabel(cycle, this.t('common.round'));
+    }
+
+    public cycleReverseLabel(cycle: any): string {
+        return reverseLabel(cycle);
+    }
+
+    // Trade preview: the T now. The T a buy adds depends on its size (v4 tDelta)
+    // or on reverse mode, so "current_round + 1" is only shown without a T.
+    public previewRoundTitle(p: any): string {
+        return cycleT(p) !== null ? this.t('dash.preview_current_t') : this.t('common.round');
+    }
+
+    public previewRoundValue(p: any): string {
+        const t = cycleT(p);
+        const division = Number(p?.division_count || 0);
+        if (t !== null) return `${formatT(t)}/${division}`;
+        return `${Number(p?.current_round || 0) + 1}/${division}`;
     }
 
     public profitClass(rate: number): string {

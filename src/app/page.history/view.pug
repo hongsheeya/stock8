@@ -251,7 +251,7 @@ ng-container(*ngIf="tab === 'cycles' && !selectedCycle")
                             div(class="dx-progress")
                                 div(class="dx-progress-bar")
                                     i([style.width.%]="cycleProgress(c)")
-                                span {{c.current_round || 0}}/{{c.division_count || 40}}
+                                span {{cycleRoundLabel(c)}}
                         td(class="num") {{money(c.total_spent, 'US')}}
                             small(class="dx-muted") / {{money(c.total_investment, 'US')}}
                         td(class="num") {{price(c.avg_price, 'US')}}
@@ -276,7 +276,7 @@ ng-container(*ngIf="tab === 'cycles' && selectedCycle")
         div(class="dx-detail-grid")
             div(class="dx-detail")
                 | 진행
-                strong {{selectedCycle.current_round || 0}} / {{selectedCycle.division_count || 40}}회
+                strong {{cycleRoundLabel(selectedCycle)}}
             div(class="dx-detail")
                 | 투입 / 한도
                 strong {{money(selectedCycle.total_spent, 'US')}} / {{money(selectedCycle.total_investment, 'US')}}

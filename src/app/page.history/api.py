@@ -857,7 +857,8 @@ def _cycle_trade_rows(trading, limit=3000):
     except Exception:
         return []
 
-_CYCLE_COLUMNS = ("id", "symbol", "cycle_number", "status", "current_round", "division_count", "target_profit",
+# t_value: FireGate's fractional T, which the cycle lists show as the 회차 (11-29).
+_CYCLE_COLUMNS = ("id", "symbol", "cycle_number", "status", "current_round", "t_value", "division_count", "target_profit",
                   "total_investment", "total_spent", "total_qty", "avg_price", "current_price", "current_eval",
                   "profit_rate", "total_commission", "started_at", "completed_at", "created", "updated")
 

@@ -247,7 +247,8 @@ div(*ngIf="showCycleDetail",
                     div(class="bg-white/5 rounded-lg p-3")
                         div(class="text-[10px] text-slate-500 uppercase") {{t('detail.progress')}}
                         div(class="text-sm font-medium text-slate-200 mt-1")
-                            | {{t('common.round')}} {{detailCycle?.current_round}} / {{detailCycle?.division_count}}
+                            | {{cycleRoundLabel(detailCycle)}}
+                            span(*ngIf="cycleReverseLabel(detailCycle)", class="ml-1 text-[10px] text-amber-300") {{cycleReverseLabel(detailCycle)}}
                         div(class="w-full h-1 bg-white/5 rounded-full overflow-hidden mt-1.5")
                             div(class="h-full rounded-full bg-indigo-500",
                                 [style.width.%]="cycleProgress(detailCycle || {})")
@@ -546,8 +547,9 @@ section(*ngIf="!legacyMode", class="dx-card")
                     td
                         div(class="dx-progress")
                             div(class="dx-progress-bar")
-                                i([style.width.%]="(c.division_count ? (c.current_round || 0) / c.division_count * 100 : 0)")
-                            span {{c.current_round || 0}}/{{c.division_count || 0}}
+                                i([style.width.%]="cycleProgress(c)")
+                            span {{cycleRoundLabel(c)}}
+                        span(*ngIf="cycleReverseLabel(c)", class="dx-tag is-warn", title="FireGate 소진 기준(T > 분할-1): 예약은 FireGate 리버스 안내를 따릅니다") {{cycleReverseLabel(c)}}
                         span(class="dx-status", [class]="statusBadge(c.status)") {{cycleStatusLabel(c.status)}}
                     td(class="num") {{c.total_qty || 0}}
                     td(class="num") ${{c.avg_price | number:'1.2-2'}}
@@ -849,7 +851,7 @@ div(*ngIf="showLegacySections", class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-
                 //- Progress Bar
                 div(class="mb-3")
                     div(class="flex items-center justify-between text-xs text-slate-400 mb-1")
-                        span {{t('common.round')}} {{cycle.current_round}} / {{cycle.division_count}}
+                        span {{cycleRoundLabel(cycle)}}{{cycleReverseLabel(cycle) ? ' · ' + cycleReverseLabel(cycle) : ''}}
                         span {{cycleProgress(cycle)}}%
                     div(class="w-full h-1.5 bg-white/5 rounded-full overflow-hidden")
                         div(class="h-full rounded-full transition-all duration-500",
@@ -935,8 +937,8 @@ div(*ngIf="showLegacySections", class="glass-card p-5 mb-6")
                         div(class="text-[10px] text-slate-500") {{t('dash.preview_qty')}}
                         div(class="text-xs font-medium text-slate-300") {{p.order_qty}}{{t('detail.shares')}}
                     div
-                        div(class="text-[10px] text-slate-500") {{t('common.round')}}
-                        div(class="text-xs font-medium text-slate-300") {{p.current_round + 1}}/{{p.division_count}}
+                        div(class="text-[10px] text-slate-500") {{previewRoundTitle(p)}}
+                        div(class="text-xs font-medium text-slate-300") {{previewRoundValue(p)}}
                     div
                         div(class="text-[10px] text-slate-500") {{t('dash.preview_amount')}}
                         div(class="text-xs font-medium text-indigo-300") ${{formatUSD(p.order_qty * p.loc_price)}}

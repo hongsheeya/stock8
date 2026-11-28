@@ -262,6 +262,29 @@ def _active_cycle(cycle_db, symbol):
     return None
 
 
+def _cycle_t_value(cycle):
+    """The cycle's T for display: FireGate's fractional T when it has one.
+
+    11-29 LIVE: the 회차(T) column showed SOXL as 15 while FireGate showed
+    T 15.9. The buy decision carries no t_value, so the column fell back to
+    current_round, which is floor(T). The planner itself uses t_value
+    (engine._firegate_v4_t_value). A cycle without a FireGate T keeps the
+    column default 0.0 (PAPER), so 0 falls back to the integer round."""
+    t_value = _safe_float((cycle or {}).get("t_value"), 0)
+    if t_value > 0:
+        return t_value
+    return float(_safe_int((cycle or {}).get("current_round"), 0))
+
+
+def _firegate_exhausted_hint(cycle):
+    """FireGate's exhausted rule (T > splits - 1, firegate_bridge.is_exhausted_v4):
+    the reservations then follow FireGate's reverse guide, not the local v4
+    lines this page computes. Only the T half of the rule is visible here."""
+    t_value = _safe_float((cycle or {}).get("t_value"), 0)
+    division_count = _safe_int((cycle or {}).get("division_count"), 0)
+    return t_value > 0 and division_count > 0 and t_value > division_count - 1
+
+
 def _virtual_cycle(item):
     seed = _safe_float(item.get("total_investment"), 0)
     return {
@@ -349,7 +372,7 @@ def _sell_plan(cycle, buy_decision):
         return []
 
     division_count = max(_safe_int(cycle.get("division_count"), 40), 1)
-    t_value = _safe_float(buy_decision.get("t_value", cycle.get("current_round", 0)), 0)
+    t_value = _safe_float(buy_decision.get("t_value"), _cycle_t_value(cycle))
     star_percent = _safe_float(buy_decision.get("star_percent"), 0)
     if star_percent <= 0:
         star_percent = _fallback_star_percent(symbol, division_count, t_value)
@@ -454,7 +477,7 @@ def _portfolio_payload(refresh=False):
                 "buy_amount": 0,
                 "buy_orders": [],
                 "reason": f"상태 {cycle.get('status')}는 신규 매수 대상 아님",
-                "t_value": _safe_float(cycle.get("current_round"), 0),
+                "t_value": _cycle_t_value(cycle),
             }
 
         buy_orders = [_normalize_order(order) for order in buy_decision.get("buy_orders", []) or []]
@@ -494,7 +517,9 @@ def _portfolio_payload(refresh=False):
             "progress_pct": max(0, min(progress_pct, 1000)),
             "buy_amount": _safe_float(buy_decision.get("buy_amount"), 0),
             "state_name": buy_decision.get("state_name", ""),
-            "t_value": _safe_float(buy_decision.get("t_value"), _safe_float(cycle.get("current_round"), 0)),
+            "t_value": _cycle_t_value(cycle),
+            "t_is_firegate": _safe_float(cycle.get("t_value"), 0) > 0,
+            "firegate_exhausted": has_cycle and _firegate_exhausted_hint(cycle),
             "buy_reason": buy_decision.get("reason", ""),
             "should_buy": buy_decision.get("should_buy", False),
             "buy_orders": buy_orders,
