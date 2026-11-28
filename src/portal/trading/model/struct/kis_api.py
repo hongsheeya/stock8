@@ -3010,7 +3010,12 @@ class KisApi:
         try:
             present = self.get_present_balance() or {}
             usd_krw = self._safe_float(present.get("usd_krw", 0), 0)
-            withdrawable_krw = self._safe_float(present.get("withdrawable_krw", present.get("krw_balance", 0)), 0)
+            # 11-28: only KIS's own 인출가능총금액 (output3 wdrw_psbl_tot_amt).
+            # present["withdrawable_krw"] falls back to the deposit total when
+            # it is 0, and KRW tied up in domestic settlement would then show
+            # as auto-exchangeable dollars.
+            summary = (present.get("raw") or {}).get("output3") or {}
+            withdrawable_krw = self._safe_float(summary.get("wdrw_psbl_tot_amt", 0), 0)
             if usd_krw > 0 and withdrawable_krw > 0:
                 krw_auto_exchange_estimate_usd = withdrawable_krw / usd_krw
         except Exception:

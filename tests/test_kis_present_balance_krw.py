@@ -109,27 +109,42 @@ class PresentBalanceKrwFromSummaryTests(unittest.TestCase):
         self.assertEqual(info["meta"]["krw_key"], "tot_dncl_amt")
         self.assertEqual(info["meta"]["withdrawable_key"], "wdrw_psbl_tot_amt")
 
-        # Order of output3 keys is unchanged: zero withdrawable falls to the deposit total.
+        # Order of output3 keys is unchanged: for display, zero withdrawable
+        # falls to the deposit total (the auto-exchange estimate does not).
         info = _api({"tot_dncl_amt": "50000", "wdrw_psbl_tot_amt": "0"}).get_present_balance()
         self.assertEqual(info["withdrawable_krw"], 50000)
         self.assertEqual(info["meta"]["withdrawable_key"], "tot_dncl_amt")
 
-    def test_usd_cash_is_not_counted_twice_as_a_krw_auto_exchange(self):
-        api = _api({"tot_dncl_amt": "0", "wdrw_psbl_tot_amt": "0"})
+    def _power(self, output3):
+        api = _api(output3)
         api.get_balance = lambda: {"cash_balance": 972.08}
         api._us_auto_exchange_ready = lambda now=None: False
-        info = api.get_buying_power_info("SOXL", 35.85, "AMEX")
-        self.assertEqual(info["krw_auto_exchange_estimate_usd"], 0.0)
-        self.assertEqual(info["estimated_amount"], 972.08)
-        self.assertEqual(info["estimated_qty"], 27)
+        return api.get_buying_power_info("SOXL", 35.85, "AMEX")
 
-        # Real KRW cash still shows as a KRW auto-exchange estimate.
-        api = _api({"tot_dncl_amt": "134270", "wdrw_psbl_tot_amt": "134270"})
-        api.get_balance = lambda: {"cash_balance": 972.08}
-        api._us_auto_exchange_ready = lambda now=None: False
-        info = api.get_buying_power_info("SOXL", 35.85, "AMEX")
+    def test_usd_cash_is_not_counted_twice_as_a_krw_auto_exchange(self):
+        for output3 in ({"tot_dncl_amt": "0", "wdrw_psbl_tot_amt": "0"}, {"tot_asst_amt": "1305204"}):
+            info = self._power(output3)
+            self.assertEqual(info["krw_auto_exchange_estimate_usd"], 0.0)
+            self.assertEqual(info["estimated_amount"], 972.08)
+            self.assertEqual(info["estimated_qty"], 27)
+
+        # Real KRW withdrawable still shows as a KRW auto-exchange estimate.
+        info = self._power({"tot_dncl_amt": "134270", "wdrw_psbl_tot_amt": "134270"})
         self.assertAlmostEqual(info["krw_auto_exchange_estimate_usd"], 100.0, places=2)
         self.assertAlmostEqual(info["estimated_amount"], 1072.08, places=2)
+
+    def test_krw_tied_up_in_settlement_is_not_an_auto_exchange_estimate(self):
+        # KIS says nothing is withdrawable while the deposit total is still
+        # 5M (domestic buys awaiting settlement): no dollars from it.
+        for deposit in ("5000000", "50000"):
+            info = self._power({"tot_dncl_amt": deposit, "wdrw_psbl_tot_amt": "0"})
+            self.assertEqual(info["krw_auto_exchange_estimate_usd"], 0.0)
+            self.assertEqual(info["estimated_amount"], 972.08)
+            self.assertEqual(info["estimated_qty"], 27)
+
+        # Without KIS's withdrawable field there is no estimate either.
+        info = self._power({"tot_dncl_amt": "5000000"})
+        self.assertEqual(info["krw_auto_exchange_estimate_usd"], 0.0)
 
 
 if __name__ == "__main__":
