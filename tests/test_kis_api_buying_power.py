@@ -112,6 +112,57 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertTrue(info["cash_only"])
         self.assertEqual(info["broker_orderable_amount"], 250000000)
 
+    def _present_balance(self, output2, output3=None, fallback=None):
+        api = kis_api.KisApi(_StructStub())
+        api._request = lambda *args, **kwargs: {
+            "rt_cd": "0", "output2": output2,
+            "output3": {"tot_dncl_amt": "1219202", "wdrw_psbl_tot_amt": "1219202"} if output3 is None else output3}
+        fallback_calls = []
+        api._get_usd_krw_rate_fallback = lambda: fallback_calls.append(1) or (fallback or {"rate": 0, "source": ""})
+        with patch.object(kis_api, "PAPER_MODE", False):
+            return api.get_present_balance(), fallback_calls
+
+    def test_present_balance_reads_the_rate_from_the_usd_row_not_the_first_row(self):
+        # 11-28: the mock answer listed CNY first, and 201.43 was read as USD/KRW.
+        for first in ({"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"},
+                      {"crcy_cd": "JPY", "frst_bltn_exrt": "9.1", "frcr_drwg_psbl_amt_1": "5000"}):
+            info, fallback_calls = self._present_balance([
+                first,
+                {"crcy_cd": "HKD", "frst_bltn_exrt": "171.33"},
+                {"crcy_cd": "USD", "frst_bltn_exrt": "1342.70", "frcr_drwg_psbl_amt_1": "97.54"},
+            ])
+            self.assertEqual(info["usd_krw"], 1342.7)
+            self.assertEqual(info["meta"]["exchange_rate_source"], "present_balance")
+            self.assertEqual(info["raw"]["output2"]["crcy_cd"], "USD")
+            self.assertEqual(info["usd_cash_usd"], 97.54)
+            self.assertEqual(info["withdrawable_krw"], 1219202)
+            self.assertEqual(fallback_calls, [])
+
+    def test_present_balance_without_a_usd_row_takes_the_fx_fallback(self):
+        info, fallback_calls = self._present_balance(
+            [{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"}, {"crcy_cd": "JPY", "frst_bltn_exrt": "9.1"}],
+            fallback={"rate": 1350.0, "source": "yfinance:KRW=X"})
+        self.assertEqual(fallback_calls, [1])
+        self.assertEqual(info["usd_krw"], 1350.0)
+        self.assertEqual(info["meta"]["exchange_rate_source"], "yfinance:KRW=X")
+        self.assertEqual(info["usd_cash_usd"], 0.0)
+        self.assertEqual(info["withdrawable_krw"], 1219202)
+
+        # Without the fallback the rate stays unknown (0), never another currency's.
+        info, _ = self._present_balance([{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"}])
+        self.assertEqual(info["usd_krw"], 0)
+        self.assertFalse(info["meta"]["exchange_rate_present"])
+
+        with self.assertRaises(Exception):
+            self._present_balance([{"crcy_cd": "CNY", "frst_bltn_exrt": "201.43"}], output3={})
+
+    def test_present_balance_still_reads_a_row_without_a_currency_code(self):
+        for output2 in ({"frst_bltn_exrt": "1400"}, [{"frst_bltn_exrt": "1400"}]):
+            info, fallback_calls = self._present_balance(output2)
+            self.assertEqual(info["usd_krw"], 1400.0)
+            self.assertEqual(info["meta"]["exchange_rate_source"], "present_balance")
+            self.assertEqual(fallback_calls, [])
+
     def test_domestic_rank_queries_use_official_ranking_endpoints(self):
         api = kis_api.KisApi(_StructStub())
         calls = []
