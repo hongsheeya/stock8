@@ -8,6 +8,7 @@ const STATUS_ORDER = ['blocked', 'unknown', 'running', 'waiting', 'off'];
 const STATUS_LABEL: any = { running: '동작', waiting: '대기', blocked: '막힘', off: '꺼짐', unknown: '확인 불가' };
 const STATUS_CLASS: any = { running: 'is-ok', waiting: 'rp-wait', blocked: 'is-danger', off: '', unknown: 'is-warn' };
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+const MODE_ORDER = ['LIVE', 'PAPER'];
 
 export class Component implements OnInit {
     public loading: boolean = true;
@@ -17,7 +18,6 @@ export class Component implements OnInit {
     public date: string = '';
     public dates: string[] = [];
     public expanded: any = {};
-    public readonly statusOrder: string[] = STATUS_ORDER;
 
     constructor(public service: Service) { }
 
@@ -112,7 +112,6 @@ export class Component implements OnInit {
     // ---- view helpers
     public statusLabel(s: string): string { return STATUS_LABEL[s] || s; }
     public statusClass(s: string): string { return STATUS_CLASS[s] || ''; }
-    public count(s: string): number { return Number(this.data?.counts?.[s] || 0); }
     public laneId(lane: any): string { return 'lane-' + String(lane.key).replace(':', '-'); }
 
     public dateLabel(d: string): string {
@@ -205,6 +204,32 @@ export class Component implements OnInit {
 
     public modeLabel(mode: string): string {
         return mode === 'LIVE' ? '실투자 (LIVE)' : '모의투자 (PAPER)';
+    }
+
+    public modeName(mode: string): string {
+        return mode === 'LIVE' ? '실투자' : mode === 'PAPER' ? '모의투자' : mode;
+    }
+
+    // ---- 기능별 상태·상세: LIVE rows together, then PAPER rows (never interleaved)
+    public laneModes(): string[] {
+        const seen: string[] = [];
+        for (const lane of this.data?.lanes || []) {
+            if (!seen.includes(lane.mode)) seen.push(lane.mode);
+        }
+        const known = MODE_ORDER.filter((m) => seen.includes(m));
+        return known.concat(seen.filter((m) => !MODE_ORDER.includes(m)));
+    }
+
+    public lanesFor(mode: string): any[] {
+        return (this.data?.lanes || []).filter((l: any) => l.mode === mode);
+    }
+
+    public modeCount(mode: string, status: string): number {
+        return this.lanesFor(mode).filter((l: any) => l.status === status).length;
+    }
+
+    public modeStatuses(mode: string): string[] {
+        return STATUS_ORDER.filter((s) => this.modeCount(mode, s) > 0);
     }
 
     public trackByKey(_i: number, lane: any) { return lane.key; }

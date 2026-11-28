@@ -42,9 +42,6 @@ div(*ngIf="!loading", class="dx-page rp-page")
                             b([ngClass]="pnlClass(i.realized)") {{money(i.realized, i.currency)}}
                     div(class="rp-profit-note", *ngIf="!profit(mode).complete") {{profitCaveat(mode)}}
 
-        div(class="rp-counts")
-            span(*ngFor="let s of statusOrder", class="dx-tag", [ngClass]="statusClass(s)") {{statusLabel(s)}} {{count(s)}}
-
         //- (a) 기능별 상태
         section(class="dx-card")
             div(class="dx-card-head")
@@ -58,141 +55,151 @@ div(*ngIf="!loading", class="dx-page rp-page")
                     span(class="num") 매수
                     span(class="num") 매도
                     span(class="num") 실현손익
-                button(*ngFor="let l of data.lanes; trackBy: trackByKey", type="button", class="rp-row", (click)="openLane(l)")
-                    span(class="rp-name")
-                        strong {{l.lane_label}}
-                        span(class="rp-mode", [class.is-live]="l.mode === 'LIVE'") {{l.mode}}
-                    span(class="rp-status")
-                        span(class="dx-tag", [ngClass]="statusClass(l.status)") {{l.status_label}}
-                    span(class="rp-reason") {{l.reason}}
-                    span(class="num rp-num")
-                        small 매수
-                        | {{countText(l.buys)}}
-                    span(class="num rp-num")
-                        small 매도
-                        | {{countText(l.sells)}}
-                    span(class="num rp-num", [ngClass]="pnlClass(l.realized)")
-                        small 실현손익
-                        | {{money(l.realized, l.currency)}}
+                ng-container(*ngFor="let mode of laneModes()")
+                    div(class="rp-group")
+                        span(class="rp-group-title")
+                            span(class="rp-mode", [class.is-live]="mode === 'LIVE'") {{mode}}
+                            | {{modeName(mode)}}
+                        span(class="rp-group-counts")
+                            span(*ngFor="let s of modeStatuses(mode)", class="dx-tag", [ngClass]="statusClass(s)") {{statusLabel(s)}} {{modeCount(mode, s)}}
+                    button(*ngFor="let l of lanesFor(mode); trackBy: trackByKey", type="button", class="rp-row", (click)="openLane(l)")
+                        span(class="rp-name")
+                            strong {{l.lane_label}}
+                        span(class="rp-status")
+                            span(class="dx-tag", [ngClass]="statusClass(l.status)") {{l.status_label}}
+                        span(class="rp-reason") {{l.reason}}
+                        span(class="num rp-num")
+                            small 매수
+                            | {{countText(l.buys)}}
+                        span(class="num rp-num")
+                            small 매도
+                            | {{countText(l.sells)}}
+                        span(class="num rp-num", [ngClass]="pnlClass(l.realized)")
+                            small 실현손익
+                            | {{money(l.realized, l.currency)}}
             p(class="dx-muted rp-legend") 동작 = 그날 체결이 있고 차단 없음 · 대기 = 장 닫힘·휴장·신호 없음 · 막힘 = 그날의 주된 차단 사유 있음 · 꺼짐 = 스위치·주문 정책 OFF · 확인 불가 = 기록을 읽지 못함 (0이나 정상으로 보지 않음)
 
         //- (b) 기능별 상세
-        section(*ngFor="let l of data.lanes; trackBy: trackByKey", class="dx-card rp-lane", [attr.id]="laneId(l)")
-            button(type="button", class="rp-lane-head", (click)="toggle(l)", [attr.aria-expanded]="!!expanded[l.key]")
-                span(class="rp-name")
-                    strong {{l.lane_label}}
-                    span(class="rp-mode", [class.is-live]="l.mode === 'LIVE'") {{l.mode}}
-                    span(class="dx-tag", [ngClass]="statusClass(l.status)") {{l.status_label}}
-                span(class="rp-lane-reason") {{l.reason}}
-                span(class="rp-toggle") {{expanded[l.key] ? '접기 ▴' : '펼치기 ▾'}}
-            div(class="rp-lane-body", *ngIf="expanded[l.key]")
-                div(class="dx-empty", *ngIf="!hasDetail(l)") 이날 기록된 내용이 없습니다.
-                ul(class="rp-notes", *ngIf="l.notes?.length")
-                    li(*ngFor="let n of l.notes") {{n}}
+        ng-container(*ngFor="let mode of laneModes()")
+            h2(class="rp-group-heading")
+                span(class="rp-mode", [class.is-live]="mode === 'LIVE'") {{mode}}
+                | {{modeName(mode)}} 상세
+            section(*ngFor="let l of lanesFor(mode); trackBy: trackByKey", class="dx-card rp-lane", [attr.id]="laneId(l)")
+                button(type="button", class="rp-lane-head", (click)="toggle(l)", [attr.aria-expanded]="!!expanded[l.key]")
+                    span(class="rp-name")
+                        strong {{l.lane_label}}
+                        span(class="rp-mode", [class.is-live]="l.mode === 'LIVE'") {{l.mode}}
+                        span(class="dx-tag", [ngClass]="statusClass(l.status)") {{l.status_label}}
+                    span(class="rp-lane-reason") {{l.reason}}
+                    span(class="rp-toggle") {{expanded[l.key] ? '접기 ▴' : '펼치기 ▾'}}
+                div(class="rp-lane-body", *ngIf="expanded[l.key]")
+                    div(class="dx-empty", *ngIf="!hasDetail(l)") 이날 기록된 내용이 없습니다.
+                    ul(class="rp-notes", *ngIf="l.notes?.length")
+                        li(*ngFor="let n of l.notes") {{n}}
 
-                div(class="rp-block", *ngIf="l.problems?.length")
-                    h3 오류·차단 (메시지별)
-                    div(class="dx-table-wrap")
-                        table(class="dx-table")
-                            thead
-                                tr
-                                    th 구분
-                                    th 내용
-                                    th(class="num") 횟수
-                                    th(class="num") 시각
-                            tbody
-                                tr(*ngFor="let p of l.problems")
-                                    td
-                                        span(class="dx-tag", [ngClass]="problemClass(p)") {{problemLevel(p)}}
-                                        small {{p.source}}
-                                    td(class="dx-wrap rp-msg") {{p.message}}
-                                    td(class="num dx-strong") {{p.count_is_min ? '최소 ' + p.count : '×' + p.count}}
-                                    td(class="num") {{problemSpan(p)}}
+                    div(class="rp-block", *ngIf="l.problems?.length")
+                        h3 오류·차단 (메시지별)
+                        div(class="dx-table-wrap")
+                            table(class="dx-table")
+                                thead
+                                    tr
+                                        th 구분
+                                        th 내용
+                                        th(class="num") 횟수
+                                        th(class="num") 시각
+                                tbody
+                                    tr(*ngFor="let p of l.problems")
+                                        td
+                                            span(class="dx-tag", [ngClass]="problemClass(p)") {{problemLevel(p)}}
+                                            small {{p.source}}
+                                        td(class="dx-wrap rp-msg") {{p.message}}
+                                        td(class="num dx-strong") {{p.count_is_min ? '최소 ' + p.count : '×' + p.count}}
+                                        td(class="num") {{problemSpan(p)}}
 
-                div(class="rp-block", *ngIf="l.fills?.length || l.orders?.length")
-                    h3 주문·체결
-                    div(class="dx-table-wrap")
-                        table(class="dx-table")
-                            thead
-                                tr
-                                    th 시각
-                                    th 종목
-                                    th 구분
-                                    th(class="num") 수량
-                                    th(class="num") 가격
-                                    th(class="num") 손익
-                                    th 메모
-                            tbody
-                                tr(*ngFor="let f of l.fills")
-                                    td(class="num") {{f.time}}
-                                    td(class="dx-strong") {{f.symbol}}
-                                    td
-                                        span(class="dx-tag", [ngClass]="sideClass(f.side)") {{f.label}}
-                                        small {{f.status}}
-                                    td(class="num") {{qty(f.qty)}}
-                                    td(class="num") {{price(f.price, l.currency)}}
-                                    td(class="num", [ngClass]="pnlClass(f.realized)") {{f.side === 'SELL' ? money(f.realized, l.currency) : ''}}
-                                    td(class="dx-wrap dx-muted rp-msg") {{f.message}}
-                                tr(*ngFor="let o of l.orders", class="rp-order")
-                                    td(class="num") {{o.time}}
-                                    td(class="dx-strong") {{o.symbol}}
-                                    td
-                                        span(class="dx-tag") {{o.label}}
-                                        small {{o.status}}
-                                    td(class="num") {{qty(o.qty)}}
-                                    td(class="num") {{price(o.price, l.currency)}}
-                                    td
-                                    td(class="dx-wrap dx-muted rp-msg") {{o.message}}
+                    div(class="rp-block", *ngIf="l.fills?.length || l.orders?.length")
+                        h3 주문·체결
+                        div(class="dx-table-wrap")
+                            table(class="dx-table")
+                                thead
+                                    tr
+                                        th 시각
+                                        th 종목
+                                        th 구분
+                                        th(class="num") 수량
+                                        th(class="num") 가격
+                                        th(class="num") 손익
+                                        th 메모
+                                tbody
+                                    tr(*ngFor="let f of l.fills")
+                                        td(class="num") {{f.time}}
+                                        td(class="dx-strong") {{f.symbol}}
+                                        td
+                                            span(class="dx-tag", [ngClass]="sideClass(f.side)") {{f.label}}
+                                            small {{f.status}}
+                                        td(class="num") {{qty(f.qty)}}
+                                        td(class="num") {{price(f.price, l.currency)}}
+                                        td(class="num", [ngClass]="pnlClass(f.realized)") {{f.side === 'SELL' ? money(f.realized, l.currency) : ''}}
+                                        td(class="dx-wrap dx-muted rp-msg") {{f.message}}
+                                    tr(*ngFor="let o of l.orders", class="rp-order")
+                                        td(class="num") {{o.time}}
+                                        td(class="dx-strong") {{o.symbol}}
+                                        td
+                                            span(class="dx-tag") {{o.label}}
+                                            small {{o.status}}
+                                        td(class="num") {{qty(o.qty)}}
+                                        td(class="num") {{price(o.price, l.currency)}}
+                                        td
+                                        td(class="dx-wrap dx-muted rp-msg") {{o.message}}
 
-                div(class="rp-block", *ngIf="l.positions?.length || l.pending?.length")
-                    h3 지금 보유·미체결
-                    div(class="dx-table-wrap", *ngIf="l.positions?.length")
-                        table(class="dx-table")
-                            thead
-                                tr
-                                    th 종목
-                                    th(class="num") 수량
-                                    th(class="num") 평균가
-                                    th 비고
-                            tbody
-                                tr(*ngFor="let p of l.positions")
-                                    td
-                                        div(class="dx-sym")
-                                            strong {{p.symbol}}
-                                            small {{p.name}}
-                                    td(class="num") {{qty(p.qty)}}
-                                    td(class="num") {{price(p.avg_price, l.currency)}}
-                                    td(class="dx-wrap dx-muted")
-                                        span(*ngIf="p.round") {{p.round}}
-                                        span(*ngIf="p.carried_overnight") 오버나이트 보유
-                                        span(*ngIf="p.unmanaged_qty") · 엔진 밖 {{p.unmanaged_qty}}주
-                                        span(*ngIf="p.halt_reason") · 정지: {{p.halt_reason}}
-                    div(class="dx-table-wrap", *ngIf="l.pending?.length")
-                        table(class="dx-table")
-                            thead
-                                tr
-                                    th 미체결 주문
-                                    th 구분
-                                    th(class="num") 수량
-                                    th(class="num") 가격
-                                    th 주문번호
-                            tbody
-                                tr(*ngFor="let p of l.pending")
-                                    td(class="dx-strong") {{p.symbol}}
-                                    td {{p.kind}}
-                                    td(class="num") {{qty(p.qty)}}
-                                    td(class="num") {{price(p.price, l.currency)}}
-                                    td(class="dx-muted")
-                                        | {{p.order_no}}
-                                        small(*ngIf="p.placed_at") {{p.placed_at}}
+                    div(class="rp-block", *ngIf="l.positions?.length || l.pending?.length")
+                        h3 지금 보유·미체결
+                        div(class="dx-table-wrap", *ngIf="l.positions?.length")
+                            table(class="dx-table")
+                                thead
+                                    tr
+                                        th 종목
+                                        th(class="num") 수량
+                                        th(class="num") 평균가
+                                        th 비고
+                                tbody
+                                    tr(*ngFor="let p of l.positions")
+                                        td
+                                            div(class="dx-sym")
+                                                strong {{p.symbol}}
+                                                small {{p.name}}
+                                        td(class="num") {{qty(p.qty)}}
+                                        td(class="num") {{price(p.avg_price, l.currency)}}
+                                        td(class="dx-wrap dx-muted")
+                                            span(*ngIf="p.round") {{p.round}}
+                                            span(*ngIf="p.carried_overnight") 오버나이트 보유
+                                            span(*ngIf="p.unmanaged_qty") · 엔진 밖 {{p.unmanaged_qty}}주
+                                            span(*ngIf="p.halt_reason") · 정지: {{p.halt_reason}}
+                        div(class="dx-table-wrap", *ngIf="l.pending?.length")
+                            table(class="dx-table")
+                                thead
+                                    tr
+                                        th 미체결 주문
+                                        th 구분
+                                        th(class="num") 수량
+                                        th(class="num") 가격
+                                        th 주문번호
+                                tbody
+                                    tr(*ngFor="let p of l.pending")
+                                        td(class="dx-strong") {{p.symbol}}
+                                        td {{p.kind}}
+                                        td(class="num") {{qty(p.qty)}}
+                                        td(class="num") {{price(p.price, l.currency)}}
+                                        td(class="dx-muted")
+                                            | {{p.order_no}}
+                                            small(*ngIf="p.placed_at") {{p.placed_at}}
 
-                div(class="rp-block", *ngIf="l.worker?.length")
-                    h3 워커
-                    div(class="dx-detail-grid")
-                        div(class="dx-detail", *ngFor="let w of l.worker")
-                            span {{w.job}}{{w.status ? ' · ' + w.status : ''}}
-                            strong(class="dx-wrap") {{w.message || '—'}}
-                            small {{w.at}}
+                    div(class="rp-block", *ngIf="l.worker?.length")
+                        h3 워커
+                        div(class="dx-detail-grid")
+                            div(class="dx-detail", *ngFor="let w of l.worker")
+                                span {{w.job}}{{w.status ? ' · ' + w.status : ''}}
+                                strong(class="dx-wrap") {{w.message || '—'}}
+                                small {{w.at}}
 
         //- (c) 안전·계좌
         section(class="dx-card")

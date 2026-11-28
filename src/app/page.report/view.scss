@@ -3,11 +3,42 @@
     height: 100%;
 }
 
-.rp-counts {
+// ---- LIVE rows, then PAPER rows: a header per account
+.rp-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bn-elevated) 70%, transparent);
+}
+
+.rp-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--bn-body);
+}
+
+.rp-group-counts {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 12px;
+}
+
+.rp-group-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 2px 8px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--bn-body);
 }
 
 .dx-tag.rp-wait {

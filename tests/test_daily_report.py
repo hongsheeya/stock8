@@ -514,6 +514,18 @@ class CoinTests(unittest.TestCase):
         env.logs["LIVE"].append(log("COIN_RESUME", "2026-11-27 13:00:00", "재개", "COIN", "RESUME"))
         self.assertEqual(lane(env.build(), "coin:LIVE")["status"], report.RUNNING)
 
+    def test_rows_are_grouped_by_mode_not_interleaved(self):
+        env = Env(self)
+        env.config["PAPER"]["us_trend_hold_policy_v1"] = json.dumps({"enabled": True, "owner_user_id": UID})
+        self.assertEqual([l["key"] for l in env.build(is_admin=True)["lanes"]], [
+            "daytrade_ks:LIVE", "daytrade_us:LIVE", "infinite_buy:LIVE", "coin:LIVE",
+            "daytrade_ks:PAPER", "daytrade_us:PAPER", "infinite_buy:PAPER", "us_trend_hold:PAPER",
+        ])
+        self.assertEqual([l["key"] for l in env.build(is_admin=False)["lanes"]], [
+            "daytrade_ks:LIVE", "daytrade_us:LIVE", "infinite_buy:LIVE",
+            "daytrade_ks:PAPER", "daytrade_us:PAPER", "infinite_buy:PAPER",
+        ])
+
     def test_trend_hold_row_only_while_enabled_for_its_owner(self):
         env = Env(self)
         self.assertNotIn("us_trend_hold:PAPER", [l["key"] for l in env.build()["lanes"]])
