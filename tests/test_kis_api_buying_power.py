@@ -81,6 +81,18 @@ class KisBuyingPowerTests(unittest.TestCase):
         self.assertEqual(info["usd_cash_usd"], 97.54)
         self.assertEqual(info["meta"]["usd_cash_key"], "frcr_drwg_psbl_amt_1")
 
+    def test_present_balance_uses_the_mock_tr_id_in_paper(self):
+        # The mock gateway rejects CTRP6504R with EGW02006 "모의투자 TR 이 아닙니다".
+        seen = []
+        for paper, expected in ((True, "VTRP6504R"), (False, "CTRP6504R")):
+            api = kis_api.KisApi(_StructStub())
+            api._request = lambda *args, **kwargs: seen.append(args[2]) or {
+                "rt_cd": "0", "output2": [{"crcy_cd": "USD", "frst_bltn_exrt": "1400"}],
+                "output3": {"tot_dncl_amt": "1000", "wdrw_psbl_tot_amt": "1000"}}
+            with patch.object(kis_api, "PAPER_MODE", paper):
+                api.get_present_balance()
+            self.assertEqual(seen[-1], expected)
+
     def test_domestic_buying_power_never_uses_margin_inclusive_max_amount(self):
         api = kis_api.KisApi(_StructStub())
         api._request = lambda *args, **kwargs: {

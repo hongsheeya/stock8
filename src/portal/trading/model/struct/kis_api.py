@@ -3116,7 +3116,10 @@ class KisApi:
         해외주식 현재잔고/환율 조회
         반환: dict {usd_krw, krw_balance, withdrawable_krw, raw}
         """
-        tr_id = "CTRP6504R"
+        # 11-28 PAPER: the production TR id alone made the mock gateway answer
+        # EGW02006 "모의투자 TR 이 아닙니다" on every call, so the PAPER
+        # dashboard never had a cash balance and always showed "잔고 조회 실패".
+        tr_id = "CTRP6504R" if self.is_real else "VTRP6504R"
         path = "/uapi/overseas-stock/v1/trading/inquire-present-balance"
         params = {
             "CANO": self.account_prefix,

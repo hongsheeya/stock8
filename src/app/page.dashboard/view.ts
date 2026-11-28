@@ -852,6 +852,11 @@ export class Component implements OnInit {
     public get displayStockValue(): number {
         return this.portfolioValue > 0 ? this.portfolioValue : this.holdingsEvalKrw;
     }
+    /** The broker read failed and nothing was read: these zeros are unknown, not 0. */
+    public get brokerValuesUnknown(): boolean {
+        if (this.balanceSyncOk || this.setupRequired || this.privacyLocked) return false;
+        return this.totalAsset <= 0 && this.buyingPower <= 0 && this.portfolioValue <= 0;
+    }
     public get totalAssetPending(): boolean {
         const held = (this.daytradePositionSummary?.count || 0) > 0 || (this.infiniteBuyCycles || []).length > 0;
         return this.portfolioValue <= 0 && held;
